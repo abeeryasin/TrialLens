@@ -1,0 +1,7 @@
+.env
+*.db
+__pycache__/
+.venv/
+course-alignment.md
+.DS_Store
+.claude/settings.local.json
