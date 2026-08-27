@@ -1,6 +1,8 @@
-"""Fetch studies for a condition from ClinicalTrials.gov and store them.
+"""Fetch studies for a condition from ClinicalTrials.gov and store them
+via the FastAPI layer — this script no longer talks to Postgres
+directly (see docs/decisions.md, "FastAPI as only door").
 
-Usage:
+Usage (FastAPI must be running, e.g. `.venv/bin/uvicorn api.main:app`):
     .venv/bin/python scripts/ingest.py "breast cancer"
     .venv/bin/python scripts/ingest.py obesity
 
@@ -17,8 +19,6 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
-import psycopg2
-import psycopg2.extras
 import requests
 from dotenv import load_dotenv
 
@@ -26,35 +26,16 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
-API_URL = "https://clinicaltrials.gov/api/v2/studies"
+CT_API_URL = "https://clinicaltrials.gov/api/v2/studies"
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 ACTIVE_STATUSES = "RECRUITING,NOT_YET_RECRUITING,ACTIVE_NOT_RECRUITING,ENROLLING_BY_INVITATION"
 CLOSED_STATUSES = "COMPLETED,TERMINATED,SUSPENDED,WITHDRAWN"
 RECENCY_DAYS = 730  # ~24 months
 
-UPSERT_STUDIES = """
-    INSERT INTO studies (
-        nct_id, brief_title, official_title, overall_status, study_type,
-        phase, enrollment_count, sex, minimum_age, healthy_volunteers,
-        eligibility_criteria, last_update_post_date, raw_json, fetched_at
-    ) VALUES %s
-    ON CONFLICT (nct_id) DO UPDATE SET
-        brief_title = EXCLUDED.brief_title,
-        official_title = EXCLUDED.official_title,
-        overall_status = EXCLUDED.overall_status,
-        study_type = EXCLUDED.study_type,
-        phase = EXCLUDED.phase,
-        enrollment_count = EXCLUDED.enrollment_count,
-        sex = EXCLUDED.sex,
-        minimum_age = EXCLUDED.minimum_age,
-        healthy_volunteers = EXCLUDED.healthy_volunteers,
-        eligibility_criteria = EXCLUDED.eligibility_criteria,
-        last_update_post_date = EXCLUDED.last_update_post_date,
-        raw_json = EXCLUDED.raw_json,
-        fetched_at = now();
-"""
 
 def extract_fields(study: dict) -> dict:
-    """Pull the normalized columns out of one raw study record.
+    """Pull the normalized fields out of one raw study record, matching
+    api.schemas.StudyUpsert.
 
     Uses .get() with defaults throughout because not every study has
     every field (e.g. observational studies have no phase).
@@ -101,7 +82,7 @@ def fetch_studies(condition: str, statuses: str, advanced_filter: str = None):
     while True:
         if page_token:
             params["pageToken"] = page_token
-        response = requests.get(API_URL, params=params, timeout=30)
+        response = requests.get(CT_API_URL, params=params, timeout=30)
         response.raise_for_status()
         data = response.json()
         studies = data.get("studies", [])
@@ -114,36 +95,12 @@ def fetch_studies(condition: str, statuses: str, advanced_filter: str = None):
             break
 
 
-def write_batch(cur, records: list[dict]):
+def write_batch(records: list[dict]) -> int:
     if not records:
-        return
-
-    study_rows = [
-        (
-            r["nct_id"], r["brief_title"], r["official_title"], r["overall_status"],
-            r["study_type"], r["phase"], r["enrollment_count"], r["sex"],
-            r["minimum_age"], r["healthy_volunteers"], r["eligibility_criteria"],
-            r["last_update_post_date"], psycopg2.extras.Json(r["raw_json"]),
-        )
-        for r in records
-    ]
-    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
-    psycopg2.extras.execute_values(cur, UPSERT_STUDIES, study_rows, template=template)
-
-    nct_ids = [r["nct_id"] for r in records]
-    cur.execute("DELETE FROM study_conditions WHERE nct_id = ANY(%s)", (nct_ids,))
-
-    condition_rows = [
-        (r["nct_id"], condition_name)
-        for r in records
-        for condition_name in r["conditions"]
-    ]
-    if condition_rows:
-        psycopg2.extras.execute_values(
-            cur,
-            "INSERT INTO study_conditions (nct_id, condition) VALUES %s",
-            condition_rows,
-        )
+        return 0
+    response = requests.post(f"{API_BASE_URL}/studies/batch", json=records, timeout=60)
+    response.raise_for_status()
+    return response.json()["studies_written"]
 
 
 def main():
@@ -153,40 +110,34 @@ def main():
     condition = sys.argv[1]
     recency_cutoff = (date.today() - timedelta(days=RECENCY_DAYS)).isoformat()
 
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
     total = 0
 
-    def flush_batch(cur, batch):
+    def flush_batch(batch):
         nonlocal total
         if not batch:
             return
-        write_batch(cur, batch)
-        conn.commit()  # commit per batch: real incremental progress, not one giant transaction
-        total += len(batch)
-        print(f"  committed {total} studies so far", flush=True)
+        written = write_batch(batch)
+        total += written
+        print(f"  written {total} studies so far", flush=True)
 
-    try:
-        with conn.cursor() as cur:
-            print(f"Fetching active trials for: {condition}", flush=True)
+    print(f"Fetching active trials for: {condition}", flush=True)
+    batch = []
+    for study in fetch_studies(condition, ACTIVE_STATUSES):
+        batch.append(extract_fields(study))
+        if len(batch) >= 200:
+            flush_batch(batch)
             batch = []
-            for study in fetch_studies(condition, ACTIVE_STATUSES):
-                batch.append(extract_fields(study))
-                if len(batch) >= 200:
-                    flush_batch(cur, batch)
-                    batch = []
-            flush_batch(cur, batch)
+    flush_batch(batch)
 
-            print(f"Fetching closed trials updated since {recency_cutoff} for: {condition}", flush=True)
+    print(f"Fetching closed trials updated since {recency_cutoff} for: {condition}", flush=True)
+    batch = []
+    advanced = f"AREA[LastUpdatePostDate]RANGE[{recency_cutoff},MAX]"
+    for study in fetch_studies(condition, CLOSED_STATUSES, advanced):
+        batch.append(extract_fields(study))
+        if len(batch) >= 200:
+            flush_batch(batch)
             batch = []
-            advanced = f"AREA[LastUpdatePostDate]RANGE[{recency_cutoff},MAX]"
-            for study in fetch_studies(condition, CLOSED_STATUSES, advanced):
-                batch.append(extract_fields(study))
-                if len(batch) >= 200:
-                    flush_batch(cur, batch)
-                    batch = []
-            flush_batch(cur, batch)
-    finally:
-        conn.close()
+    flush_batch(batch)
 
     print(f"Ingested {total} studies for condition: {condition}", flush=True)
 

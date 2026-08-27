@@ -89,7 +89,12 @@ not just the conclusion.
 
 ## Current Status
 
-Schema + ingestion done — real schema live on Neon, 11,415 studies
-loaded (breast cancer + obesity). **Next: FastAPI layer.** Full
-roadmap, ordering, and time estimates: `docs/roadmap.md` (kept current
-every step).
+Schema + ingestion done — real schema live on Neon, 11,425 studies
+loaded (breast cancer + obesity). FastAPI layer done — `api/` is the
+only door to the database (`GET /studies`, `GET /studies/{nct_id}`,
+`POST /studies/batch`), `ingest.py` writes through it instead of
+touching Postgres directly, and a SELECT-only Postgres role enforces
+read-only access for GET routes at the database layer, not just in
+application code. **Next: scheduler/cron automation.** Full roadmap,
+ordering, and time estimates: `docs/roadmap.md` (kept current every
+step).

@@ -7,3 +7,6 @@ course-alignment.md
 .claude/settings.local.json
 .neon
 .env.local
+.agents/
+.claude/skills/
+skills-lock.json

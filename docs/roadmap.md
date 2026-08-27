@@ -15,8 +15,8 @@ time a step starts or finishes.**
 | # | Step | Status | Est. hours |
 |---|---|---|---|
 | 1 | Schema + Ingestion | **Done** (2026-08-26/27) | — |
-| 2 | FastAPI layer (only door to the DB, read-only enforcement) | **Next up** | 6-8 |
-| 3 | Scheduler/cron automation (turn `ingest.py` into the real Monitor job; cheap-filter/expensive-diff change detection) | Not started | 5-7 |
+| 2 | FastAPI layer (only door to the DB, read-only enforcement) | **Done** (2026-08-27) | — |
+| 3 | Scheduler/cron automation (turn `ingest.py` into the real Monitor job; cheap-filter/expensive-diff change detection) | **Next up** | 5-7 |
 | 4 | Discover live-fallback (ad-hoc live query for an untracked topic) | Not started | 3-4 |
 | 5 | Frontend (Streamlit) — Discover/Understand surface, reads through FastAPI | Not started | 8-10 |
 | 6 | AI ranking/evidence layer ("potential fit" screening, visible evidence + uncertainty, eval harness built alongside) | Not started | 10-14 |

@@ -156,3 +156,57 @@ need it to work, and a cross-tool integration now would add real
 complexity before this project stands on its own. Logged as a future
 idea, not built now, not forgotten.
 
+## 2026-08-27 — FastAPI built as the real only door to the database
+
+`api/` now exists: `GET /health`, `GET /studies` (filter by condition/
+status, paginated), `GET /studies/{nct_id}`, `POST /studies/batch`
+(upsert). `ingest.py` was refactored to call `POST /studies/batch`
+over HTTP instead of writing to Postgres directly with `psycopg2` —
+this was the part that made "only door" real today instead of a design
+intention for later; the script no longer holds a database credential
+at all, only `API_BASE_URL`.
+
+Read-only access is enforced at the database layer, not just the
+application layer: a `trial_lens_reader` Postgres role
+(`scripts/create_readonly_role.py`) has `SELECT`-only grants, and every
+`GET` route connects as that role. Verified for real, not assumed: a
+direct `UPDATE` attempt through that role's connection was rejected by
+Postgres itself (`permission denied for table studies`), while a
+`SELECT` through the same connection returned all rows normally. An
+app-layer check alone wouldn't survive a bug in the app code; a missing
+database grant can't be bypassed that way.
+
+## 2026-08-27 — Found and fixed: client-side connection pooling against Neon's pooled endpoint
+
+First version of `api/database.py` kept a long-lived `psycopg2`
+connection pool open for the lifetime of the FastAPI process. That
+broke during real testing: a write succeeded right after startup, then
+a second write ~20 seconds later (after `ingest.py` spent time fetching
+from ClinicalTrials.gov) failed with `OperationalError: server closed
+the connection unexpectedly`. `DATABASE_URL` points at Neon's
+`-pooler` endpoint, which is already a PgBouncer pool on Neon's side —
+it silently drops idle connections held by a client rather than keeping
+them alive indefinitely, and `psycopg2` only discovers this on the next
+query, not when it happens. Fixed by connecting fresh per request
+instead of pooling client-side; Neon's own pooler is the pool.
+
+## 2026-08-27 — Caught and corrected: an overly broad test cleanup deleted 3 real studies
+
+While verifying the new write path, ingested a small unrelated test
+condition (`achalasia`) through the real running API, then deleted it
+afterward by matching on the condition tag. ClinicalTrials.gov's
+condition search does synonym expansion, and 3 of the 56 studies that
+search returned turned out to already be part of the real tracked
+breast-cancer/obesity dataset (matched by both searches). Deleting by
+`nct_id` after filtering on the test condition tag removed those
+studies' full `studies` row, not just the test tag — real data loss,
+caught immediately by comparing the row count before and after against
+the known baseline (11,415), rather than assuming a "cleanup" script
+did only what it was meant to. Fixed by re-running real ingestion for
+both actual tracked conditions (`breast cancer`, `obesity`), which
+restored anything wrongly deleted and is safe to re-run regardless
+since every write is an upsert. Lesson: a test/cleanup pass against a
+real dataset needs to record exactly what it added (by ID) up front,
+not reconstruct it after the fact from a tag that can also match
+pre-existing rows.
+
