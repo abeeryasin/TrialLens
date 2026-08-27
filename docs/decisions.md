@@ -76,6 +76,76 @@ earlier sections describing almost exactly that. Read a big
 AI-generated proposal's own later caveats against its earlier scope
 before adopting either.
 
+## 2026-08-26 — Database: Neon Postgres, chosen and verified (retroactively logged)
+
+Chosen earlier but never actually logged here — caught during a
+documentation audit and fixed. Verified live via search rather than assumed: Neon
+has a real permanent free tier (0.5 GB storage, 100 compute-hours/month,
+no credit card, commercial use allowed), it's real Postgres (not a
+NoSQL substitute, so standard SQL/relational vocabulary applies
+directly), and it supports instant branching — a free, disposable copy
+of the database. Used that branching feature immediately: schema work
+happens on a `dev` branch, `production` stays untouched until the
+schema is trusted, which is a genuine staging-vs-production split, not
+a theoretical one.
+
+## 2026-08-26 — Discover vs. Monitor: an untracked topic falls through to a live lookup
+
+Found a real gap while walking through the query flow: if a researcher
+asks about a therapeutic area that was never fetched into the local
+database, a plain read of our own database comes back empty — which
+looks identical to "no trials exist," and that's actively wrong, not
+just incomplete.
+
+Fixed by splitting behavior into two distinct paths. An ad-hoc question
+about a topic with nothing relevant stored locally falls through to a
+one-time, live call to ClinicalTrials.gov, answered fresh, not from
+cache. Separately, actually deciding to track a therapeutic area going
+forward is its own explicit action, registering that topic with the
+scheduled fetch job so it keeps refreshing and change-detection can
+work on it over time. Without this split, a live search and a
+persistently-monitored topic would silently collapse into the same
+broken thing.
+
+## 2026-08-26 — Ingestion scope: filter by trial status, not just condition name
+
+Checked real counts before assuming feasibility, rather than guessing
+either "trivial" or "impossible." A broad condition search like
+"diabetes" alone matches 24,289 studies across the entire history of
+the registry — roughly 410 MB of raw data at the registry's average
+study size, for one topic. Three topics that broad would exceed the
+entire 0.5 GB Neon free-tier storage on their own.
+
+Filtering to currently active trial statuses (recruiting and similar)
+cuts this by roughly 10x — the same diabetes search drops to 1,958
+studies once filtered. Tracking around 10-12 therapeutic areas at a
+time, filtered to active trials, fits comfortably within the free tier;
+tracking full historical registries per topic does not. Ingestion
+filters by status from the start, not just by condition name.
+
+## 2026-08-26 — Ingestion pipeline built and verified with real data
+
+First working ingestion script (`scripts/ingest.py`): fetches active +
+recently-closed trials for a condition (see the two decisions above)
+and upserts them into `studies`/`study_conditions` on Neon's `dev`
+branch. Ran it for real against two topics chosen from verified current
+research interest (oncology and obesity, per IQVIA's 2026 therapeutic
+area data): breast cancer (6,545 studies) and obesity (4,912 studies),
+totaling 11,415 unique studies and 32,417 condition tags.
+
+Caught and fixed a real bug before trusting the first version: it
+wrapped the entire run in one giant transaction with nothing committed
+until the end, making progress both invisible from outside and
+all-or-nothing on failure. Found by querying Postgres's own
+`pg_stat_activity` directly rather than assuming a long runtime meant
+either "fine" or "broken." Fixed to commit per 200-row batch, with
+unbuffered progress output.
+
+Verified the shared-trial (same study, two tracked conditions) case
+isn't hypothetical: `NCT03284346` genuinely matched both the breast
+cancer and obesity searches and upserted correctly rather than erroring
+or duplicating.
+
 ## 2026-08-26 — Future literature integration: logged, not built
 
 Pulling supporting literature for a given trial via a separate

@@ -89,6 +89,7 @@ not just the conclusion.
 
 ## Current Status
 
-Planning complete as of 2026-08-26 — persona, architecture, and safety
-framing decided, see `docs/decisions.md`. Phase A (schema + ingestion)
-not yet started.
+Schema + ingestion done — real schema live on Neon, 11,415 studies
+loaded (breast cancer + obesity). **Next: FastAPI layer.** Full
+roadmap, ordering, and time estimates: `docs/roadmap.md` (kept current
+every step).

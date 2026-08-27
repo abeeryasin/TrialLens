@@ -5,3 +5,5 @@ __pycache__/
 course-alignment.md
 .DS_Store
 .claude/settings.local.json
+.neon
+.env.local
