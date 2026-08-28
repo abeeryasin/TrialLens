@@ -329,3 +329,32 @@ yet — revisit alongside whichever step actually surfaces this gap in
 practice (e.g. the frontend, step 5, or before Understand/ranking work
 starts treating `/discover` results as trustworthy inputs).
 
+## 2026-08-29 — `/discover` gap fixed: per-result source, merged local+live
+
+Built the fix decided above, at the start of step 5 rather than deferred
+further, since the frontend was about to display these results directly.
+`GET /discover` now branches three ways instead of two: (1) nothing
+stored locally at all -> live lookup only, unchanged from before; (2)
+local rows exist *and* the condition is an exact match in
+`config/tracked_conditions.json` -> local data only, no live call, since
+Monitor already keeps it comprehensive; (3) local rows exist but the
+condition is only an incidental substring match (comorbid tag on a trial
+tracked under a different condition) -> both local and live are queried,
+merged de-duplicated by `nct_id` (a local hit wins over a live duplicate),
+and each result carries its own `source`. `DiscoverResponse.source` was
+removed from the schema entirely — nothing else in the codebase read it,
+confirmed by grep before removing.
+
+Verified live against real data, all three branches: `condition=breast
+cancer` (exact tracked match) returned 3 rows, all `source: "tracked"`,
+no outbound call. `condition=psoriasis` (incidental match — several
+tracked breast-cancer/obesity trials list it as a comorbid condition)
+returned a real mix, 2 `"live"` + 3 `"tracked"` results in one response,
+each correctly tagged. `condition=tuberculosis` (nothing local) returned
+3 real live results, unchanged behavior from before. Also added an
+explicit degraded path: if the live call fails specifically in the
+merge branch, the route now returns the local rows it already has with a
+note that a live check was attempted and failed, instead of a hard 502 —
+those incidental local rows are still real, useful data even when we
+can't currently confirm whether they're the whole picture.
+

@@ -9,8 +9,18 @@ call when that comes back empty. A live result is never written to the
 DB — tracking a topic going forward is its own explicit action
 (config/tracked_conditions.json + the Monitor job), not something a
 read-only ad-hoc question should trigger as a side effect.
+
+Also implements the fix decided 2026-08-28 ("/discover can silently
+under-report an untracked condition"): local rows alone are only proof of
+completeness when the condition is itself one Monitor comprehensively
+tracks. A substring hit — e.g. searching "psoriasis" and getting a
+comorbid-tag row on a trial tracked under "breast cancer" — is real data,
+but not the whole picture, so it gets merged with a live lookup and each
+result is tagged with where it actually came from.
 """
-from typing import Optional
+import json
+from datetime import date
+from pathlib import Path
 
 import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +31,8 @@ from ctgov_client import ACTIVE_STATUSES, extract_fields, fetch_pages
 
 router = APIRouter(tags=["discover"])
 
+TRACKED_CONDITIONS_PATH = Path(__file__).resolve().parent.parent / "config" / "tracked_conditions.json"
+
 LOCAL_MATCH_SQL = """
     SELECT nct_id, brief_title, overall_status, phase, last_update_post_date
     FROM studies
@@ -28,6 +40,29 @@ LOCAL_MATCH_SQL = """
     ORDER BY last_update_post_date DESC
     LIMIT %s
 """
+
+
+def _is_comprehensively_tracked(condition: str) -> bool:
+    """True only for an exact match against config/tracked_conditions.json.
+    A substring hit does NOT count — that's exactly the incidental-match
+    case this route has to stay honest about."""
+    tracked = json.loads(TRACKED_CONDITIONS_PATH.read_text())
+    return condition.strip().lower() in {c.lower() for c in tracked}
+
+
+def _fetch_live(condition: str, limit: int) -> list:
+    params = {
+        "query.cond": condition,
+        "filter.overallStatus": ACTIVE_STATUSES,
+        "fields": "NCTId,BriefTitle,OverallStatus,Phase,LastUpdatePostDate",
+        "pageSize": limit,
+    }
+    live_studies = []
+    for study in fetch_pages(params):
+        live_studies.append(extract_fields(study))
+        if len(live_studies) >= limit:
+            break
+    return live_studies
 
 
 @router.get("/discover", response_model=DiscoverResponse)
@@ -40,46 +75,85 @@ def discover(
         cur.execute(LOCAL_MATCH_SQL, (f"%{condition}%", limit))
         local_rows = cur.fetchall()
 
-    if local_rows:
+    # Case 1: nothing stored locally at all -> a live lookup is the only
+    # real answer there is.
+    if not local_rows:
+        try:
+            live_studies = _fetch_live(condition, limit)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"live ClinicalTrials.gov lookup failed: {exc}",
+            )
         return DiscoverResponse(
             condition=condition,
-            source="tracked",
-            total=len(local_rows),
-            results=[DiscoverResult(**row) for row in local_rows],
+            total=len(live_studies),
+            results=[DiscoverResult(**s, source="live") for s in live_studies],
             note=(
-                "Served from our own tracked data — this topic has been fetched "
-                "before. See GET /studies for the full list and GET "
-                "/studies/{nct_id}/changes for its change history."
+                "Nothing stored locally for this condition — fetched live from "
+                "ClinicalTrials.gov just now, not stored. No change-detection "
+                "applies to these results; tracking this condition going forward "
+                "is a separate action (add it to config/tracked_conditions.json)."
             ),
         )
 
-    try:
-        params = {
-            "query.cond": condition,
-            "filter.overallStatus": ACTIVE_STATUSES,
-            "fields": "NCTId,BriefTitle,OverallStatus,Phase,LastUpdatePostDate",
-            "pageSize": limit,
-        }
-        live_studies = []
-        for study in fetch_pages(params):
-            live_studies.append(extract_fields(study))
-            if len(live_studies) >= limit:
-                break
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"live ClinicalTrials.gov lookup failed: {exc}",
+    # Case 2: locally stored, and this condition is one Monitor
+    # comprehensively tracks -> the local data really is the complete,
+    # current answer. No live call needed.
+    if _is_comprehensively_tracked(condition):
+        return DiscoverResponse(
+            condition=condition,
+            total=len(local_rows),
+            results=[DiscoverResult(**row, source="tracked") for row in local_rows],
+            note=(
+                "Served from our own tracked data — this condition is "
+                "comprehensively monitored. See GET /studies for the full list "
+                "and GET /studies/{nct_id}/changes for its change history."
+            ),
         )
+
+    # Case 3: local rows exist but only incidentally (e.g. a comorbid
+    # condition tag on a trial tracked under a different condition) — not
+    # proof this is the complete picture. Merge with a live lookup and tag
+    # each result with where it actually came from.
+    try:
+        live_studies = _fetch_live(condition, limit)
+    except Exception as exc:
+        return DiscoverResponse(
+            condition=condition,
+            total=len(local_rows),
+            results=[DiscoverResult(**row, source="tracked") for row in local_rows],
+            note=(
+                "This condition isn't comprehensively tracked, and a live "
+                f"ClinicalTrials.gov lookup to check for more just failed ({exc}). "
+                "The results below are only what's incidentally already in our "
+                "database (from trials tracked under a different condition) — "
+                "treat this as possibly incomplete."
+            ),
+        )
+
+    merged = {row["nct_id"]: DiscoverResult(**row, source="tracked") for row in local_rows}
+    for study in live_studies:
+        if study["nct_id"] not in merged:
+            merged[study["nct_id"]] = DiscoverResult(**study, source="live")
+
+    results = sorted(
+        merged.values(),
+        key=lambda r: r.last_update_post_date or date.min,
+        reverse=True,
+    )[:limit]
 
     return DiscoverResponse(
         condition=condition,
-        source="live",
-        total=len(live_studies),
-        results=[DiscoverResult(**s) for s in live_studies],
+        total=len(results),
+        results=results,
         note=(
-            "Not in our tracked data — fetched live from ClinicalTrials.gov just "
-            "now, not stored. No change-detection applies to these results; "
-            "tracking this condition going forward is a separate action "
-            "(add it to config/tracked_conditions.json)."
+            "This condition isn't comprehensively tracked — results below "
+            "combine what's incidentally already in our database "
+            '(source: "tracked", from trials tracked under a different '
+            'condition) with a live ClinicalTrials.gov lookup just now '
+            '(source: "live"). Neither list is guaranteed complete; add this '
+            "condition to config/tracked_conditions.json for real, ongoing "
+            "coverage."
         ),
     )

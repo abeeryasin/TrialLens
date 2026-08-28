@@ -115,20 +115,23 @@ class KnownDatesResponse(BaseModel):
 
 
 class DiscoverResult(BaseModel):
-    """One trial in a GET /discover response. Same shape whether it came
-    from our own DB or a live CT.gov call, so callers don't need two
-    result types — but `source` on the parent response says which."""
+    """One trial in a GET /discover response, tagged with where it actually
+    came from — "tracked" (already in our DB, kept fresh by Monitor) or
+    "live" (fetched from CT.gov for this request only, not stored). Lives
+    on each result, not the response, because a response can mix both: an
+    untracked condition's local rows are only ever incidental, never proof
+    of a complete picture on their own."""
 
     nct_id: str
     brief_title: str
     overall_status: str
     phase: Optional[str] = None
     last_update_post_date: Optional[date] = None
+    source: str  # "tracked" or "live"
 
 
 class DiscoverResponse(BaseModel):
     condition: str
-    source: str  # "tracked" (served from our DB) or "live" (fetched from CT.gov just now, not stored)
     total: int
     results: List[DiscoverResult]
     note: str
