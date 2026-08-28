@@ -17,7 +17,16 @@ class ApiError(Exception):
     """Raised when FastAPI is unreachable or returns an error response.
     Pages catch this and show it explicitly rather than a blank page —
     "couldn't reach the API" is a different, honest state from "no
-    results", and the two must never look the same to the user."""
+    results", and the two must never look the same to the user.
+
+    Carries status_code (None for a network-level failure, e.g. the API
+    process isn't running at all) so a page can tell "not found" apart
+    from "something's actually broken" instead of showing the same
+    generic error for both."""
+
+    def __init__(self, message: str, status_code: int = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def get(path: str, params: dict = None) -> dict:
@@ -27,6 +36,9 @@ def get(path: str, params: dict = None) -> dict:
         raise ApiError(f"Could not reach the API at {API_BASE_URL}: {exc}")
 
     if not response.ok:
-        raise ApiError(f"API returned {response.status_code} for {path}: {response.text}")
+        raise ApiError(
+            f"API returned {response.status_code} for {path}: {response.text}",
+            status_code=response.status_code,
+        )
 
     return response.json()
