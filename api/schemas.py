@@ -135,3 +135,29 @@ class DiscoverResponse(BaseModel):
     total: int
     results: List[DiscoverResult]
     note: str
+
+
+class TrialDetail(BaseModel):
+    """Full detail for one trial, tracked or not — Understand's real
+    response shape. The tracked-only fields (fetched_at, last_matched_at,
+    active_in_scope) are None for a live result, since those concepts —
+    "when did we last fetch/confirm this" — don't apply to a trial we
+    don't actually store."""
+
+    nct_id: str
+    brief_title: str
+    official_title: Optional[str] = None
+    overall_status: str
+    study_type: Optional[str] = None
+    phase: Optional[str] = None
+    enrollment_count: Optional[int] = None
+    sex: Optional[str] = None
+    minimum_age: Optional[str] = None
+    healthy_volunteers: Optional[bool] = None
+    eligibility_criteria: Optional[str] = None
+    last_update_post_date: Optional[date] = None
+    conditions: List[str] = []
+    source: str  # "tracked" or "live"
+    fetched_at: Optional[datetime] = None
+    last_matched_at: Optional[datetime] = None
+    active_in_scope: Optional[bool] = None

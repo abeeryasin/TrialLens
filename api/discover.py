@@ -26,8 +26,8 @@ import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.database import get_readonly_db
-from api.schemas import DiscoverResponse, DiscoverResult
-from ctgov_client import ACTIVE_STATUSES, extract_fields, fetch_pages
+from api.schemas import DiscoverResponse, DiscoverResult, TrialDetail
+from ctgov_client import ACTIVE_STATUSES, extract_fields, fetch_pages, fetch_single_study
 
 router = APIRouter(tags=["discover"])
 
@@ -90,10 +90,10 @@ def discover(
             total=len(live_studies),
             results=[DiscoverResult(**s, source="live") for s in live_studies],
             note=(
-                "Nothing stored locally for this condition — fetched live from "
-                "ClinicalTrials.gov just now, not stored. No change-detection "
-                "applies to these results; tracking this condition going forward "
-                "is a separate action (add it to config/tracked_conditions.json)."
+                "We don't track this condition yet, so these results are "
+                "fetched live from ClinicalTrials.gov just now rather than "
+                "from our own data. They won't reflect future changes unless "
+                "this condition starts being tracked."
             ),
         )
 
@@ -105,11 +105,7 @@ def discover(
             condition=condition,
             total=len(local_rows),
             results=[DiscoverResult(**row, source="tracked") for row in local_rows],
-            note=(
-                "Served from our own tracked data — this condition is "
-                "comprehensively monitored. See GET /studies for the full list "
-                "and GET /studies/{nct_id}/changes for its change history."
-            ),
+            note="This condition is one we actively track, so these results come from our own regularly-updated data.",
         )
 
     # Case 3: local rows exist but only incidentally (e.g. a comorbid
@@ -119,16 +115,16 @@ def discover(
     try:
         live_studies = _fetch_live(condition, limit)
     except Exception as exc:
+        print(f"  /discover: live lookup for '{condition}' failed ({exc}), falling back to local-only", flush=True)
         return DiscoverResponse(
             condition=condition,
             total=len(local_rows),
             results=[DiscoverResult(**row, source="tracked") for row in local_rows],
             note=(
-                "This condition isn't comprehensively tracked, and a live "
-                f"ClinicalTrials.gov lookup to check for more just failed ({exc}). "
-                "The results below are only what's incidentally already in our "
-                "database (from trials tracked under a different condition) — "
-                "treat this as possibly incomplete."
+                "We don't specifically track this condition, and a live "
+                "lookup to check for more trials just failed. The results "
+                "below are only what's already in our database from other "
+                "tracked conditions — treat this as possibly incomplete."
             ),
         )
 
@@ -148,12 +144,41 @@ def discover(
         total=len(results),
         results=results,
         note=(
-            "This condition isn't comprehensively tracked — results below "
-            "combine what's incidentally already in our database "
-            '(source: "tracked", from trials tracked under a different '
-            'condition) with a live ClinicalTrials.gov lookup just now '
-            '(source: "live"). Neither list is guaranteed complete; add this '
-            "condition to config/tracked_conditions.json for real, ongoing "
-            "coverage."
+            "We don't specifically track this condition, so these results "
+            "are a mix: some are already in our database (found via other "
+            "tracked conditions), and some are looked up live from "
+            "ClinicalTrials.gov just now. This list may not be complete."
         ),
     )
+
+
+@router.get("/discover/{nct_id}", response_model=TrialDetail)
+def discover_trial(nct_id: str, conn=Depends(get_readonly_db)):
+    """Understand's real lookup: our own DB first, then a live single-trial
+    fetch from ClinicalTrials.gov if we don't have it stored. A trial
+    clicked into from a live Discover result is exactly the case this
+    exists for — it's a real, current trial, just not one we track."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM studies WHERE nct_id = %s", (nct_id,))
+        study = cur.fetchone()
+        if study is not None:
+            cur.execute(
+                "SELECT condition FROM study_conditions WHERE nct_id = %s ORDER BY condition",
+                (nct_id,),
+            )
+            conditions = [r["condition"] for r in cur.fetchall()]
+            return TrialDetail(**study, conditions=conditions, source="tracked")
+
+    try:
+        live_study = fetch_single_study(nct_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"live ClinicalTrials.gov lookup failed: {exc}")
+
+    if live_study is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No trial found for {nct_id}, locally or on ClinicalTrials.gov",
+        )
+
+    fields = extract_fields(live_study)
+    return TrialDetail(**fields, source="live")

@@ -404,3 +404,57 @@ a direct-pasted NCT ID, and a real live-only NCT ID correctly hits the
 404 path; and with FastAPI killed entirely, Home shows the "could not
 reach the API" message instead of a silent failure.
 
+## 2026-08-29 — Understand extended to live-only trials; UI copy de-jargoned
+
+Real usage immediately surfaced a gap: clicking "View" on a live (untracked)
+Discover result led Understand straight to a 404, since it only ever
+checked our own DB. Fixed by giving Understand the same tracked-or-live
+split Discover already has for search: new `GET /discover/{nct_id}`
+checks our DB first, and if not found, fetches the single trial directly
+from ClinicalTrials.gov's real single-study endpoint
+(`GET /api/v2/studies/{nctId}`, verified live — returns the same
+`protocolSection` shape `extract_fields()` already parses, so no new
+parsing logic needed). A live result has no `fetched_at`/`last_matched_at`
+or change history, since those describe a trial we actually store; the
+UI says so explicitly instead of just omitting them silently. New
+`TrialDetail` schema carries a `source` field the same way `DiscoverResult`
+already does.
+
+Found and fixed a real bug while verifying this: CT.gov returns 404 for a
+well-formed-but-nonexistent NCT ID, but 400 for a malformed one (checked
+live, both against a real trial ID with digits changed vs. a garbage
+string) — the new live-fetch code only treated 404 as "not found" at
+first, so a genuinely bad ID pasted into Understand surfaced as a
+confusing 502 instead of a clean "not found." Fixed to treat both as
+"not found," since neither is a trial to show and a researcher pasting
+an ID doesn't need to know CT.gov's status-code distinction between them.
+
+Also fixed, same pass: `request_with_retry` (shared by ingest.py and both
+CT.gov client paths) was retrying every failure including 4xx errors,
+which can never succeed on retry — a bad NCT ID was hitting a pointless
+5-second sleep before correctly reporting "not found." Now only retries
+on a network error or 5xx; a 4xx raises immediately.
+
+Separately, cleaned up several places where internal/developer language
+had leaked into user-facing copy, caught by actually using the UI: the
+Discover caption named "Monitor" (our internal capability name, meaningless
+to a researcher); the `/discover` response notes referenced literal
+`source` field values (`source: "tracked"`) and a config file path
+(`config/tracked_conditions.json`) as if the reader were a developer;
+and Home showed a permanent green "Connected to the API" banner on every
+successful load, which is confirmation noise — every other page here only
+speaks up when something's actually wrong, not when things are fine.
+Home's banner was removed (the failure path still fires on a real outage)
+and all four `/discover` note strings were rewritten in plain language
+describing what's actually happening, with no internal names, field
+values, or file paths. Home's one-line caption was also expanded slightly
+to actually say what the product does (search + full detail + real
+change tracking) instead of one generic sentence.
+
+Verified live again after these changes: `GET /discover/NCT06744179`
+(the exact trial that surfaced the original gap) now returns full detail
+instead of 404; a genuinely bad ID now returns a clean 404 instead of
+502; the Home page loads with no banner on success and the new caption;
+Discover's caption and the mixed-source note read in plain language,
+confirmed in a real browser screenshot, not just by reading the code.
+

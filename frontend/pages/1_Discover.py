@@ -13,10 +13,9 @@ from api_client import ApiError, get
 st.set_page_config(page_title="Discover — TrialLens", page_icon="🔎")
 st.title("Discover")
 st.caption(
-    "Search a therapeutic area. A condition Monitor comprehensively tracks "
-    "is served from our own data; anything else falls back to a live "
-    "ClinicalTrials.gov lookup, or a mix of both — see the note below "
-    "each search for which applies."
+    "Search any condition or therapeutic area. Ones we're actively "
+    "tracking show our own regularly-updated data; anything else is "
+    "looked up live from ClinicalTrials.gov."
 )
 
 with st.form("discover_search"):
