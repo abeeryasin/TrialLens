@@ -1,0 +1,32 @@
+"""Thin HTTP wrapper around the FastAPI layer.
+
+The frontend is not allowed to touch Postgres directly — "FastAPI is the
+only door to the database" (CLAUDE.md sec. 5) applies to Streamlit the
+same way it already applies to ingest.py. Every page goes through the
+functions here instead of calling `requests` on its own, so that rule
+stays true even as more pages get added.
+"""
+import os
+
+import requests
+
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
+
+
+class ApiError(Exception):
+    """Raised when FastAPI is unreachable or returns an error response.
+    Pages catch this and show it explicitly rather than a blank page —
+    "couldn't reach the API" is a different, honest state from "no
+    results", and the two must never look the same to the user."""
+
+
+def get(path: str, params: dict = None) -> dict:
+    try:
+        response = requests.get(f"{API_BASE_URL}{path}", params=params, timeout=15)
+    except requests.RequestException as exc:
+        raise ApiError(f"Could not reach the API at {API_BASE_URL}: {exc}")
+
+    if not response.ok:
+        raise ApiError(f"API returned {response.status_code} for {path}: {response.text}")
+
+    return response.json()
