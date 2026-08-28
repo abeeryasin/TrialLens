@@ -358,3 +358,49 @@ note that a live check was attempted and failed, instead of a hard 502 —
 those incidental local rows are still real, useful data even when we
 can't currently confirm whether they're the whole picture.
 
+## 2026-08-29 — Streamlit frontend built: Discover + Understand
+
+`frontend/` now exists: `Home.py` (entry point + a live check that the
+API is reachable), `pages/1_Discover.py`, `pages/2_Understand.py`, and a
+shared `api_client.py` — every page reads through it via HTTP, never
+Postgres directly, extending "FastAPI is the only door" (CLAUDE.md sec.
+5) to a second real consumer the same way `ingest.py` already does.
+
+Discover: a search form (`st.form`, so typing doesn't trigger a rerun on
+every keystroke — only "Search" does) hits `GET /discover` and stashes
+the response in `st.session_state`, since a later rerun — clicking
+"View" on a result row — would otherwise throw the results away like any
+Streamlit rerun does. Each row shows its own tracked/live source and the
+response's evidence note. "View" sets `selected_nct_id` and calls
+`st.switch_page` to Understand.
+
+Understand: takes an NCT ID either via that session-state handoff or a
+direct paste, calls `GET /studies/{nct_id}`. Eligibility fields are shown
+as explicit source text with a standing caption that TrialLens never
+determines whether a real person qualifies (CLAUDE.md sec. 2) — this is
+the first UI surface where that rule has an actual, concrete
+implementation instead of just being a written rule. Also shows
+`fetched_at`/`last_matched_at` (data freshness) and the real Monitor
+change log from `GET /studies/{nct_id}/changes`. An NCT ID not in the DB
+(e.g. a live-only Discover result) surfaces FastAPI's real 404 as an
+explicit "not tracked" message with a link to view it directly on
+ClinicalTrials.gov, rather than a blank page or an invented answer —
+added `status_code` to the frontend's `ApiError` specifically so pages
+can tell "not found" apart from "the API is actually broken."
+
+Fixed the step-4 `/discover` gap (see above, 2026-08-28/29) at the start
+of this step rather than deferring it again, since the frontend was
+about to display these results directly to a researcher.
+
+Verified in a real headless browser (Playwright, via `npx playwright` —
+`chromium-cli` wasn't available in this environment), not just by
+reading the code: Home shows a live "Connected to the API" check;
+Discover renders a pure-tracked search (breast cancer), a real mixed
+tracked+live search in one response (psoriasis), and validates an empty
+search; the "View" click-through actually navigates to `/Understand`
+(confirmed by URL and page content, not just the click firing);
+Understand renders a real trial's full detail both via click-through and
+a direct-pasted NCT ID, and a real live-only NCT ID correctly hits the
+404 path; and with FastAPI killed entirely, Home shows the "could not
+reach the API" message instead of a silent failure.
+
