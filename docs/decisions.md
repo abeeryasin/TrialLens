@@ -458,3 +458,43 @@ instead of 404; a genuinely bad ID now returns a clean 404 instead of
 Discover's caption and the mixed-source note read in plain language,
 confirmed in a real browser screenshot, not just by reading the code.
 
+## 2026-08-29 — Discover's results table rebuilt on st.dataframe, not hand-rolled columns
+
+Real usage found Discover's table wrapping short values (a status like
+`ACTIVE_NOT_RECRUITING`, an NCT ID, `PHASE1`) onto two lines even after
+switching the page to Streamlit's wide layout. Root cause, confirmed by
+inspecting the actual rendered container: `layout="wide"` genuinely
+widened the page (1024px content area, verified via the block
+container's computed width), but the table itself was seven manually
+`st.columns()`-ratio'd cells — fixed relative widths that don't reflow
+to content, so a short value in a narrow ratio slot still force-wraps
+mid-word once its column runs out of room, regardless of how much space
+is free elsewhere on the page.
+
+Replaced the hand-rolled columns with a real `st.dataframe` (backed by
+`pandas`, already a Streamlit dependency, no new one added), using
+`on_select="rerun"` / `selection_mode="single-row"` for the "pick a
+trial" interaction instead of a `st.button` in a seventh column per row.
+This is Streamlit's own documented pattern for a selectable table — the
+grid auto-sizes each column to its actual content instead of a fixed
+ratio, so short values render on one line without needing to guess pixel
+budgets per column, and the row-count no longer means one widget key per
+row (`view_{nct_id}` × up to 100) the way the old per-row button did.
+
+Verified for real, including finding a real testing gotcha along the
+way: Streamlit's dataframe renders to an HTML canvas
+(`glide-data-grid`), so a plain click-simulation at reasonable-looking
+pixel coordinates didn't register a selection — confirmed via DOM
+inspection that a `dvn-scroller` overlay div sits over the canvas and
+intercepts pointer events, and the component listens for real
+`pointerdown`/`pointerup` events, not a synthesized `click`. Dispatching
+actual `PointerEvent`s at the checkbox's real screen coordinates (read
+from `getBoundingClientRect()`) selected the row correctly, and the
+full flow — select a row, "View NCT06120283 →" button appears with the
+right ID, click navigates to `/Understand` — worked end to end in a real
+headless browser. Also set `layout="wide"` on Home for visual
+consistency with Discover; left Understand at the default centered
+width on purpose, since it's mostly prose (eligibility text, and soon a
+brief summary) where a comfortable reading width matters more than
+table density.
+

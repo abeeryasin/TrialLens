@@ -6,7 +6,7 @@ import streamlit as st
 
 from api_client import ApiError, get
 
-st.set_page_config(page_title="TrialLens", page_icon="🔬")
+st.set_page_config(page_title="TrialLens", page_icon="🔬", layout="wide")
 
 st.title("TrialLens")
 st.caption(
