@@ -270,3 +270,62 @@ real dataset needs to record exactly what it added (by ID) up front,
 not reconstruct it after the fact from a tag that can also match
 pre-existing rows.
 
+## 2026-08-28 — Discover live-fallback built: `GET /discover`
+
+Implemented the split decided 2026-08-26 ("Discover vs. Monitor"). New
+route checks our own DB first, using the exact same condition-match SQL
+`GET /studies` already uses; if that comes back with any rows, those are
+returned (`source: "tracked"`) and nothing external is called. Only when
+the local match is genuinely empty does it fall through to one live,
+unpersisted ClinicalTrials.gov call (`source: "live"`), capped at
+`limit` results (default 25, max 100), active-status trials only, using
+`fields=` to request just the five fields the response needs instead of
+full records. A live result is never written to the DB — tracking a
+topic going forward stays its own explicit action
+(`config/tracked_conditions.json` + the Monitor job), not a side effect
+of asking a question.
+
+Verified for real, not just by reading the code: `condition=breast
+cancer` (tracked) returned 3 real stored rows, `source: "tracked"`, no
+outbound request. `condition=psoriasis` also returned `source:
+"tracked"` — a genuine, correct edge case, not a bug: several already-
+ingested breast-cancer/obesity trials list psoriasis as a comorbid
+condition in their own `conditions` array, so a plain DB read for
+"psoriasis" isn't actually empty. `condition=tuberculosis` (nothing
+related stored) correctly fell through to `source: "live"` and returned
+3 real, current trials fetched from ClinicalTrials.gov on the spot.
+
+Refactored `extract_fields`/`fetch_pages`/`request_with_retry` out of
+`scripts/ingest.py` into a new shared `ctgov_client.py` at repo root —
+both `ingest.py` and the new `api/discover.py` need the identical
+CT.gov parsing logic, and duplicating it would let the two drift if
+CT.gov's response shape ever changes. Lives outside both `scripts/` and
+`api/` on purpose: it never touches the database, so it isn't part of
+either side of the "FastAPI is the only door to the DB" boundary.
+
+## 2026-08-28 — Found and deferred: `/discover` can silently under-report an untracked condition
+
+Found while walking through the route's real behavior: the local-vs-live
+check is a plain "did the DB return anything," but a condition that was
+never deliberately tracked can still have a handful of local rows —
+e.g. a few breast-cancer trials that happen to list melanoma as a
+comorbid condition in their own records (the same mechanism as the
+psoriasis case earlier in this same section). Today's code treats that
+as "found it locally" and stops, returning those few incidental rows as
+if they were the complete current picture for that condition, with
+nothing telling the caller it might not be. That's a real instance of
+the exact ambiguity this whole feature exists to solve, one level
+deeper: "found something" isn't the same as "found everything," and the
+response doesn't currently say which one it is.
+
+Decided fix, deferred rather than built now: when the asked-for
+condition isn't itself in `config/tracked_conditions.json` (the real
+registry of what's deliberately, comprehensively tracked), query both
+local and live, merge the results de-duplicated by `nct_id`, and tag
+each individual result with where it came from — `DiscoverResponse.source`
+as a single response-level field won't be enough once a response can mix
+both, so that field moves onto each `DiscoverResult` instead. Not built
+yet — revisit alongside whichever step actually surfaces this gap in
+practice (e.g. the frontend, step 5, or before Understand/ranking work
+starts treating `/discover` results as trustworthy inputs).
+

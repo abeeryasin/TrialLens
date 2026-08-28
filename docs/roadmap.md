@@ -16,8 +16,8 @@ time a step starts or finishes.**
 |---|---|---|---|
 | 1 | Schema + Ingestion | **Done** (2026-08-26/27) | — |
 | 2 | FastAPI layer (only door to the DB, read-only enforcement) | **Done** (2026-08-27) | — |
-| 3 | Scheduler/cron automation (turn `ingest.py` into the real Monitor job; cheap-filter/expensive-diff change detection) | **Built + tested locally** (2026-08-28) — real GitHub Actions trigger not yet verified, repo has no remote pushed | 5-7 |
-| 4 | Discover live-fallback (ad-hoc live query for an untracked topic) | Not started | 3-4 |
+| 3 | Scheduler/cron automation (turn `ingest.py` into the real Monitor job; cheap-filter/expensive-diff change detection) | **Done** (2026-08-28) — pushed to GitHub, real 6-hour cron live, first run verified end-to-end on GitHub's infrastructure (11,466 studies checked, 91 needed a full refetch, 102 real changes detected, 33 flagged out of scope, none deleted) | 5-7 |
+| 4 | Discover live-fallback (ad-hoc live query for an untracked topic) | **Done** (2026-08-28) — `GET /discover`, verified with a real tracked hit, a real "incidentally already stored" hit, and a real live CT.gov fallback. **Known gap, deferred (see `docs/decisions.md`, 2026-08-28): an untracked condition that incidentally has a few local rows (comorbid tags on tracked trials) is reported as if it were the complete picture — real fix decided (merge local+live, dedupe, per-result source tag) but not built; revisit at step 5 or before step 6 trusts these results** | 3-4 |
 | 5 | Frontend (Streamlit) — Discover/Understand surface, reads through FastAPI | Not started | 8-10 |
 | 6 | AI ranking/evidence layer ("potential fit" screening, visible evidence + uncertainty, eval harness built alongside) | Not started | 10-14 |
 | 7 | Knowledge graph (relationships between trials/sponsors/interventions, multi-hop queries) — Explore | Not started | 10-14 |

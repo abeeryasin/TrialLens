@@ -92,8 +92,8 @@ not just the conclusion.
 
 ## Current Status
 
-Schema + ingestion, the FastAPI-only-door layer, and scheduler/cron
-automation (Monitor) are built and tested. **Next: push to GitHub to
-verify the real scheduled run, then step 4.** Full status, decisions, and
-time estimates: `docs/roadmap.md`, `docs/decisions.md` (both kept current
-every step).
+Schema + ingestion, the FastAPI-only-door layer, scheduler/cron
+automation (Monitor), and Discover live-fallback (`GET /discover`) are
+built, tested, and live. **Next: step 5, Frontend (Streamlit).** Full
+status, decisions, and time estimates: `docs/roadmap.md`,
+`docs/decisions.md` (both kept current every step).

@@ -112,3 +112,23 @@ class KnownDatesRequest(BaseModel):
 
 class KnownDatesResponse(BaseModel):
     known_dates: Dict[str, date]
+
+
+class DiscoverResult(BaseModel):
+    """One trial in a GET /discover response. Same shape whether it came
+    from our own DB or a live CT.gov call, so callers don't need two
+    result types — but `source` on the parent response says which."""
+
+    nct_id: str
+    brief_title: str
+    overall_status: str
+    phase: Optional[str] = None
+    last_update_post_date: Optional[date] = None
+
+
+class DiscoverResponse(BaseModel):
+    condition: str
+    source: str  # "tracked" (served from our DB) or "live" (fetched from CT.gov just now, not stored)
+    total: int
+    results: List[DiscoverResult]
+    note: str
