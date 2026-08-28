@@ -23,6 +23,7 @@ class StudySummary(BaseModel):
     overall_status: str
     phase: Optional[str] = None
     last_update_post_date: date
+    active_in_scope: bool
 
 
 class StudyDetail(StudySummary):
@@ -36,6 +37,7 @@ class StudyDetail(StudySummary):
     healthy_volunteers: Optional[bool] = None
     eligibility_criteria: Optional[str] = None
     fetched_at: datetime
+    last_matched_at: datetime
     conditions: List[str] = []
 
 
@@ -68,3 +70,45 @@ class StudyUpsert(BaseModel):
 class BatchUpsertResult(BaseModel):
     studies_written: int
     condition_tags_written: int
+    changes_detected: int
+
+
+class StudyChange(BaseModel):
+    """One detected field-level change — the real Monitor changelog entry."""
+
+    field_name: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+    detected_at: datetime
+
+
+class StudyChangeList(BaseModel):
+    nct_id: str
+    changes: List[StudyChange]
+
+
+class ReconcileScopeRequest(BaseModel):
+    """Sent once per condition at the end of an ingest run: the full set of
+    nct_ids this run's cheap-filter fetch actually matched, so anything
+    previously tracked under this condition but not in that set gets
+    flagged (never deleted), and everything still in it gets confirmed."""
+
+    condition: str
+    current_nct_ids: List[str]
+
+
+class ReconcileScopeResult(BaseModel):
+    confirmed_in_scope: int
+    dropped_out_of_scope: int
+
+
+class KnownDatesRequest(BaseModel):
+    """Cheap-filter support: which last_update_post_date do we already have
+    stored for these nct_ids? Missing keys in the response mean "never seen
+    before" — always worth the expensive re-fetch."""
+
+    nct_ids: List[str]
+
+
+class KnownDatesResponse(BaseModel):
+    known_dates: Dict[str, date]

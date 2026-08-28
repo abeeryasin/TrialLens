@@ -66,6 +66,9 @@ not just the conclusion.
 
 - **Schema-first**: read the real schema before writing a query, every
   time.
+- **Status-first**: read `docs/roadmap.md` before resuming or starting
+  any build step; check `docs/decisions.md` before re-deciding something
+  that might already be settled.
 - **Teaching loop flexes per task** — explain-then-attempt for
   substantial concepts, direct build for boilerplate. Ask if unclear.
 - **Close the loop** after meaningful work: what happened, what got
@@ -89,12 +92,8 @@ not just the conclusion.
 
 ## Current Status
 
-Schema + ingestion done — real schema live on Neon, 11,425 studies
-loaded (breast cancer + obesity). FastAPI layer done — `api/` is the
-only door to the database (`GET /studies`, `GET /studies/{nct_id}`,
-`POST /studies/batch`), `ingest.py` writes through it instead of
-touching Postgres directly, and a SELECT-only Postgres role enforces
-read-only access for GET routes at the database layer, not just in
-application code. **Next: scheduler/cron automation.** Full roadmap,
-ordering, and time estimates: `docs/roadmap.md` (kept current every
-step).
+Schema + ingestion, the FastAPI-only-door layer, and scheduler/cron
+automation (Monitor) are built and tested. **Next: push to GitHub to
+verify the real scheduled run, then step 4.** Full status, decisions, and
+time estimates: `docs/roadmap.md`, `docs/decisions.md` (both kept current
+every step).

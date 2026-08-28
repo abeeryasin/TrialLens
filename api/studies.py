@@ -4,15 +4,37 @@ import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.database import get_db, get_readonly_db
-from api.schemas import BatchUpsertResult, StudyDetail, StudyList, StudySummary, StudyUpsert
+from api.schemas import (
+    BatchUpsertResult,
+    KnownDatesRequest,
+    KnownDatesResponse,
+    ReconcileScopeRequest,
+    ReconcileScopeResult,
+    StudyChange,
+    StudyChangeList,
+    StudyDetail,
+    StudyList,
+    StudySummary,
+    StudyUpsert,
+)
 
 router = APIRouter(prefix="/studies", tags=["studies"])
+
+# The "expensive diff" fields: whenever a re-ingested record's value for one
+# of these differs from what's already stored, it's a real, reportable
+# change (see docs/decisions.md, 2026-08-28, cheap-filter/expensive-diff).
+DIFF_FIELDS = [
+    "brief_title", "official_title", "overall_status", "study_type", "phase",
+    "enrollment_count", "sex", "minimum_age", "healthy_volunteers",
+    "eligibility_criteria", "last_update_post_date",
+]
 
 UPSERT_STUDIES = """
     INSERT INTO studies (
         nct_id, brief_title, official_title, overall_status, study_type,
         phase, enrollment_count, sex, minimum_age, healthy_volunteers,
-        eligibility_criteria, last_update_post_date, raw_json, fetched_at
+        eligibility_criteria, last_update_post_date, raw_json, fetched_at,
+        active_in_scope, last_matched_at
     ) VALUES %s
     ON CONFLICT (nct_id) DO UPDATE SET
         brief_title = EXCLUDED.brief_title,
@@ -27,7 +49,13 @@ UPSERT_STUDIES = """
         eligibility_criteria = EXCLUDED.eligibility_criteria,
         last_update_post_date = EXCLUDED.last_update_post_date,
         raw_json = EXCLUDED.raw_json,
-        fetched_at = now();
+        fetched_at = now(),
+        active_in_scope = true,
+        last_matched_at = now();
+"""
+
+INSERT_CHANGES = """
+    INSERT INTO study_changes (nct_id, field_name, old_value, new_value) VALUES %s
 """
 
 
@@ -60,7 +88,7 @@ def list_studies(
 
         cur.execute(
             f"""
-            SELECT nct_id, brief_title, overall_status, phase, last_update_post_date
+            SELECT nct_id, brief_title, overall_status, phase, last_update_post_date, active_in_scope
             FROM studies {where_clause}
             ORDER BY last_update_post_date DESC
             LIMIT %s OFFSET %s
@@ -96,9 +124,38 @@ def get_study(nct_id: str, conn=Depends(get_readonly_db)):
 
 @router.post("/batch", response_model=BatchUpsertResult)
 def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
-    """Upsert a batch of studies + their condition tags. Used by scripts/ingest.py."""
+    """Upsert a batch of studies + their condition tags. Used by scripts/ingest.py.
+
+    Before writing, diffs each incoming record against whatever's already
+    stored (the "expensive diff" — ingest.py only sends records here after
+    its own cheap-filter step decided they're new or their
+    lastUpdatePostDate moved) and records any real field-level change to
+    study_changes, so Monitor has an actual answer to "what changed," not
+    just a silently refreshed row.
+    """
     if not records:
-        return BatchUpsertResult(studies_written=0, condition_tags_written=0)
+        return BatchUpsertResult(studies_written=0, condition_tags_written=0, changes_detected=0)
+
+    nct_ids = [r.nct_id for r in records]
+
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM studies WHERE nct_id = ANY(%s)", (nct_ids,))
+        existing = {row["nct_id"]: row for row in cur.fetchall()}
+
+    change_rows = []
+    for r in records:
+        old = existing.get(r.nct_id)
+        if old is None:
+            continue  # first time we've ever seen this trial — nothing to diff against
+        for field in DIFF_FIELDS:
+            old_value = old[field]
+            new_value = getattr(r, field)
+            if old_value != new_value:
+                change_rows.append((
+                    r.nct_id, field,
+                    None if old_value is None else str(old_value),
+                    None if new_value is None else str(new_value),
+                ))
 
     study_rows = [
         (
@@ -111,10 +168,12 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
     ]
 
     with conn.cursor() as cur:
-        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now())"
+        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
         psycopg2.extras.execute_values(cur, UPSERT_STUDIES, study_rows, template=template)
 
-        nct_ids = [r.nct_id for r in records]
+        if change_rows:
+            psycopg2.extras.execute_values(cur, INSERT_CHANGES, change_rows)
+
         cur.execute("DELETE FROM study_conditions WHERE nct_id = ANY(%s)", (nct_ids,))
 
         condition_rows = [
@@ -128,5 +187,105 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
             )
 
     return BatchUpsertResult(
-        studies_written=len(records), condition_tags_written=len(condition_rows)
+        studies_written=len(records),
+        condition_tags_written=len(condition_rows),
+        changes_detected=len(change_rows),
     )
+
+
+@router.get("/{nct_id}/changes", response_model=StudyChangeList)
+def get_study_changes(nct_id: str, conn=Depends(get_readonly_db)):
+    """The real Monitor changelog for one trial — every field-level change
+    the expensive-diff step has ever detected for it, newest first."""
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT field_name, old_value, new_value, detected_at
+            FROM study_changes WHERE nct_id = %s
+            ORDER BY detected_at DESC
+            """,
+            (nct_id,),
+        )
+        changes = cur.fetchall()
+
+    return StudyChangeList(nct_id=nct_id, changes=[StudyChange(**c) for c in changes])
+
+
+@router.post("/known-dates", response_model=KnownDatesResponse)
+def known_dates(body: KnownDatesRequest, conn=Depends(get_readonly_db)):
+    """The cheap-filter step's other half. ingest.py already did a lightweight
+    CT.gov fetch (fields=NCTId,LastUpdatePostDate — no full record) for every
+    trial currently matching a tracked condition; this returns what we
+    already have stored for those same nct_ids so ingest.py can compare the
+    two dates locally and only pull full records (the expensive part) for
+    ones that actually moved, or that we've never seen before.
+    """
+    if not body.nct_ids:
+        return KnownDatesResponse(known_dates={})
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT nct_id, last_update_post_date FROM studies WHERE nct_id = ANY(%s)",
+            (body.nct_ids,),
+        )
+        rows = cur.fetchall()
+    return KnownDatesResponse(known_dates={r["nct_id"]: r["last_update_post_date"] for r in rows})
+
+
+@router.post("/reconcile-scope", response_model=ReconcileScopeResult)
+def reconcile_scope(body: ReconcileScopeRequest, conn=Depends(get_db)):
+    """Called once per condition at the end of an ingest run, with the full
+    set of nct_ids the cheap-filter fetch matched (changed and unchanged
+    alike). Two things happen, both non-destructive:
+      1. Every nct_id in that set is confirmed: active_in_scope=true,
+         last_matched_at=now() — including trials whose content didn't
+         change and so were never sent to /studies/batch at all.
+      2. Anything tagged with this condition that was previously
+         active_in_scope but ISN'T in that set gets flagged false — e.g. it
+         aged out of the recency window, or its status moved outside what
+         we track. The row and its full history stay; only the flag moves,
+         matching how ClinicalTrials.gov itself never removes a record
+         either (see docs/decisions.md, 2026-08-28).
+    """
+    if not body.current_nct_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "refusing to reconcile scope against an empty nct_id set - that "
+                "would flag every currently-tracked study for this condition as "
+                "out of scope in one shot, almost certainly an upstream fetch "
+                "failure rather than a real result"
+            ),
+        )
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE studies SET active_in_scope = true, last_matched_at = now() "
+            "WHERE nct_id = ANY(%s)",
+            (body.current_nct_ids,),
+        )
+        confirmed = cur.rowcount
+
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT s.nct_id FROM studies s
+            JOIN study_conditions sc ON sc.nct_id = s.nct_id
+            WHERE sc.condition ILIKE %s AND s.active_in_scope = true
+              AND NOT (s.nct_id = ANY(%s))
+            """,
+            (f"%{body.condition}%", body.current_nct_ids),
+        )
+        dropped = [row["nct_id"] for row in cur.fetchall()]
+
+    if not dropped:
+        return ReconcileScopeResult(confirmed_in_scope=confirmed, dropped_out_of_scope=0)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE studies SET active_in_scope = false WHERE nct_id = ANY(%s)",
+            (dropped,),
+        )
+        change_rows = [(nct_id, "active_in_scope", "true", "false") for nct_id in dropped]
+        psycopg2.extras.execute_values(cur, INSERT_CHANGES, change_rows)
+
+    return ReconcileScopeResult(confirmed_in_scope=confirmed, dropped_out_of_scope=len(dropped))

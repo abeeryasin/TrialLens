@@ -1,0 +1,56 @@
+name: Monitor tracked trials
+
+# Runs every 6 hours, unattended, plus a manual "Run workflow" button for
+# testing. This is what turns ingest.py from something a human runs by hand
+# into a real scheduled job (see docs/decisions.md, 2026-08-28).
+#
+# The API is started fresh inside this job (not called over the internet)
+# because there's no permanently-deployed FastAPI instance yet — that's a
+# later, separate step (see docs/roadmap.md, step 9). Running it ephemerally
+# here, exactly like local dev does, keeps "FastAPI is the only door to the
+# database" true without requiring a public deployment before this job can
+# exist. DATABASE_URL / DATABASE_URL_READONLY only ever live in this job's
+# environment via GitHub's encrypted secrets — never in a public endpoint.
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start FastAPI (this job only, torn down when it ends)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_READONLY: ${{ secrets.DATABASE_URL_READONLY }}
+        run: |
+          nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
+          for i in $(seq 1 15); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+              echo "API is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API never became healthy"
+          cat api.log
+          exit 1
+
+      - name: Run the Monitor job
+        env:
+          API_BASE_URL: http://127.0.0.1:8000
+        run: python scripts/run_monitor.py
+
+      - name: Show API log on failure
+        if: failure()
+        run: cat api.log

@@ -176,6 +176,66 @@ Postgres itself (`permission denied for table studies`), while a
 app-layer check alone wouldn't survive a bug in the app code; a missing
 database grant can't be bypassed that way.
 
+## 2026-08-28 — Monitor: real cheap-filter/expensive-diff, a changelog table, and a no-delete guardrail
+
+Turned `ingest.py` into a real, two-phase sync instead of a full re-fetch every
+run. Verified live before building: ClinicalTrials.gov's v2 API supports
+`fields=` to return just `NCTId`/`LastUpdatePostDate` for a whole search (a
+few bytes per trial instead of a full record) and `filter.ids=` to re-fetch
+full records for a specific ID list. So each run now does: (1) a lightweight
+fetch of every trial currently matching a tracked condition, just ID +
+last-updated date; (2) ask the API which of those we already have and at
+what date; (3) only pull full records for the ones that are new or whose
+date moved; (4) diff those full records field-by-field against what's
+stored and write any real difference to a new `study_changes` table (old
+value, new value, field, timestamp) before overwriting — the old
+`UPSERT ... ON CONFLICT` alone would have silently discarded the previous
+value with no record anything changed, which defeats the entire point of a
+Monitor capability.
+
+Also decided, after checking both general practice and ClinicalTrials.gov's
+own behavior: the scheduler never issues a `DELETE`, full stop. Two
+reasons: (1) this project already has a real incident where a script
+matched-and-removed rows it shouldn't have (2026-08-27, below); (2)
+ClinicalTrials.gov itself never deletes a record either — a trial's status
+changes and its full history stays visible, it doesn't disappear. Mirrored
+that model: a trial that stops matching a tracked condition's
+active/recency filter gets flagged (`active_in_scope = false`,
+`last_matched_at` timestamp) via a new `POST /studies/reconcile-scope`
+endpoint, never removed. That endpoint refuses to run at all against an
+empty ID set — a real edge case caught while testing: an upstream fetch
+failure returning zero results would otherwise flag every currently-tracked
+study for that condition as dropped in one shot, which is exactly the kind
+of silent mass-change an unattended job must not be able to do.
+
+Scheduling itself is a GitHub Actions workflow
+(`.github/workflows/monitor.yml`) on a 6-hour cron, plus a manual trigger
+for testing. It starts FastAPI fresh inside the job itself rather than
+calling a permanently-deployed instance, since real deployment is a
+separate, later step — this keeps "FastAPI is the only door to the
+database" true without requiring that step to happen first. Verified live
+(GitHub's own docs) that a scheduled workflow's failure automatically
+emails whoever owns/last-edited it — used as the failure-escalation path
+instead of building a custom notifier now, since a change-digest email is
+already separately planned later and would duplicate the concern. Network
+calls (both to ClinicalTrials.gov and to our own API) get one automatic
+retry before being allowed to fail the run.
+
+Tested for real, not just written: ran the new ingest twice back-to-back
+against a small condition — the second run's cheap filter correctly found 0
+of 56 studies changed and made zero full-record fetches. Then deliberately
+corrupted one real row's stored date and enrollment count to simulate
+drift, re-ran ingest, and confirmed the diff caught exactly those two
+fields and wrote them to `study_changes` with correct old/new values.
+Separately tested the drop path by calling `reconcile-scope` with one real
+study excluded from the current set — confirmed its row was flagged
+`active_in_scope = false` (not deleted) and the transition itself was
+recorded as a change. Found and fixed a real bug in the same pass: the
+drop-detection query's `ILIKE` was matching the condition string exactly
+instead of as a substring (inconsistent with how `GET /studies` already
+matches conditions), so it silently matched nothing until wrapped in
+`%...%` like the existing route does.
+
 ## 2026-08-27 — Found and fixed: client-side connection pooling against Neon's pooled endpoint
 
 First version of `api/database.py` kept a long-lived `psycopg2`
