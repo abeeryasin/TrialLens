@@ -616,3 +616,24 @@ each now; a bare enrollment count (`3294`) renders as plain text, not a
 code chip (confirmed via DOM diff, not just visually); Home's "Open
 Discover" button actually navigates to `/Discover`.
 
+## 2026-08-29 — Monitor gets its own roadmap step, separate from the digest email
+
+Home's new capability grid made a real gap visible: Monitor's output is
+only reachable per-trial, inside Understand's change history — there's
+no way to answer "what changed across everything tracked this week"
+without already knowing which NCT ID to look at. That's exactly the
+question a researcher tracking a therapeutic area over time would
+actually ask.
+
+Decided: a real aggregate Monitor page (recent `study_changes` entries
+across all tracked trials) is worth building, but as its own step, not
+folded into the frontend step just finished or merged with the planned
+Resend digest-email idea (step 12) — those two are genuinely different
+things: a page for pulling up "what changed" on demand vs. an email that
+pushes it. Inserted as roadmap step 6 (before AI ranking, since it needs
+no new capability the app doesn't already have — just an aggregate read
+over data already being written); everything from the old step 6 onward
+renumbered by one (now 7-12), `CLAUDE.md`'s "Next" line and the
+review-queue step reference in `docs/roadmap.md`'s own intro updated to
+match.
+

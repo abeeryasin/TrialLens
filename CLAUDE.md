@@ -95,6 +95,6 @@ not just the conclusion.
 Schema + ingestion, the FastAPI-only-door layer, scheduler/cron
 automation (Monitor), Discover live-fallback (`GET /discover`), and the
 Streamlit frontend (Discover + Understand) are built, tested, and live.
-**Next: step 6, AI ranking/evidence layer.** Full status, decisions, and
-time estimates: `docs/roadmap.md`, `docs/decisions.md` (both kept current
-every step).
+**Next: step 6, Monitor page (aggregate recent-changes feed).** Full
+status, decisions, and time estimates: `docs/roadmap.md`,
+`docs/decisions.md` (both kept current every step).
