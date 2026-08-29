@@ -77,9 +77,9 @@ if is_live:
     )
 
 status_col, phase_col, type_col = st.columns(3)
-status_col.metric("Status", study["overall_status"])
-phase_col.metric("Phase", study["phase"] or "—")
-type_col.metric("Study type", study["study_type"] or "—")
+status_col.markdown(f"**Status**\n\n{study['overall_status']}")
+phase_col.markdown(f"**Phase**\n\n{study['phase'] or '—'}")
+type_col.markdown(f"**Study type**\n\n{study['study_type'] or '—'}")
 
 if not is_live and study["active_in_scope"] is False:
     st.warning(
@@ -153,7 +153,7 @@ else:
     st.caption("No eligibility criteria text on file — insufficient information, not zero criteria.")
 
 st.subheader("Enrollment")
-st.write(study["enrollment_count"] if study["enrollment_count"] is not None else "—")
+st.write(str(study["enrollment_count"]) if study["enrollment_count"] is not None else "—")
 
 if is_live:
     st.caption("Fetched just now, live · source: ClinicalTrials.gov")

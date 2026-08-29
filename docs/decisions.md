@@ -583,3 +583,36 @@ the same set of fields via the live-fetch path with zero extra code
 (the response shapes already matched); `GET /discover` regression-checked
 clean after the schema change.
 
+## 2026-08-29 — Small UI fixes + honest, interactive Home page
+
+Three real usability issues found by actually using the app: `st.metric`
+truncates a long value with an ellipsis instead of wrapping (real example:
+`ACTIVE_NOT_RECRUITING` got cut off) — switched Status/Phase/Study type to
+the same plain markdown layout already used for Sponsor/dates, which
+wraps correctly; `st.write()` on a bare integer renders it in an inline
+`<code>` chip (confirmed by inspecting the real DOM), which looks like
+unintended UI chrome for a plain enrollment count — fixed by writing the
+string instead; and the small icon next to each `st.subheader` is
+Streamlit's own built-in anchor-link feature (confirmed via DOM
+inspection: an `<a href="#conditions">` wrapping a link-shaped SVG, not
+anything this project added) — not changed, just confirmed and explained.
+
+Home was too sparse to convey what the product actually does. Rebuilt
+around two things: a live stats row (real trial count and tracked
+condition list via a new `GET /tracked-conditions` — small, single-purpose,
+keeps the frontend reading through FastAPI rather than a local config
+file directly, same rule as everywhere else) instead of static claims,
+and an honest capability grid for all five real capabilities (CLAUDE.md
+sec. 1) — Discover/Understand get a working "Open" button
+(`st.switch_page`), Monitor is marked as genuinely running in the
+background with a pointer to where its output actually shows up
+(Understand's change history), and Explore/Investigate are labeled "Not
+built yet," not hidden or implied. Deliberately not overstating what's
+live, matching the same honesty rule already applied everywhere else in
+this project.
+
+Verified in a real browser: Status/Phase/Study type render on one line
+each now; a bare enrollment count (`3294`) renders as plain text, not a
+code chip (confirmed via DOM diff, not just visually); Home's "Open
+Discover" button actually navigates to `/Discover`.
+

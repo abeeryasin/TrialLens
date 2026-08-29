@@ -1,7 +1,15 @@
 """TrialLens — entry point. A quiet connectivity check runs on load; it
 only speaks up if the API (the only door to the database) is actually
 unreachable, matching how every other page here only surfaces problems,
-not confirmations that things are fine."""
+not confirmations that things are fine.
+
+Five real capabilities (CLAUDE.md sec. 1): Discover, Understand, Monitor,
+Explore, Investigate. Only Discover/Understand have their own pages so
+far; Monitor is real and running but surfaces inside Understand rather
+than as its own page; Explore/Investigate aren't built yet. The grid
+below says exactly which is which — never implies a capability is live
+when it isn't.
+"""
 import streamlit as st
 
 from api_client import ApiError, get
@@ -20,8 +28,71 @@ try:
     get("/health")
 except ApiError as exc:
     st.error(str(exc))
+    st.stop()
 
-st.markdown(
-    "Use the sidebar to **Discover** trials for a condition, or open "
-    "**Understand** for a specific trial's full detail."
-)
+col1, col2 = st.columns(2)
+try:
+    total_tracked = get("/studies", {"limit": 1})["total"]
+    col1.metric("Trials tracked", f"{total_tracked:,}")
+except ApiError:
+    pass
+try:
+    conditions = get("/tracked-conditions")
+    col2.metric("Conditions actively monitored", len(conditions))
+    col2.caption(", ".join(conditions))
+except ApiError:
+    pass
+
+st.divider()
+st.subheader("What TrialLens does")
+
+capabilities = [
+    {
+        "icon": "🔎",
+        "name": "Discover",
+        "desc": "Search any condition. Tracked ones show our own regularly-updated data; anything else is looked up live.",
+        "page": "pages/1_Discover.py",
+        "status": "live",
+    },
+    {
+        "icon": "📄",
+        "name": "Understand",
+        "desc": "A trial's full detail — what it studies, who's eligible, what's changed — not just a fitness score.",
+        "page": "pages/2_Understand.py",
+        "status": "live",
+    },
+    {
+        "icon": "🛰️",
+        "name": "Monitor",
+        "desc": "Runs on its own every 6 hours, checking every tracked trial for real changes.",
+        "page": None,
+        "status": "background",
+    },
+    {
+        "icon": "🕸️",
+        "name": "Explore",
+        "desc": "How trials, sponsors, and interventions connect to each other.",
+        "page": None,
+        "status": "planned",
+    },
+    {
+        "icon": "🧭",
+        "name": "Investigate",
+        "desc": "Synthesis across everything tracked — patterns across trials, not just within one.",
+        "page": None,
+        "status": "planned",
+    },
+]
+
+cols = st.columns(len(capabilities))
+for col, cap in zip(cols, capabilities):
+    with col:
+        st.markdown(f"#### {cap['icon']} {cap['name']}")
+        st.caption(cap["desc"])
+        if cap["status"] == "live":
+            if st.button(f"Open {cap['name']} →", key=f"open_{cap['name']}", width="stretch"):
+                st.switch_page(cap["page"])
+        elif cap["status"] == "background":
+            st.caption("🟢 Running now — see its results in Understand's change history.")
+        else:
+            st.caption("⚪ Not built yet.")
