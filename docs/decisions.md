@@ -498,3 +498,88 @@ width on purpose, since it's mostly prose (eligibility text, and soon a
 brief summary) where a comfortable reading width matters more than
 table density.
 
+## 2026-08-29 — Narrative/design fields added: what a trial is, not just who's eligible
+
+Real usage surfaced a real gap: Understand showed status, phase, and
+eligibility text, but never *why the trial exists* — no summary, no
+intervention, no outcome measure. Checked against real research rather
+than guessing what to add: two studies on what clinicians/researchers
+actually look for both independently rank condition, brief summary,
+intervention name, outcome measures, trial dates, and location among the
+handful of fields that matter most (search links kept in conversation,
+not duplicated here per this file's own no-course-framework rule — the
+finding is: brief summary + intervention were the two most-helpful
+results-list fields after title/condition, and location/dates ranked
+second and third among search factors after condition itself). This is
+also directly why the change log looked useless in practice: it could
+only ever report a change to a field we actually parsed, and
+`last_update_post_date` alone doesn't explain what changed.
+
+Added 7 fields to `studies` (`brief_summary`, `lead_sponsor`,
+`start_date`, `primary_completion_date`, `completion_date`,
+`interventions`, `primary_outcomes`, `locations`) via `db/schema.sql`'s
+existing idempotent `ADD COLUMN IF NOT EXISTS` pattern, extended
+`extract_fields()` to parse them, and added them to `DIFF_FIELDS` so a
+real change to an outcome measure or intervention now shows up as an
+actual change-log entry, not silence.
+
+Two real things caught and fixed before this shipped, not after:
+
+1. **Date precision.** Verified live against a real sample of 50 studies
+   before trusting a `DATE` column: ~23% of `startDateStruct` /
+   `primaryCompletionDateStruct` / `completionDateStruct` values are
+   month-only ("2027-06", no day) — unlike `last_update_post_date`, which
+   is always full-precision. A `DATE` column would have rejected those
+   rows or forced fabricating a day CT.gov never reported, which CLAUDE.md
+   sec. 2 explicitly forbids. Fixed to `TEXT` before any data was written,
+   caught by checking real API responses rather than assuming ISO-8601
+   day precision.
+2. **Migration cost on Neon's free tier.** The columns were briefly
+   applied as `DATE` before catching the above; fixing them with
+   `ALTER COLUMN ... TYPE TEXT` hit `DiskFull: project size limit (512 MB)
+   exceeded` mid-migration, even though the live database was only 181MB
+   — a type change forces Postgres to rewrite the whole table even for an
+   all-NULL column. Fixed by `DROP COLUMN` + `ADD COLUMN` instead (cheap
+   on an empty column), wrapped in a one-off idempotent `DO` block in
+   `schema.sql` so it's a no-op on a database that never had the wrong
+   type.
+
+Backfilled all 11,490 existing rows from their already-stored `raw_json`
+— no CT.gov re-fetch needed, since the raw record was already kept per
+CLAUDE.md sec. 4. `scripts/backfill_narrative_fields.py` connects to
+Postgres directly rather than through `POST /studies/batch`, deliberately:
+that endpoint's diff logic would log a "changed" entry for all ~11k rows
+(NULL → real value), which isn't a real Monitor-detected change and would
+flood `study_changes` with same-day noise — a one-time structural backfill
+is administrative work, the same category as `scripts/apply_schema.py`
+and `scripts/create_readonly_role.py`. First version issued one `UPDATE`
+per row (200 round trips per batch against Neon's pooled endpoint) and was
+on pace for roughly 90 minutes; rewritten to a single bulk
+`UPDATE ... FROM (VALUES ...)` per batch of 1000, which completed all
+11,490 rows in under 3 minutes. Final database size: 183MB (up from 181MB
+— the new columns mostly duplicate data already in `raw_json`, so the
+storage cost was negligible, well inside the free-tier cap).
+
+Understand now shows brief summary, intervention(s), primary outcome(s),
+sponsor, and real study dates above eligibility (matches "why does this
+trial matter" coming before "who can join"), plus a locations summary
+(site count + countries, full list in an expander — one real backfilled
+trial has 542 sites). Change history now renders human-readable field
+names instead of raw column names, and structured fields
+(interventions/outcomes/locations) render as a real before/after JSON
+diff instead of one unreadable inline string — verified with a real
+controlled test (inserted a fake `interventions` change row, confirmed
+it rendered as a proper two-column diff, then deleted it). Also added an
+honest fallback: when the *only* detected change is
+`last_update_post_date` itself, the page now says plainly that
+ClinicalTrials.gov marked the record updated but none of the fields we
+track actually changed value, rather than leaving the researcher to
+wonder what changed.
+
+Verified end to end with real data, not just by reading the code: a
+tracked trial (NCT00070564) shows real summary/interventions/outcomes/
+sponsor/dates/542 real locations; a live-only trial (NCT06744179) shows
+the same set of fields via the live-fetch path with zero extra code
+(the response shapes already matched); `GET /discover` regression-checked
+clean after the schema change.
+

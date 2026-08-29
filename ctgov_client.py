@@ -48,6 +48,13 @@ def extract_fields(study: dict) -> dict:
 
     Uses .get() with defaults throughout because not every study has
     every field (e.g. observational studies have no phase).
+
+    The narrative/design fields (brief_summary, interventions,
+    primary_outcomes, lead_sponsor, real dates, locations) were added
+    2026-08-29 — see docs/decisions.md for why "title + eligibility +
+    status" alone doesn't answer "why does this trial matter." Trimmed to
+    just the sub-fields actually displayed, not stored verbatim — the full
+    structure is still preserved untouched in raw_json regardless.
     """
     protocol = study.get("protocolSection", {})
     identification = protocol.get("identificationModule", {})
@@ -55,8 +62,38 @@ def extract_fields(study: dict) -> dict:
     design = protocol.get("designModule", {})
     eligibility = protocol.get("eligibilityModule", {})
     conditions = protocol.get("conditionsModule", {})
+    description = protocol.get("descriptionModule", {})
+    sponsor = protocol.get("sponsorCollaboratorsModule", {})
+    arms = protocol.get("armsInterventionsModule", {})
+    outcomes = protocol.get("outcomesModule", {})
+    contacts_locations = protocol.get("contactsLocationsModule", {})
 
     phases = design.get("phases", [])
+
+    interventions = [
+        {
+            "type": i.get("type"),
+            "name": i.get("name"),
+            "description": i.get("description"),
+        }
+        for i in arms.get("interventions", [])
+    ]
+    primary_outcomes = [
+        {
+            "measure": o.get("measure"),
+            "description": o.get("description"),
+            "time_frame": o.get("timeFrame"),
+        }
+        for o in outcomes.get("primaryOutcomes", [])
+    ]
+    locations = [
+        {
+            "facility": loc.get("facility"),
+            "city": loc.get("city"),
+            "country": loc.get("country"),
+        }
+        for loc in contacts_locations.get("locations", [])
+    ]
 
     return {
         "nct_id": identification["nctId"],
@@ -72,6 +109,14 @@ def extract_fields(study: dict) -> dict:
         "eligibility_criteria": eligibility.get("eligibilityCriteria"),
         "last_update_post_date": status.get("lastUpdatePostDateStruct", {}).get("date"),
         "conditions": conditions.get("conditions", []),
+        "brief_summary": description.get("briefSummary"),
+        "lead_sponsor": sponsor.get("leadSponsor", {}).get("name"),
+        "start_date": status.get("startDateStruct", {}).get("date"),
+        "primary_completion_date": status.get("primaryCompletionDateStruct", {}).get("date"),
+        "completion_date": status.get("completionDateStruct", {}).get("date"),
+        "interventions": interventions,
+        "primary_outcomes": primary_outcomes,
+        "locations": locations,
         "raw_json": study,
     }
 

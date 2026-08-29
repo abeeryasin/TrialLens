@@ -1,7 +1,9 @@
+import json
 from typing import List, Optional
 
 import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from api.database import get_db, get_readonly_db
 from api.schemas import (
@@ -23,18 +25,25 @@ router = APIRouter(prefix="/studies", tags=["studies"])
 # The "expensive diff" fields: whenever a re-ingested record's value for one
 # of these differs from what's already stored, it's a real, reportable
 # change (see docs/decisions.md, 2026-08-28, cheap-filter/expensive-diff).
+# The narrative/design fields (2026-08-29) are included too — a changed
+# outcome measure or intervention is exactly the kind of real change
+# last_update_post_date alone couldn't previously explain.
 DIFF_FIELDS = [
     "brief_title", "official_title", "overall_status", "study_type", "phase",
     "enrollment_count", "sex", "minimum_age", "healthy_volunteers",
     "eligibility_criteria", "last_update_post_date",
+    "brief_summary", "lead_sponsor", "start_date", "primary_completion_date",
+    "completion_date", "interventions", "primary_outcomes", "locations",
 ]
 
 UPSERT_STUDIES = """
     INSERT INTO studies (
         nct_id, brief_title, official_title, overall_status, study_type,
         phase, enrollment_count, sex, minimum_age, healthy_volunteers,
-        eligibility_criteria, last_update_post_date, raw_json, fetched_at,
-        active_in_scope, last_matched_at
+        eligibility_criteria, last_update_post_date, raw_json,
+        brief_summary, lead_sponsor, start_date, primary_completion_date,
+        completion_date, interventions, primary_outcomes, locations,
+        fetched_at, active_in_scope, last_matched_at
     ) VALUES %s
     ON CONFLICT (nct_id) DO UPDATE SET
         brief_title = EXCLUDED.brief_title,
@@ -49,6 +58,14 @@ UPSERT_STUDIES = """
         eligibility_criteria = EXCLUDED.eligibility_criteria,
         last_update_post_date = EXCLUDED.last_update_post_date,
         raw_json = EXCLUDED.raw_json,
+        brief_summary = EXCLUDED.brief_summary,
+        lead_sponsor = EXCLUDED.lead_sponsor,
+        start_date = EXCLUDED.start_date,
+        primary_completion_date = EXCLUDED.primary_completion_date,
+        completion_date = EXCLUDED.completion_date,
+        interventions = EXCLUDED.interventions,
+        primary_outcomes = EXCLUDED.primary_outcomes,
+        locations = EXCLUDED.locations,
         fetched_at = now(),
         active_in_scope = true,
         last_matched_at = now();
@@ -142,6 +159,22 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
         cur.execute("SELECT * FROM studies WHERE nct_id = ANY(%s)", (nct_ids,))
         existing = {row["nct_id"]: row for row in cur.fetchall()}
 
+    def normalize(value):
+        """A list field holds Pydantic sub-models (Intervention, etc.) on
+        the incoming record but plain dicts on the stored DB row (JSONB
+        decoded by psycopg2) — dump to plain dicts so the two sides can
+        actually compare equal when nothing really changed."""
+        if isinstance(value, list) and value and isinstance(value[0], BaseModel):
+            return [item.model_dump() for item in value]
+        return value
+
+    def stringify(value):
+        if value is None:
+            return None
+        if isinstance(value, (list, dict)):
+            return json.dumps(value)
+        return str(value)
+
     change_rows = []
     for r in records:
         old = existing.get(r.nct_id)
@@ -149,12 +182,12 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
             continue  # first time we've ever seen this trial — nothing to diff against
         for field in DIFF_FIELDS:
             old_value = old[field]
-            new_value = getattr(r, field)
+            new_value = normalize(getattr(r, field))
             if old_value != new_value:
                 change_rows.append((
                     r.nct_id, field,
-                    None if old_value is None else str(old_value),
-                    None if new_value is None else str(new_value),
+                    stringify(old_value),
+                    stringify(new_value),
                 ))
 
     study_rows = [
@@ -163,12 +196,17 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
             r.study_type, r.phase, r.enrollment_count, r.sex,
             r.minimum_age, r.healthy_volunteers, r.eligibility_criteria,
             r.last_update_post_date, psycopg2.extras.Json(r.raw_json),
+            r.brief_summary, r.lead_sponsor, r.start_date,
+            r.primary_completion_date, r.completion_date,
+            psycopg2.extras.Json(normalize(r.interventions)),
+            psycopg2.extras.Json(normalize(r.primary_outcomes)),
+            psycopg2.extras.Json(normalize(r.locations)),
         )
         for r in records
     ]
 
     with conn.cursor() as cur:
-        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
+        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
         psycopg2.extras.execute_values(cur, UPSERT_STUDIES, study_rows, template=template)
 
         if change_rows:

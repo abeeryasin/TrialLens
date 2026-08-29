@@ -12,9 +12,37 @@ CT.gov lookup — the same tracked-or-live split as Discover's search,
 applied to a single trial. A live result has no fetched_at/last_matched_at
 or change history, since those describe a trial we actually track.
 """
+import json
+
 import streamlit as st
 
 from api_client import ApiError, get
+
+FIELD_LABELS = {
+    "brief_title": "Title",
+    "official_title": "Official title",
+    "overall_status": "Status",
+    "study_type": "Study type",
+    "phase": "Phase",
+    "enrollment_count": "Enrollment",
+    "sex": "Sex",
+    "minimum_age": "Minimum age",
+    "healthy_volunteers": "Healthy volunteers",
+    "eligibility_criteria": "Eligibility criteria",
+    "last_update_post_date": "ClinicalTrials.gov's own \"last updated\" date",
+    "brief_summary": "Summary",
+    "lead_sponsor": "Sponsor",
+    "start_date": "Start date",
+    "primary_completion_date": "Primary completion date",
+    "completion_date": "Completion date",
+    "interventions": "Intervention(s)",
+    "primary_outcomes": "Primary outcome(s)",
+    "locations": "Location(s)",
+    "active_in_scope": "Active in tracking scope",
+}
+# These store a JSON list, not a plain value — render as a formatted
+# before/after instead of one unreadable inline JSON string.
+STRUCTURED_FIELDS = {"interventions", "primary_outcomes", "locations"}
 
 st.set_page_config(page_title="Understand — TrialLens", page_icon="📄")
 st.title("Understand")
@@ -63,6 +91,49 @@ if not is_live and study["active_in_scope"] is False:
 st.subheader("Conditions")
 st.write(", ".join(study["conditions"]) or "—")
 
+if study.get("brief_summary"):
+    st.subheader("What this trial is studying")
+    st.write(study["brief_summary"])
+
+if study.get("interventions"):
+    st.subheader("Intervention" + ("s" if len(study["interventions"]) > 1 else ""))
+    for iv in study["interventions"]:
+        label = iv.get("name") or "—"
+        if iv.get("type"):
+            label = f"{label} ({iv['type']})"
+        st.markdown(f"**{label}**")
+        if iv.get("description"):
+            st.caption(iv["description"])
+
+if study.get("primary_outcomes"):
+    st.subheader("Primary outcome" + ("s" if len(study["primary_outcomes"]) > 1 else ""))
+    st.caption("What defines success for this trial.")
+    for o in study["primary_outcomes"]:
+        st.markdown(f"**{o.get('measure') or '—'}**")
+        details = []
+        if o.get("time_frame"):
+            details.append(f"Time frame: {o['time_frame']}")
+        if o.get("description"):
+            details.append(o["description"])
+        if details:
+            st.caption(" · ".join(details))
+
+detail_cols = st.columns(4)
+detail_cols[0].markdown(f"**Sponsor**\n\n{study.get('lead_sponsor') or '—'}")
+detail_cols[1].markdown(f"**Start date**\n\n{study.get('start_date') or '—'}")
+detail_cols[2].markdown(f"**Primary completion**\n\n{study.get('primary_completion_date') or '—'}")
+detail_cols[3].markdown(f"**Completion**\n\n{study.get('completion_date') or '—'}")
+
+if study.get("locations"):
+    locs = study["locations"]
+    st.subheader("Locations")
+    countries = sorted({loc["country"] for loc in locs if loc.get("country")})
+    st.caption(f"{len(locs)} site(s)" + (f" across {', '.join(countries)}" if countries else ""))
+    with st.expander(f"All {len(locs)} location(s)"):
+        for loc in locs:
+            parts = [p for p in (loc.get("facility"), loc.get("city"), loc.get("country")) if p]
+            st.write(", ".join(parts) or "—")
+
 st.subheader("Eligibility — source text, not an assessment")
 st.caption(
     "This is ClinicalTrials.gov's own eligibility criteria text for this "
@@ -103,9 +174,35 @@ if not is_live:
         if not change_log["changes"]:
             st.caption("No changes detected yet for this trial.")
         else:
-            for change in change_log["changes"]:
-                st.write(
-                    f"**{change['field_name']}** — "
-                    f"{change['old_value'] or '—'} → {change['new_value'] or '—'} "
-                    f"({change['detected_at']})"
+            changes = change_log["changes"]
+            if len(changes) == 1 and changes[0]["field_name"] == "last_update_post_date":
+                st.caption(
+                    "ClinicalTrials.gov marked this record as updated, but none "
+                    "of the other fields we track changed value — the real "
+                    "change may be in something we don't parse yet (e.g. "
+                    "contacts, oversight)."
                 )
+            for change in changes:
+                label = FIELD_LABELS.get(change["field_name"], change["field_name"])
+                detected_at = change["detected_at"]
+                if change["field_name"] in STRUCTURED_FIELDS:
+                    st.markdown(f"**{label}** changed ({detected_at})")
+                    old_col, new_col = st.columns(2)
+                    for col, heading, raw_value in (
+                        (old_col, "Before", change["old_value"]),
+                        (new_col, "After", change["new_value"]),
+                    ):
+                        col.caption(heading)
+                        if not raw_value:
+                            col.write("—")
+                            continue
+                        try:
+                            parsed = json.loads(raw_value)
+                        except (TypeError, ValueError):
+                            col.write(raw_value)
+                        else:
+                            col.json(parsed)
+                else:
+                    old_display = change["old_value"] or "—"
+                    new_display = change["new_value"] or "—"
+                    st.write(f"**{label}** — {old_display} → {new_display} ({detected_at})")

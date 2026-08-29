@@ -15,6 +15,33 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 
+class Intervention(BaseModel):
+    """What's actually being done to participants — a drug, device, or
+    procedure. The single most-requested field after title/condition in a
+    real study of what researchers find helpful in a results list (see
+    docs/decisions.md, 2026-08-29)."""
+
+    type: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class OutcomeMeasure(BaseModel):
+    """What defines success for the trial — e.g. "Alpha diversity of the
+    periodontal microbiota using Chao-1 index" (a real primary outcome,
+    not an abstraction)."""
+
+    measure: Optional[str] = None
+    description: Optional[str] = None
+    time_frame: Optional[str] = None
+
+
+class TrialLocation(BaseModel):
+    facility: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+
+
 class StudySummary(BaseModel):
     """One row in a GET /studies list — enough to identify and triage a trial."""
 
@@ -39,6 +66,14 @@ class StudyDetail(StudySummary):
     fetched_at: datetime
     last_matched_at: datetime
     conditions: List[str] = []
+    brief_summary: Optional[str] = None
+    lead_sponsor: Optional[str] = None
+    start_date: Optional[str] = None
+    primary_completion_date: Optional[str] = None
+    completion_date: Optional[str] = None
+    interventions: List[Intervention] = []
+    primary_outcomes: List[OutcomeMeasure] = []
+    locations: List[TrialLocation] = []
 
 
 class StudyList(BaseModel):
@@ -49,7 +84,7 @@ class StudyList(BaseModel):
 
 
 class StudyUpsert(BaseModel):
-    """One study as written by ingest.py, matching extract_fields() in scripts/ingest.py."""
+    """One study as written by ingest.py, matching extract_fields() in ctgov_client.py."""
 
     nct_id: str
     brief_title: str
@@ -65,6 +100,14 @@ class StudyUpsert(BaseModel):
     last_update_post_date: date
     conditions: List[str] = []
     raw_json: Dict[str, Any]
+    brief_summary: Optional[str] = None
+    lead_sponsor: Optional[str] = None
+    start_date: Optional[str] = None
+    primary_completion_date: Optional[str] = None
+    completion_date: Optional[str] = None
+    interventions: List[Intervention] = []
+    primary_outcomes: List[OutcomeMeasure] = []
+    locations: List[TrialLocation] = []
 
 
 class BatchUpsertResult(BaseModel):
@@ -161,3 +204,11 @@ class TrialDetail(BaseModel):
     fetched_at: Optional[datetime] = None
     last_matched_at: Optional[datetime] = None
     active_in_scope: Optional[bool] = None
+    brief_summary: Optional[str] = None
+    lead_sponsor: Optional[str] = None
+    start_date: Optional[str] = None
+    primary_completion_date: Optional[str] = None
+    completion_date: Optional[str] = None
+    interventions: List[Intervention] = []
+    primary_outcomes: List[OutcomeMeasure] = []
+    locations: List[TrialLocation] = []
