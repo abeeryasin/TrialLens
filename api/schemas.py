@@ -62,6 +62,7 @@ class StudyDetail(StudySummary):
     enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
+    maximum_age: Optional[str] = None
     healthy_volunteers: Optional[bool] = None
     eligibility_criteria: Optional[str] = None
     fetched_at: datetime
@@ -97,6 +98,7 @@ class StudyUpsert(BaseModel):
     enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
+    maximum_age: Optional[str] = None
     healthy_volunteers: Optional[bool] = None
     eligibility_criteria: Optional[str] = None
     last_update_post_date: date
@@ -231,6 +233,7 @@ class TrialDetail(BaseModel):
     enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
+    maximum_age: Optional[str] = None
     healthy_volunteers: Optional[bool] = None
     eligibility_criteria: Optional[str] = None
     last_update_post_date: Optional[date] = None

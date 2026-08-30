@@ -31,7 +31,7 @@ router = APIRouter(prefix="/studies", tags=["studies"])
 # last_update_post_date alone couldn't previously explain.
 DIFF_FIELDS = [
     "brief_title", "official_title", "overall_status", "study_type", "phase",
-    "enrollment_count", "enrollment_type", "sex", "minimum_age", "healthy_volunteers",
+    "enrollment_count", "enrollment_type", "sex", "minimum_age", "maximum_age", "healthy_volunteers",
     "eligibility_criteria", "last_update_post_date",
     "brief_summary", "lead_sponsor", "start_date", "primary_completion_date",
     "completion_date", "interventions", "primary_outcomes", "locations",
@@ -40,7 +40,7 @@ DIFF_FIELDS = [
 UPSERT_STUDIES = """
     INSERT INTO studies (
         nct_id, brief_title, official_title, overall_status, study_type,
-        phase, enrollment_count, enrollment_type, sex, minimum_age, healthy_volunteers,
+        phase, enrollment_count, enrollment_type, sex, minimum_age, maximum_age, healthy_volunteers,
         eligibility_criteria, last_update_post_date, raw_json,
         brief_summary, lead_sponsor, start_date, primary_completion_date,
         completion_date, interventions, primary_outcomes, locations,
@@ -56,6 +56,7 @@ UPSERT_STUDIES = """
         enrollment_type = EXCLUDED.enrollment_type,
         sex = EXCLUDED.sex,
         minimum_age = EXCLUDED.minimum_age,
+        maximum_age = EXCLUDED.maximum_age,
         healthy_volunteers = EXCLUDED.healthy_volunteers,
         eligibility_criteria = EXCLUDED.eligibility_criteria,
         last_update_post_date = EXCLUDED.last_update_post_date,
@@ -196,7 +197,7 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
         (
             r.nct_id, r.brief_title, r.official_title, r.overall_status,
             r.study_type, r.phase, r.enrollment_count, r.enrollment_type, r.sex,
-            r.minimum_age, r.healthy_volunteers, r.eligibility_criteria,
+            r.minimum_age, r.maximum_age, r.healthy_volunteers, r.eligibility_criteria,
             r.last_update_post_date, psycopg2.extras.Json(r.raw_json),
             r.brief_summary, r.lead_sponsor, r.start_date,
             r.primary_completion_date, r.completion_date,
@@ -208,7 +209,7 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
     ]
 
     with conn.cursor() as cur:
-        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
+        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
         psycopg2.extras.execute_values(cur, UPSERT_STUDIES, study_rows, template=template)
 
         if change_rows:

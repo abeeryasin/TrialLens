@@ -1024,3 +1024,43 @@ finds nothing even when the markup rendered perfectly. Assert on a
 structural property (`style*="line-through"`) or inspect the real DOM
 instead of trusting a hex-string match — this looked like a rendering
 failure for several minutes when nothing was wrong.
+
+## 2026-08-30 — Age shown as a real bracket, not a lower bound
+
+`minimum_age` alone can only ever render "18 Years and older", which is a
+lower bound rather than the trial's actual age eligibility. CT.gov does
+report `maximumAge` — 5,712 of 11,490 stored trials have one — and
+`extract_fields()` was discarding it.
+
+Added `maximum_age` following the same path as `enrollment_type`
+(2026-08-29): schema column, parsed in `ctgov_client.py`, added to
+`DIFF_FIELDS` since a changed age limit is a genuine protocol amendment,
+and backfilled from stored `raw_json` (5,712 rows in ~28s, no CT.gov
+re-fetch). `TEXT`, not numeric: CT.gov reports each bound with its unit
+attached and the unit really does vary ("18 Years", "18 Months"), so
+parsing to a number would mean either losing the unit or inventing a
+conversion.
+
+Understand's "Minimum age" field became "Age", rendering
+`format_age_range()`: "18 Years to 65 Years" with both bounds, "18 Years
+and older" with only a lower one, "Up to 17 Years" with only an upper.
+Roughly half of trials genuinely specify no upper bound — that's a real
+fact about the trial, not missing data, so it reads as "and older" rather
+than an empty value.
+
+Skipped deliberately: CT.gov's `stdAges` (CHILD / ADULT / OLDER_ADULT) is
+available alongside the numeric bounds but is a coarser restatement of the
+same information. Worth revisiting only if age-category filtering is ever
+wanted, where a controlled vocabulary beats free text with mixed units.
+
+Verified the write path on `sandbox` before trusting it, since adding a
+column to the upsert means the INSERT column list, the `ON CONFLICT` set,
+the row tuple, and the `execute_values` template all have to stay aligned —
+a mismatch would surface as silently shifted column values, or as a failure
+on the next unattended cron run. Applied the schema to sandbox, pointed a
+FastAPI instance at it, ran a real `ingest.py` (56 trials matched, 2
+written, no errors), then posted a record with `maximum_age = "65 Years"`
+and confirmed it landed in `maximum_age` while its neighbours (`sex`,
+`healthy_volunteers`) stayed NULL — exactly what a misaligned tuple would
+have corrupted. Sandbox is left contaminated with that test data on
+purpose; it's the disposable branch, recreated from `dev` when needed.

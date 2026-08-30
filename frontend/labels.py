@@ -21,6 +21,7 @@ FIELD_LABELS = {
     "enrollment_type": "Enrollment figure type (target vs. actual)",
     "sex": "Sex",
     "minimum_age": "Minimum age",
+    "maximum_age": "Maximum age",
     "healthy_volunteers": "Healthy volunteers",
     "eligibility_criteria": "Eligibility criteria",
     "last_update_post_date": "ClinicalTrials.gov's own \"last updated\" date",
@@ -121,6 +122,21 @@ def format_detected_at(raw_value):
 # per side, and dumping both to communicate a handful of edited words is
 # what this threshold exists to avoid.
 LONG_TEXT_CHARS = 200
+
+
+def format_age_range(minimum_age, maximum_age):
+    """A trial's real age bracket. CT.gov reports each bound with its unit
+    attached and the unit genuinely varies ("18 Years", "18 Months"), so
+    these are shown as-is rather than parsed into numbers — about half of
+    trials specify no upper bound at all, which is a real fact about the
+    trial, not missing data."""
+    if minimum_age and maximum_age:
+        return f"{minimum_age} to {maximum_age}"
+    if minimum_age:
+        return f"{minimum_age} and older"
+    if maximum_age:
+        return f"Up to {maximum_age}"
+    return "—"
 
 
 def is_long_text(old_value, new_value):

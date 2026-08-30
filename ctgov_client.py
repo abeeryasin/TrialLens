@@ -118,6 +118,11 @@ def extract_fields(study: dict) -> dict:
         "enrollment_type": design.get("enrollmentInfo", {}).get("type"),
         "sex": eligibility.get("sex"),
         "minimum_age": eligibility.get("minimumAge"),
+        # About half of trials specify an upper bound (5,712 of 11,490 as of
+        # 2026-08-30). Stored so the UI can show a real bracket rather than
+        # a lower bound alone, and diffed because a changed age limit is a
+        # genuine protocol amendment.
+        "maximum_age": eligibility.get("maximumAge"),
         "healthy_volunteers": eligibility.get("healthyVolunteers"),
         "eligibility_criteria": eligibility.get("eligibilityCriteria"),
         "last_update_post_date": status.get("lastUpdatePostDateStruct", {}).get("date"),

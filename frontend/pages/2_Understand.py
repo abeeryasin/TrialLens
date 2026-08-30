@@ -19,6 +19,7 @@ from labels import (
     CATEGORY_TRACKING,
     ENROLLMENT_TYPE_CAPTIONS,
     FIELD_LABELS,
+    format_age_range,
     STRUCTURED_FIELDS,
     format_detected_at,
     humanize_value,
@@ -133,7 +134,7 @@ st.caption(
 )
 sex_col, age_col, hv_col = st.columns(3)
 sex_col.write(f"**Sex:** {study['sex'] or '—'}")
-age_col.write(f"**Minimum age:** {study['minimum_age'] or '—'}")
+age_col.write(f"**Age:** {format_age_range(study.get('minimum_age'), study.get('maximum_age'))}")
 hv = study["healthy_volunteers"]
 hv_col.write(f"**Healthy volunteers:** {'—' if hv is None else ('Yes' if hv else 'No')}")
 

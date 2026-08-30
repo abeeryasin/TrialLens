@@ -66,6 +66,12 @@ ALTER TABLE studies ADD COLUMN IF NOT EXISTS locations JSONB;
 -- which, and diffed so a target-becomes-actual switch is itself reportable.
 ALTER TABLE studies ADD COLUMN IF NOT EXISTS enrollment_type TEXT;
 
+-- Upper age bound (2026-08-30). minimum_age alone can only ever show "18
+-- Years and older", which is a lower bound, not the trial's actual age
+-- bracket. TEXT, not a number: CT.gov reports these with their unit
+-- attached and the unit genuinely varies ("18 Years", "18 Months").
+ALTER TABLE studies ADD COLUMN IF NOT EXISTS maximum_age TEXT;
+
 -- One-off fix: the three date columns above were first applied as DATE
 -- (2026-08-29) before the month-only-precision check above was run — no
 -- rows had been written to them yet, so no data-loss risk. Uses DROP+ADD
