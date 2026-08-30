@@ -52,4 +52,16 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 ## Current Status
 
-Schema + ingestion, the FastAPI-only-door layer, scheduler/cron automation (Monitor), Discover live-fallback (`GET /discover`), the Streamlit frontend (Discover + Understand), and the Monitor page (`GET /changes` + aggregate recent-changes feed) are built, tested, and live. **Next: step 7, AI ranking/evidence layer.** Full status, decisions, and time estimates: `docs/roadmap.md`, `docs/decisions.md` (both kept current every step).
+Steps 1-6 are built, tested, and live: schema + ingestion, the
+FastAPI-only-door layer, scheduler/cron automation (a real 6-hour cron
+running on GitHub Actions), Discover live-fallback (`GET /discover`), and
+the Streamlit frontend — Discover, Understand, and the Monitor feed
+(`GET /changes`). Explore and Investigate aren't built yet. **Next: step
+7, AI ranking/evidence layer** — the first LLM in the system; build the
+evaluation harness alongside it, not after (§7).
+
+Two standing gotchas worth knowing before touching data: the Neon branch
+named `dev` is the real live database (`production` is an empty leftover;
+use `sandbox` to rehearse destructive changes), and a `JOIN` against
+`study_conditions` needs `DISTINCT` before its output feeds a write. Full
+status and dated reasoning: `docs/roadmap.md`, `docs/decisions.md`.

@@ -17,19 +17,33 @@ time a step starts or finishes.**
 | 1 | Schema + Ingestion | **Done** (2026-08-26/27) | — |
 | 2 | FastAPI layer (only door to the DB, read-only enforcement) | **Done** (2026-08-27) | — |
 | 3 | Scheduler/cron automation (turn `ingest.py` into the real Monitor job; cheap-filter/expensive-diff change detection) | **Done** (2026-08-28) — pushed to GitHub, real 6-hour cron live, first run verified end-to-end on GitHub's infrastructure (11,466 studies checked, 91 needed a full refetch, 102 real changes detected, 33 flagged out of scope, none deleted) | 5-7 |
-| 4 | Discover live-fallback (ad-hoc live query for an untracked topic) | **Done** (2026-08-28) — `GET /discover`, verified with a real tracked hit, a real "incidentally already stored" hit, and a real live CT.gov fallback. **Known gap, deferred (see `docs/decisions.md`, 2026-08-28): an untracked condition that incidentally has a few local rows (comorbid tags on tracked trials) is reported as if it were the complete picture — real fix decided (merge local+live, dedupe, per-result source tag) but not built; revisit at step 5 or before step 6 trusts these results** | 3-4 |
+| 4 | Discover live-fallback (ad-hoc live query for an untracked topic) | **Done** (2026-08-28) — `GET /discover`, verified with a real tracked hit, a real "incidentally already stored" hit, and a real live CT.gov fallback. The under-reporting gap found the same day (an untracked condition with a few incidental local rows being reported as the complete picture) was **fixed 2026-08-29**, not left deferred: merged local+live with per-result source tags | 3-4 |
 | 5 | Frontend (Streamlit) — Discover/Understand surface, reads through FastAPI | **Done** (2026-08-29) — Discover (search, per-result tracked/live tagging, click-through) and Understand (full detail, eligibility as explicit source text, change history) both real, reading through `api_client.py` only. Also fixed the step-4 `/discover` gap along the way rather than deferring it further (see `docs/decisions.md`, 2026-08-29) | 8-10 |
-| 6 | Monitor page — aggregate recent-changes feed across all tracked trials, not just per-trial inside Understand (decided 2026-08-29: kept separate from the notifications/digest-email idea in step 12, not a replacement for it) | **Done** (2026-08-29) — `GET /changes` (own top-level router, real JOIN against `studies`, `idx_study_changes_detected_at` added), `frontend/pages/3_Monitor.py`, Home wired to it. Verified against real data (142 real change rows) and in a real headless browser, including the full click-through to Understand | 3-4 |
+| 6 | Monitor page — aggregate recent-changes feed across all tracked trials, not just per-trial inside Understand (decided 2026-08-29: kept separate from the notifications/digest-email idea in step 12, not a replacement for it) | **Done** (2026-08-29/30) — `GET /changes` (own top-level router, real JOIN against `studies`, `idx_study_changes_detected_at`), `frontend/pages/3_Monitor.py`, Home wired to it. Extended 2026-08-30 after real use: 25-per-page paging, five filters (condition / change type / field / detected-within / trial-freshness), inline structured diffs, and honest rendering of stored values (see step 6b) | 3-4 |
+| 6b | Data-honesty follow-ups surfaced by actually using Monitor (2026-08-30) | **Done** — real `reconcile_scope` bug fixed (missing `DISTINCT` duplicated a change row per matching condition tag; one trial with 19 "breast cancer" AJCC stage tags logged 19 copies), 22 duplicate rows + 3 rows of leftover 2026-08-28 test data removed; `enrollment_type` (ACTUAL vs ESTIMATED) stored/diffed/displayed after finding 6,577 of 11,482 records report a target, not a headcount; deterministic drop reasons (`api/tracking.py`) that say "we can't tell" rather than guess; trial-content vs tracking change categories; readable booleans/timestamps | — |
 | 7 | AI ranking/evidence layer ("potential fit" screening, visible evidence + uncertainty, eval harness built alongside) | Not started | 10-14 |
 | 8 | Knowledge graph (relationships between trials/sponsors/interventions, multi-hop queries) — Explore | Not started | 10-14 |
 | 9 | Multi-agent synthesis (agent specialization/handoff, review queue w/ confidence scoring) — Investigate | Not started | 8-10 |
-| 10 | Real deployment (Railway/Vercel, production env vars, staging-vs-production split) | Not started | 4-6 |
+| 10 | Real deployment (Railway/Vercel, production env vars, staging-vs-production split) | Not started. **Note before starting:** the Neon branch names don't mean what they say — the planned `dev`→`production` cutover never happened, so `dev` is the real live database (~226MB, what the cron and frontend actually use), `production` is an empty 32MB leftover, and `sandbox` (added 2026-08-30) is the disposable copy for testing destructive changes. Decide the real naming/cutover here rather than assuming. See `docs/decisions.md`, 2026-08-29 | 4-6 |
 | 11 | Autonomous-ops hardening (guardrails, safety monitoring, escalation protocol, observability) | Not started | 4-6 |
 | 12 | Notifications (Resend daily digest, tied to Monitor) | Not started | 2-3 |
 
 **Total estimate: ~64-83 active hours** (midpoint ~73.5), plus the
 unavoidable ~2-week review-queue running time noted above.
 
-Steps 2-4 are the near-term candidates already scoped in detail in
-`docs/decisions.md`. Everything from step 5 onward depends on those
-existing first.
+**Where things stand (2026-08-30):** steps 1-6 are done and running for
+real — the 6-hour GitHub Actions cron has been firing reliably on its own
+(three clean runs on 2026-08-30 alone), and three of the five capabilities
+(Discover, Understand, Monitor) work end to end against real
+ClinicalTrials.gov data. Explore and Investigate aren't built yet, and
+Home says so rather than implying otherwise.
+**Next: step 7, the AI ranking/evidence layer** — the first step where an
+LLM enters the system at all, and where the evaluation harness gets built
+alongside the feature rather than bolted on afterward (CLAUDE.md §7).
+
+One pattern worth carrying into step 7, learned repeatedly across steps
+4-6: the gaps that mattered most were found by *using* the thing, not by
+reading the code — the `/discover` under-reporting gap, the duplicate
+change rows, the leftover test data, and the enrollment ambiguity were all
+surfaced that way. Budget real time for using the ranking layer against
+real trials before trusting it.
