@@ -11,7 +11,15 @@ import time
 import requests
 
 CT_API_URL = "https://clinicaltrials.gov/api/v2/studies"
+
+# The real ingestion scope, in one place. These live here rather than in
+# scripts/ingest.py because they're no longer only the fetcher's business:
+# explaining *why* a trial is no longer tracked (api/tracking.py) has to
+# reason against the exact same rules the fetcher applied, and two copies
+# would let the explanation quietly start lying if either changed.
 ACTIVE_STATUSES = "RECRUITING,NOT_YET_RECRUITING,ACTIVE_NOT_RECRUITING,ENROLLING_BY_INVITATION"
+CLOSED_STATUSES = "COMPLETED,TERMINATED,SUSPENDED,WITHDRAWN"
+RECENCY_DAYS = 730  # ~24 months; closed trials are only tracked this far back
 
 
 def request_with_retry(method, url, **kwargs):
@@ -103,6 +111,11 @@ def extract_fields(study: dict) -> dict:
         "study_type": design.get("studyType"),
         "phase": ",".join(phases) if phases else None,
         "enrollment_count": design.get("enrollmentInfo", {}).get("count"),
+        # ACTUAL (people who really enrolled) vs ESTIMATED (the sponsor's
+        # target). The bare count is genuinely ambiguous without it — most
+        # records are ESTIMATED — and dropping it would be exactly the kind
+        # of discarded uncertainty CLAUDE.md sec. 3 forbids.
+        "enrollment_type": design.get("enrollmentInfo", {}).get("type"),
         "sex": eligibility.get("sex"),
         "minimum_age": eligibility.get("minimumAge"),
         "healthy_volunteers": eligibility.get("healthyVolunteers"),

@@ -4,11 +4,10 @@ unreachable, matching how every other page here only surfaces problems,
 not confirmations that things are fine.
 
 Five real capabilities (CLAUDE.md sec. 1): Discover, Understand, Monitor,
-Explore, Investigate. Only Discover/Understand have their own pages so
-far; Monitor is real and running but surfaces inside Understand rather
-than as its own page; Explore/Investigate aren't built yet. The grid
-below says exactly which is which — never implies a capability is live
-when it isn't.
+Explore, Investigate. Discover/Understand/Monitor all have their own
+pages now; Explore/Investigate aren't built yet. The grid below says
+exactly which is which — never implies a capability is live when it
+isn't.
 """
 import streamlit as st
 
@@ -64,9 +63,9 @@ capabilities = [
     {
         "icon": "🛰️",
         "name": "Monitor",
-        "desc": "Runs on its own every 6 hours, checking every tracked trial for real changes.",
-        "page": None,
-        "status": "background",
+        "desc": "Runs on its own every 6 hours, checking every tracked trial for real changes — see what's changed across everything, in one feed.",
+        "page": "pages/3_Monitor.py",
+        "status": "live",
     },
     {
         "icon": "🕸️",

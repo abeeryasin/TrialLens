@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from api.database import get_db, get_readonly_db
+from api.tracking import field_category
 from api.schemas import (
     BatchUpsertResult,
     KnownDatesRequest,
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/studies", tags=["studies"])
 # last_update_post_date alone couldn't previously explain.
 DIFF_FIELDS = [
     "brief_title", "official_title", "overall_status", "study_type", "phase",
-    "enrollment_count", "sex", "minimum_age", "healthy_volunteers",
+    "enrollment_count", "enrollment_type", "sex", "minimum_age", "healthy_volunteers",
     "eligibility_criteria", "last_update_post_date",
     "brief_summary", "lead_sponsor", "start_date", "primary_completion_date",
     "completion_date", "interventions", "primary_outcomes", "locations",
@@ -39,7 +40,7 @@ DIFF_FIELDS = [
 UPSERT_STUDIES = """
     INSERT INTO studies (
         nct_id, brief_title, official_title, overall_status, study_type,
-        phase, enrollment_count, sex, minimum_age, healthy_volunteers,
+        phase, enrollment_count, enrollment_type, sex, minimum_age, healthy_volunteers,
         eligibility_criteria, last_update_post_date, raw_json,
         brief_summary, lead_sponsor, start_date, primary_completion_date,
         completion_date, interventions, primary_outcomes, locations,
@@ -52,6 +53,7 @@ UPSERT_STUDIES = """
         study_type = EXCLUDED.study_type,
         phase = EXCLUDED.phase,
         enrollment_count = EXCLUDED.enrollment_count,
+        enrollment_type = EXCLUDED.enrollment_type,
         sex = EXCLUDED.sex,
         minimum_age = EXCLUDED.minimum_age,
         healthy_volunteers = EXCLUDED.healthy_volunteers,
@@ -193,7 +195,7 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
     study_rows = [
         (
             r.nct_id, r.brief_title, r.official_title, r.overall_status,
-            r.study_type, r.phase, r.enrollment_count, r.sex,
+            r.study_type, r.phase, r.enrollment_count, r.enrollment_type, r.sex,
             r.minimum_age, r.healthy_volunteers, r.eligibility_criteria,
             r.last_update_post_date, psycopg2.extras.Json(r.raw_json),
             r.brief_summary, r.lead_sponsor, r.start_date,
@@ -206,7 +208,7 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
     ]
 
     with conn.cursor() as cur:
-        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
+        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
         psycopg2.extras.execute_values(cur, UPSERT_STUDIES, study_rows, template=template)
 
         if change_rows:
@@ -246,7 +248,10 @@ def get_study_changes(nct_id: str, conn=Depends(get_readonly_db)):
         )
         changes = cur.fetchall()
 
-    return StudyChangeList(nct_id=nct_id, changes=[StudyChange(**c) for c in changes])
+    return StudyChangeList(
+        nct_id=nct_id,
+        changes=[StudyChange(**c, category=field_category(c["field_name"])) for c in changes],
+    )
 
 
 @router.post("/known-dates", response_model=KnownDatesResponse)
@@ -306,7 +311,7 @@ def reconcile_scope(body: ReconcileScopeRequest, conn=Depends(get_db)):
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT s.nct_id FROM studies s
+            SELECT DISTINCT s.nct_id FROM studies s
             JOIN study_conditions sc ON sc.nct_id = s.nct_id
             WHERE sc.condition ILIKE %s AND s.active_in_scope = true
               AND NOT (s.nct_id = ANY(%s))

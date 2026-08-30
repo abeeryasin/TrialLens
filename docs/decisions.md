@@ -637,3 +637,326 @@ renumbered by one (now 7-12), `CLAUDE.md`'s "Next" line and the
 review-queue step reference in `docs/roadmap.md`'s own intro updated to
 match.
 
+## 2026-08-29 — Monitor page built: `GET /changes` + `frontend/pages/3_Monitor.py`
+
+Built the aggregate feed decided above. `study_changes` only has
+`nct_id`/`field_name`/`old_value`/`new_value`/`detected_at` — no trial
+title of its own — so the new route joins it against `studies` for
+`brief_title` on every row. New route lives at `/changes`, its own
+top-level router (`api/changes.py`), not nested under `/studies`:
+`/studies/changes` would collide with the existing `/studies/{nct_id}`
+path (FastAPI would need it registered first, in that exact order,
+forever, to avoid `{nct_id}` swallowing "changes" — too fragile to rely
+on). Same `{total, limit, offset, results}` shape `GET /studies` already
+uses; default `limit` 50, capped at 200 (higher than Discover's 100 cap
+on purpose — a chronological activity feed is a different read pattern
+than a search-result list). Added `idx_study_changes_detected_at`
+(`detected_at DESC`) since the existing `idx_study_changes_nct_id` index
+doesn't help a query that scans across every trial; added now rather
+than waiting for the table to grow past its current 142 rows.
+
+Frontend: `frontend/pages/3_Monitor.py`, same `st.dataframe` +
+`on_select="rerun"` + session-state click-through-to-Understand pattern
+Discover already uses, reused rather than reinvented. Pulled
+`FIELD_LABELS`/`STRUCTURED_FIELDS` out of `pages/2_Understand.py` into a
+new shared `frontend/labels.py` both pages import — the same
+duplication-risk reasoning that `ctgov_client.py` was extracted for. A
+structured-field change (interventions/outcomes/locations, stored as
+JSON) shows as `"(changed — see Understand for detail)"` in the compact
+table rather than a truncated JSON fragment, since a table row has no
+room for a real two-column diff the way Understand's per-trial view
+does. Home's capability grid now gives Monitor a real "Open" button
+instead of the placeholder text pointing at Understand.
+
+Verified for real: `GET /changes` against the live API returns real
+rows with real trial titles (not just NCT IDs) and a real total (142,
+matching the known `study_changes` row count); offset pagination
+confirmed to return distinct rows. Real headless-browser pass
+(Playwright): the Monitor page loads with real data, a real
+`PointerEvent`-based row selection on the `glide-data-grid` canvas works
+(same technique Discover's own verification established), and the full
+click-through — select a row, click "View →", land on Understand
+showing the right trial — works end to end, as does Home's new "Open
+Monitor" button. One real timing gotcha hit and fixed during
+verification, not a product bug: Streamlit's `on_select="rerun"`
+round-trip and a subsequent `switch_page` both take several real seconds
+under Playwright — an initial 1.5-2.5s wait made the click-through look
+broken when it wasn't; polling up to ~6s after each interaction was
+what actually confirmed it worked.
+
+## 2026-08-29 — Monitor page: real pagination, filters, inline detail, a real dedup fix, and honest formatting
+
+Six follow-up improvements to the Monitor page built in one interactive
+pass, each verified for real before moving to the next:
+
+**Real pagination.** The "rows to show" slider is gone; `frontend/pages/3_Monitor.py`
+now shows a fixed 25 rows per page with Previous/Next, tracking the
+current page in `st.session_state` the same way `selected_nct_id`
+already is. `GET /changes` already supported `limit`/`offset` from the
+original build, so this was a frontend-only change. The dataframe's
+widget `key` is now suffixed with the current page number
+(`monitor_changes_table_{page}`) — without that, a stale row selection
+from the previous page's data could otherwise carry over into the new
+page's differently-ordered rows.
+
+**Real filters.** `GET /changes` gained two optional query params:
+`condition` (same `study_conditions` ILIKE-join pattern `GET /studies`
+already uses) and `field_name` (a plain equality match). A new
+`GET /changes/fields` returns only the field names that actually have a
+change on record right now (`SELECT DISTINCT field_name`), so the
+frontend's filter dropdown can never offer an option that filters to an
+empty result. The condition filter is a dropdown sourced from the real
+`GET /tracked-conditions` list, not free text — this feed only ever
+contains tracked trials, so a typo'd search box would just risk a
+confusing empty result for no benefit.
+
+**Real inline detail.** A structured-field change (interventions/
+outcomes/locations) now shows an `st.expander` with the real before/after
+JSON diff when its row is selected, instead of just a placeholder
+string. The diff-rendering code itself was pulled out of
+`pages/2_Understand.py` into a shared `render_structured_diff()` in
+`frontend/labels.py` — both pages render the exact same
+`study_changes` rows, so duplicating that rendering logic would let them
+drift the same way `ctgov_client.py` was extracted to prevent for the
+CT.gov parsing logic.
+
+**A real duplicate-row bug found and fixed.** The Monitor feed surfaced
+something that had been sitting in the data since the very first
+scheduler run (2026-08-28): `NCT06074926` had the identical
+`active_in_scope: true→false` change logged twice, same microsecond
+timestamp. Root cause: `POST /studies/reconcile-scope`'s "what dropped
+out of scope" query joins `studies` to `study_conditions` and matches
+`condition ILIKE '%obesity%'` — this trial carries two condition tags
+that both contain "obesity" (`Obesity, Childhood` and `Pediatric
+Obesity`), so the join produced two rows for one trial, and the
+following `SELECT` (no `DISTINCT`) carried that duplicate straight into
+the list `study_changes` gets built from. Any trial with two or more
+condition tags matching the same ILIKE pattern would hit this, not just
+this one case. Verified read-only before touching anything: the old
+query returned 8 rows for 7 unique trials on real data; adding
+`DISTINCT s.nct_id` returned exactly 7. Fixed in `api/studies.py`, then
+cleaned up the one real duplicate row already sitting in `study_changes`
+(142 → 141 total rows) — the underlying `active_in_scope = false` state
+itself was correct and left alone; only the doubled log entry was wrong.
+
+**Correction, same day — the above cleanup was incomplete, and the
+verification behind it was wrong.** The check that produced "the one real
+duplicate row" only queried the `obesity` condition, then reported the
+data as clean. `breast cancer` was never checked, and that's where the
+real damage was: the user spotted `NCT04835597` repeated 19 times in the
+Monitor feed. Root cause identical (the missing `DISTINCT`), but the
+blast radius scales with how many condition tags a trial carries that
+match the same `ILIKE` pattern — and that trial has **19** tags all
+containing "breast cancer" (every AJCC anatomic/prognostic stage
+variant: "Anatomic Stage IA Breast Cancer AJCC v8", "Prognostic Stage
+IIIC Breast Cancer AJCC v8", and so on). `NCT04276272` and `NCT04123704`
+had 3 tags each → 3 rows each. Duplicate count matched tag count exactly
+in all three cases, confirming the mechanism.
+
+Full cleanup then run properly: 22 excess rows removed (141 → 119),
+keeping the earliest row per real event. Tested on the new `sandbox`
+branch first (see the entry below) before touching live data — the
+sandbox run reproduced the exact numbers, and the guard that actually
+matters was checked on both: `COUNT(DISTINCT (nct_id, field_name,
+detected_at))` stayed at 119 before and after, proving no real change
+event was lost, only redundant copies. Verified through the live API
+afterward too: `/changes` returns 119, zero duplicate rows in the feed,
+`NCT04835597` appearing exactly once.
+
+Real lesson, worth more than the bug: **verifying a fix against one
+sample of a filtered dataset is not verifying the fix.** The first check
+looked rigorous (read-only, compared row counts, real data) but sampled
+only one of two tracked conditions, and the conclusion "the data is now
+clean" was drawn far wider than the evidence supported. A dedup check
+belongs against the whole table (`GROUP BY ... HAVING count(*) > 1`),
+not one filter's slice of it.
+
+**A distinct-trial count.** `GET /changes` (and `/changes/fields`'s
+sibling total) now also returns `distinct_trials`
+(`COUNT(DISTINCT nct_id)` under the same filters), so Monitor's caption
+reads "141 change(s) detected across 94 distinct trial(s)" instead of
+just a raw change count that conflates "many small changes to one trial"
+with "many trials each changing once."
+
+**Honest formatting instead of raw values.** `study_changes` stores
+everything as `TEXT`, so a boolean field's transition showed up as the
+literal strings `"true"`/`"false"`, and every timestamp rendered as a
+raw ISO string (`2026-08-29T00:02:06.604034Z`). Checked real UX guidance
+before picking a fix rather than guessing (Cloudscape's and UX
+Movement's timestamp-display patterns, plus general audit-log
+readability practice) — short version: show a real date/time a person
+would say, and translate a status flag into what actually happened, not
+its raw stored value. Added `humanize_value()` and `format_detected_at()`
+to `frontend/labels.py`, used by both Monitor's table and Understand's
+change history (the same rows, the same raw-value problem, in two
+places). `active_in_scope` specifically renders as "Tracked" /
+"Dropped from tracking" rather than a generic Yes/No, since that's what
+the transition actually means; any other boolean field falls back to
+Yes/No. Timestamps render as `"Aug 29, 2026, 12:02 AM UTC (15h ago)"` —
+absolute and relative together, since Streamlit's table can't easily
+attach a hover tooltip per cell the way a real UI framework could.
+
+Two real gotchas hit during verification, neither a product bug:
+(1) Streamlit reloads the *page* script fresh on every rerun, but a
+plain `import`ed module like `labels.py` gets cached in the process's
+`sys.modules` for its whole lifetime — editing `labels.py` alone doesn't
+take effect until the server process restarts, unlike editing
+`pages/3_Monitor.py` itself, which hot-reloads immediately. This produced
+a real `ImportError` mid-verification before the restart. (2) `st.selectbox`'s
+round-trip (close dropdown → widget value change → script rerun) took
+longer under Playwright than a button click's — an 8-9s wait was needed
+to see the correct post-filter result, versus ~6s for a button-triggered
+rerun.
+
+Verified for real throughout: real pagination confirmed via server-side
+session-state logging (page genuinely advances 0→1→2, distinct rows per
+page) and a real browser render; both filters confirmed against the live
+API (`condition=obesity` → 47/36, `field_name=overall_status` → 7) and in
+a real browser; the structured-field dropdown verified with a real
+controlled test row (inserted, confirmed the two-column diff rendered,
+then deleted, matching the same controlled-test pattern used for the
+narrative-fields diff work); the dedup fix verified read-only against
+real data before any write, then confirmed live (`total` 142 → 141); the
+distinct-trial count and the humanized formatting both confirmed via
+live API responses and real-browser screenshots on both Monitor and
+Understand.
+
+## 2026-08-29 — Found: the `dev`→`production` cutover never happened; added a real `sandbox` branch
+
+Caught while answering a direct question about whether the day's database
+writes were hitting a disposable copy or real data. They were hitting real
+data — and checking the actual Neon branches explained why.
+
+The 2026-08-26 decision ("Database: Neon Postgres, chosen and verified")
+described a two-phase plan: schema work happens on a `dev` branch,
+`production` stays untouched until the schema is trusted. Phase 1 happened
+exactly as written. **Phase 2 — actually cutting over to `production` —
+never happened, and was never tracked anywhere as a remaining step.** So
+across ingestion, the FastAPI layer, the live 6-hour cron, the frontend,
+and everything since, `.env.local` kept pointing at `dev`, and `dev`
+quietly became the permanent real database by inertia rather than by
+decision. Confirmed from Neon's own branch metadata, not assumed: `dev` is
+226MB with 4,815 CPU-seconds and 736MB of data transfer; `production` is
+32MB with 81 CPU-seconds and zero data transfer — schema applied once on
+2026-08-26 and never touched again.
+
+Decided: **don't** migrate data into `production` just to make the names
+match their original intent. Everything working today (local `.env.local`,
+the live GitHub Actions cron secret) points at `dev`; re-pointing all of it
+carries real risk of breaking a working, unattended scheduled job purely to
+fix a label. Instead, added a third branch, `sandbox`, created from `dev` —
+that's now the real disposable copy to point at before running anything
+destructive against real data. `dev` remains the live database, name
+notwithstanding, and this entry is the record of why the names no longer
+mean what they did on 2026-08-26.
+
+Verified for real, not assumed: `sandbox` came up as a 226MB copy carrying
+the true row counts (11,490 studies, 141 `study_changes`, matching `dev`
+including the same day's dedup fix) and inherited both real roles
+(`neondb_owner` and the SELECT-only `trial_lens_reader`). Isolation proved
+directly rather than trusted: inserted one test row into `sandbox` only,
+confirmed `sandbox` went to 142 while `dev` stayed at 141, then deleted it
+and confirmed `sandbox` back to 141. Not one of Neon's stated guarantees
+taken on faith — the actual behavior this project depends on, tested.
+
+Still unverified, flagged rather than guessed: whether the GitHub Actions
+cron's `DATABASE_URL` secret also points at `dev`. It's an encrypted
+secret, unreadable from here. `production`'s near-zero activity strongly
+implies it does, but that's inference, not evidence — worth confirming
+directly in the repo's secret settings.
+
+
+## 2026-08-30 — Monitor honesty pass: labels, drop reasons, change categories, enrollment type
+
+A round of changes driven entirely by real questions asked while using the
+Monitor page — each one a case where the UI was technically accurate but
+practically misleading.
+
+**"Active in tracking scope" was self-contradictory.** The row read
+"Active in tracking scope: Tracked → Dropped from tracking" — a field name
+that *asserts* the trial is active, sitting next to a value saying the
+opposite. Unlike "Status", which is a neutral noun, this label made a
+claim of its own. Renamed the label to "Tracking status" (neutral,
+parallel to "Status") and the value to "No longer tracked". The Monitor
+table's column header also went from "Field" to "Field changed", matching
+the filter above it.
+
+**A dropped trial now says *why*, deterministically.** "No longer tracked"
+raised the obvious question and the answer turned out to be fully
+derivable from stored data — no AI, no guessing. `api/tracking.py`'s
+`drop_reason()` reads the trial's own status and last-update date against
+the exact scope rules `scripts/ingest.py` applies, producing e.g. "This
+trial is completed and ClinicalTrials.gov hasn't updated it since Aug 2024
+— closed trials are only tracked for about 24 months after their last
+update." Tested against all 14 real dropped trials: every one explained,
+zero unexplained. Crucially it returns None rather than a guess when the
+stored facts don't explain the drop, and the UI shows that honestly
+("we can't tell from the data we've stored") — CLAUDE.md sec. 2 forbids
+presenting an inference as a source fact, and this is exactly where that
+temptation lives.
+
+To make that safe, `CLOSED_STATUSES` and `RECENCY_DAYS` moved from
+`scripts/ingest.py` into `ctgov_client.py` (already shared by both api/
+and scripts/). The explanation now imports the same constants the fetcher
+uses rather than restating them — a second copy would let the explanation
+quietly start lying if either changed.
+
+**Trial content vs. tracking, split properly.** `study_changes` mixes two
+genuinely different kinds of event: real facts CT.gov reports about a
+trial (status, eligibility, outcomes) and TrialLens's own bookkeeping
+(are we still watching this?). Listing them undifferentiated implied a
+scope flip is the same class of event as a status change. Monitor gained
+a "Change type" filter (All / Trial content / Tracking) that also narrows
+the field dropdown, so the two filters can't combine into a guaranteed-
+empty result; Understand's history split into "What ClinicalTrials.gov
+changed" and "Our tracking of this trial". The categorization lives only
+in `api/tracking.py` and rides along on each row (`ChangeFeedEntry.category`,
+`StudyChange.category`, and `GET /changes/fields` now returning
+name+category) — deliberately not duplicated in the frontend. Verified the
+split partitions the feed exactly: 104 trial-content + 15 tracking = 119.
+
+**Enrollment was ambiguous and is now explicit.** "Enrollment: 34" gave no
+indication whether 34 people actually enrolled or 34 is the sponsor's
+recruitment target — and CT.gov reports exactly that distinction in
+`enrollmentInfo.type`, which extract_fields() was silently discarding.
+Across the real dataset it matters: 6,577 ESTIMATED vs 4,905 ACTUAL, so
+the majority of bare counts were targets being read as headcounts.
+Discarding it was precisely the dropped uncertainty CLAUDE.md sec. 3
+forbids. Added `enrollment_type` (schema, extract_fields, DIFF_FIELDS so a
+target→actual switch is itself reportable), backfilled all 11,482
+applicable rows from stored raw_json in ~60s using the same bulk
+`UPDATE ... FROM (VALUES ...)` pattern the narrative backfill established,
+and Understand now shows "3,294 participants / Actual number enrolled" vs
+"600 participants / The sponsor's target — not a count of people actually
+enrolled", with an honest fallback for the 8 records CT.gov gives no type
+for. Verified through both the tracked and live paths.
+
+**Two real data problems found while verifying, both cleaned up.**
+
+1. *The earlier dedup fix was verified wrong.* The 2026-08-29 entry above
+   claimed the duplicate rows were cleaned up; that check only queried the
+   `obesity` condition. The user spotted `NCT04835597` repeated 19 times in
+   the feed — it carries 19 condition tags all containing "breast cancer"
+   (every AJCC anatomic/prognostic stage variant), and the missing
+   `DISTINCT` produced one row per matching tag. 22 excess rows removed
+   (141 → 119). Full detail and the lesson are recorded as a correction on
+   that entry.
+
+2. *Test residue was sitting in the real change log.* `NCT00260585` carried
+   three change rows with ids 1, 2, 3 — the first rows ever written to
+   `study_changes` — all artifacts of the 2026-08-28 drift/drop testing
+   (an injected `enrollment_count` of 999999, a corrupted date, and an
+   artificially triggered scope drop). The tests were documented; the rows
+   they created were never cleaned up, and they had been rendering as
+   genuine CT.gov changes ever since. A feed row claiming enrollment
+   changed from 999,999 is a fact CT.gov never reported. Deleted all three
+   (119 → 116); the trial's own record was untouched and had already
+   self-corrected on a later real run. This also explains a 15-vs-14
+   discrepancy between tracking changes and currently-dropped trials.
+
+Both cleanups were run against the new `sandbox` branch first and only
+applied to live data after the sandbox run reproduced the exact expected
+numbers — the branch created earlier the same day, earning its keep
+immediately. The dedup deletion additionally asserted
+`COUNT(DISTINCT (nct_id, field_name, detected_at))` was unchanged before
+and after, proving only redundant copies were removed, not real history.

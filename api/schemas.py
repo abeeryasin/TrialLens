@@ -59,6 +59,7 @@ class StudyDetail(StudySummary):
     official_title: Optional[str] = None
     study_type: Optional[str] = None
     enrollment_count: Optional[int] = None
+    enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
     healthy_volunteers: Optional[bool] = None
@@ -93,6 +94,7 @@ class StudyUpsert(BaseModel):
     study_type: Optional[str] = None
     phase: Optional[str] = None
     enrollment_count: Optional[int] = None
+    enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
     healthy_volunteers: Optional[bool] = None
@@ -123,11 +125,43 @@ class StudyChange(BaseModel):
     old_value: Optional[str] = None
     new_value: Optional[str] = None
     detected_at: datetime
+    # "Trial content" or "Tracking" — see api/tracking.py. Set by the route,
+    # not stored; it's a property of the field, not of the row.
+    category: Optional[str] = None
 
 
 class StudyChangeList(BaseModel):
     nct_id: str
     changes: List[StudyChange]
+
+
+class ChangeFeedEntry(StudyChange):
+    """One row in the aggregate Monitor feed (GET /changes) — same shape as
+    StudyChange plus which trial it belongs to, since the feed spans every
+    tracked trial, not one nct_id."""
+
+    nct_id: str
+    brief_title: str
+    # Only set on a "no longer tracked" change, and only when the stored
+    # data actually explains it — None means "we can't tell", which the UI
+    # shows honestly rather than filling in (see api/tracking.py).
+    tracking_note: Optional[str] = None
+
+
+class ChangedField(BaseModel):
+    """One filterable field on the Monitor feed, with which kind of change
+    it represents (see api/tracking.py)."""
+
+    name: str
+    category: str
+
+
+class ChangeFeedResponse(BaseModel):
+    total: int
+    distinct_trials: int
+    limit: int
+    offset: int
+    results: List[ChangeFeedEntry]
 
 
 class ReconcileScopeRequest(BaseModel):
@@ -194,6 +228,7 @@ class TrialDetail(BaseModel):
     study_type: Optional[str] = None
     phase: Optional[str] = None
     enrollment_count: Optional[int] = None
+    enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
     healthy_volunteers: Optional[bool] = None
@@ -204,6 +239,9 @@ class TrialDetail(BaseModel):
     fetched_at: Optional[datetime] = None
     last_matched_at: Optional[datetime] = None
     active_in_scope: Optional[bool] = None
+    # Why this trial is no longer tracked, when the stored data explains it
+    # — None (shown honestly as "we can't tell") otherwise. See api/tracking.py.
+    tracking_note: Optional[str] = None
     brief_summary: Optional[str] = None
     lead_sponsor: Optional[str] = None
     start_date: Optional[str] = None

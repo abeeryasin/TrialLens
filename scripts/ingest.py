@@ -39,11 +39,16 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
-from ctgov_client import ACTIVE_STATUSES, extract_fields, fetch_pages, request_with_retry  # noqa: E402
+from ctgov_client import (  # noqa: E402
+    ACTIVE_STATUSES,
+    CLOSED_STATUSES,
+    RECENCY_DAYS,
+    extract_fields,
+    fetch_pages,
+    request_with_retry,
+)
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
-CLOSED_STATUSES = "COMPLETED,TERMINATED,SUSPENDED,WITHDRAWN"
-RECENCY_DAYS = 730  # ~24 months
 REFETCH_CHUNK_SIZE = 100  # NCT IDs per filter.ids= request, keeps the URL a sane length
 
 

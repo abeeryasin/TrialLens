@@ -9,4 +9,5 @@ course-alignment.md
 .env.local
 .agents/
 .claude/skills/
+.claude/hooks/
 skills-lock.json

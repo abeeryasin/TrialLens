@@ -60,6 +60,12 @@ ALTER TABLE studies ADD COLUMN IF NOT EXISTS interventions JSONB;
 ALTER TABLE studies ADD COLUMN IF NOT EXISTS primary_outcomes JSONB;
 ALTER TABLE studies ADD COLUMN IF NOT EXISTS locations JSONB;
 
+-- ACTUAL vs ESTIMATED (2026-08-29): enrollment_count alone can't be read
+-- honestly — "34" is either 34 people actually enrolled or a recruitment
+-- target, and most CT.gov records are the latter. Stored so the UI can say
+-- which, and diffed so a target-becomes-actual switch is itself reportable.
+ALTER TABLE studies ADD COLUMN IF NOT EXISTS enrollment_type TEXT;
+
 -- One-off fix: the three date columns above were first applied as DATE
 -- (2026-08-29) before the month-only-precision check above was run — no
 -- rows had been written to them yet, so no data-loss risk. Uses DROP+ADD
@@ -104,3 +110,10 @@ CREATE TABLE IF NOT EXISTS study_changes (
     detected_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_study_changes_nct_id ON study_changes(nct_id);
+
+-- Supports the Monitor page's aggregate feed (GET /changes, step 6,
+-- 2026-08-29): that query orders by detected_at DESC across ALL trials,
+-- not filtered to one nct_id, so idx_study_changes_nct_id alone doesn't
+-- help it. Added now rather than waiting for the table to grow, per
+-- explicit decision the same day.
+CREATE INDEX IF NOT EXISTS idx_study_changes_detected_at ON study_changes(detected_at DESC);

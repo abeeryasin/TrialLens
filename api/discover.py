@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.database import get_readonly_db
 from api.schemas import DiscoverResponse, DiscoverResult, TrialDetail
+from api.tracking import drop_reason
 from ctgov_client import ACTIVE_STATUSES, extract_fields, fetch_pages, fetch_single_study
 
 router = APIRouter(tags=["discover"])
@@ -167,7 +168,10 @@ def discover_trial(nct_id: str, conn=Depends(get_readonly_db)):
                 (nct_id,),
             )
             conditions = [r["condition"] for r in cur.fetchall()]
-            return TrialDetail(**study, conditions=conditions, source="tracked")
+            note = None
+            if study["active_in_scope"] is False:
+                note = drop_reason(study["overall_status"], study["last_update_post_date"])
+            return TrialDetail(**study, conditions=conditions, source="tracked", tracking_note=note)
 
     try:
         live_study = fetch_single_study(nct_id)

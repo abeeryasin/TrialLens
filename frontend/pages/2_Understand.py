@@ -12,37 +12,18 @@ CT.gov lookup — the same tracked-or-live split as Discover's search,
 applied to a single trial. A live result has no fetched_at/last_matched_at
 or change history, since those describe a trial we actually track.
 """
-import json
-
 import streamlit as st
 
 from api_client import ApiError, get
-
-FIELD_LABELS = {
-    "brief_title": "Title",
-    "official_title": "Official title",
-    "overall_status": "Status",
-    "study_type": "Study type",
-    "phase": "Phase",
-    "enrollment_count": "Enrollment",
-    "sex": "Sex",
-    "minimum_age": "Minimum age",
-    "healthy_volunteers": "Healthy volunteers",
-    "eligibility_criteria": "Eligibility criteria",
-    "last_update_post_date": "ClinicalTrials.gov's own \"last updated\" date",
-    "brief_summary": "Summary",
-    "lead_sponsor": "Sponsor",
-    "start_date": "Start date",
-    "primary_completion_date": "Primary completion date",
-    "completion_date": "Completion date",
-    "interventions": "Intervention(s)",
-    "primary_outcomes": "Primary outcome(s)",
-    "locations": "Location(s)",
-    "active_in_scope": "Active in tracking scope",
-}
-# These store a JSON list, not a plain value — render as a formatted
-# before/after instead of one unreadable inline JSON string.
-STRUCTURED_FIELDS = {"interventions", "primary_outcomes", "locations"}
+from labels import (
+    CATEGORY_TRACKING,
+    ENROLLMENT_TYPE_CAPTIONS,
+    FIELD_LABELS,
+    STRUCTURED_FIELDS,
+    format_detected_at,
+    humanize_value,
+    render_structured_diff,
+)
 
 st.set_page_config(page_title="Understand — TrialLens", page_icon="📄")
 st.title("Understand")
@@ -82,10 +63,13 @@ phase_col.markdown(f"**Phase**\n\n{study['phase'] or '—'}")
 type_col.markdown(f"**Study type**\n\n{study['study_type'] or '—'}")
 
 if not is_live and study["active_in_scope"] is False:
+    reason = study.get("tracking_note") or (
+        "We can't tell from the data we've stored exactly why it stopped being tracked."
+    )
     st.warning(
-        "This trial no longer matches its tracked condition's active/recency "
-        "filter — kept for history, not deleted. Treat its status as "
-        "possibly stale until re-checked."
+        f"We're no longer tracking this trial for updates — its record is kept "
+        f"for history, not deleted, so treat the details below as possibly out "
+        f"of date. {reason}"
     )
 
 st.subheader("Conditions")
@@ -153,7 +137,17 @@ else:
     st.caption("No eligibility criteria text on file — insufficient information, not zero criteria.")
 
 st.subheader("Enrollment")
-st.write(str(study["enrollment_count"]) if study["enrollment_count"] is not None else "—")
+if study["enrollment_count"] is None:
+    st.write("—")
+else:
+    st.write(f"{study['enrollment_count']:,} participants")
+    # The bare number is ambiguous on its own: most CT.gov records report a
+    # recruitment target, not a real headcount. Say which — and say so
+    # honestly when CT.gov didn't specify.
+    st.caption(ENROLLMENT_TYPE_CAPTIONS.get(
+        study.get("enrollment_type"),
+        "ClinicalTrials.gov doesn't say whether this is an actual count or a target.",
+    ))
 
 if is_live:
     st.caption("Fetched just now, live · source: ClinicalTrials.gov")
@@ -182,27 +176,33 @@ if not is_live:
                     "change may be in something we don't parse yet (e.g. "
                     "contacts, oversight)."
                 )
-            for change in changes:
+
+            def render_change(change):
                 label = FIELD_LABELS.get(change["field_name"], change["field_name"])
-                detected_at = change["detected_at"]
+                detected_at = format_detected_at(change["detected_at"])
                 if change["field_name"] in STRUCTURED_FIELDS:
                     st.markdown(f"**{label}** changed ({detected_at})")
-                    old_col, new_col = st.columns(2)
-                    for col, heading, raw_value in (
-                        (old_col, "Before", change["old_value"]),
-                        (new_col, "After", change["new_value"]),
-                    ):
-                        col.caption(heading)
-                        if not raw_value:
-                            col.write("—")
-                            continue
-                        try:
-                            parsed = json.loads(raw_value)
-                        except (TypeError, ValueError):
-                            col.write(raw_value)
-                        else:
-                            col.json(parsed)
+                    render_structured_diff(change["old_value"], change["new_value"])
                 else:
-                    old_display = change["old_value"] or "—"
-                    new_display = change["new_value"] or "—"
+                    old_display = humanize_value(change["field_name"], change["old_value"])
+                    new_display = humanize_value(change["field_name"], change["new_value"])
                     st.write(f"**{label}** — {old_display} → {new_display} ({detected_at})")
+
+            # Split by kind: a real registry change (status, eligibility,
+            # outcomes) shouldn't get buried between our own tracking
+            # bookkeeping lines — they answer different questions.
+            content_changes = [c for c in changes if c.get("category") != CATEGORY_TRACKING]
+            tracking_changes = [c for c in changes if c.get("category") == CATEGORY_TRACKING]
+
+            if content_changes:
+                st.markdown("**What ClinicalTrials.gov changed**")
+                for change in content_changes:
+                    render_change(change)
+            if tracking_changes:
+                st.markdown("**Our tracking of this trial**")
+                st.caption(
+                    "Not changes to the trial itself — whether we're still "
+                    "checking it for updates."
+                )
+                for change in tracking_changes:
+                    render_change(change)
