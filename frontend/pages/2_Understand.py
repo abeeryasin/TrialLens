@@ -93,8 +93,12 @@ if study.get("interventions"):
             st.caption(iv["description"])
 
 if study.get("primary_outcomes"):
+    # No explanatory caption here on purpose: "primary outcome" is standard
+    # vocabulary for the clinical researcher this is built for (CLAUDE.md
+    # sec. 1), so defining it on every trial is repetition, not help. The
+    # eligibility caption below is a different thing entirely — a safety
+    # disclaimer required by sec. 2, not a definition — and stays.
     st.subheader("Primary outcome" + ("s" if len(study["primary_outcomes"]) > 1 else ""))
-    st.caption("What defines success for this trial.")
     for o in study["primary_outcomes"]:
         st.markdown(f"**{o.get('measure') or '—'}**")
         details = []
