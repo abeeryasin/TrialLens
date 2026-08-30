@@ -68,6 +68,16 @@ capabilities = [
         "status": "live",
     },
     {
+        "icon": "⭐",
+        "name": "Ranking",
+        "desc": "Score tracked trials by fit to your research interest — with visible evidence for every score, not a black box.",
+        "page": None,
+        # POST /rank works and is tested; nothing renders it yet, so this
+        # stays "planned". Marking it live because the backend exists would
+        # be exactly the thing this page's docstring forbids.
+        "status": "planned",
+    },
+    {
         "icon": "🕸️",
         "name": "Explore",
         "desc": "How trials, sponsors, and interventions connect to each other.",

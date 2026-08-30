@@ -1064,3 +1064,223 @@ and confirmed it landed in `maximum_age` while its neighbours (`sex`,
 `healthy_volunteers`) stayed NULL — exactly what a misaligned tuple would
 have corrupted. Sandbox is left contaminated with that test data on
 purpose; it's the disposable branch, recreated from `dev` when needed.
+
+## 2026-08-31 — Ranking: five of eight signals moved out of the model
+
+The first ranking implementation sent all seven fit signals to one LLM call
+per trial. Four of them were field comparisons with exactly one correct
+answer — `overall_status == "RECRUITING"`, `len(locations)`, an age-bracket
+overlap, an enrollment-size band — and a fifth (phase) became one once the
+researcher's stated preference was parsed. Routing those through a model
+means they can drift between runs on identical input, which makes an
+evaluation harness unable to attribute a score change to a code change.
+
+Moved to `api/ranking_deterministic.py`, which imports no model client at
+all. The researcher's interest is now parsed once per search rather than
+re-interpreted per trial, so a search of N trials makes `1 + N` calls
+instead of N larger ones. Cost fell from ~$0.03 to ~$0.006 per call, but
+the reason for the split is reproducibility and the fact that deterministic
+signals can carry the literal stored value as evidence rather than a
+model's paraphrase of it.
+
+Every vocabulary and threshold in that module came from querying the live
+`dev` branch rather than from the CT.gov documentation, and the two
+disagreed in ways that mattered. The prompt being replaced instructed the
+model that `COMPLETED/CLOSED` means not-enrolling; `CLOSED` is not a
+ClinicalTrials.gov status at all. The eight real values are RECRUITING
+(3,982), COMPLETED (3,413), ACTIVE_NOT_RECRUITING (1,841),
+NOT_YET_RECRUITING (1,447), TERMINATED (385), ENROLLING_BY_INVITATION (233),
+WITHDRAWN (149) and SUSPENDED (40) — only two of which the prompt named,
+leaving roughly 20% of trials unguided. The same prompt showed
+`"phase": "Phase 2"` where the column stores `PHASE2`, and did not handle
+the comma-separated multi-phase form (`PHASE1,PHASE2`, 461 trials).
+
+Age parsing needed the unit, not just the number: `minimum_age` values
+include Months, Weeks, Days, Hours and Minutes as well as Years, and `1 Day`
+is a real value on 12 trials. Reading it as 1 year is a 365x error, so
+`parse_age_to_years` returns `None` rather than a number whenever the unit
+is absent or unrecognised.
+
+## 2026-08-31 — "Unknown" excluded from the score denominator
+
+A signal the researcher never asked about was scored 0.0 while its weight
+stayed in the denominator, which made "we can't tell" arithmetically
+identical to "this trial fails". For a plainly-worded interest like "I track
+breast cancer trials", four of seven signals have nothing to compare
+against, so the score was capped near 0.65 no matter how well the trial
+matched. The previously recorded symptom — top-1 scores of 0.60 against an
+expected 0.75+ — was this formula rather than model behaviour.
+
+`unknown` is now excluded from both numerator and denominator; `no_match`
+stays in the denominator contributing 0.0, because it is real evidence
+against the trial. The score answers a narrower question — of the criteria
+that could be assessed, what fraction matched — so `FitRanking` carries
+`evaluated_weight_fraction` alongside it. A 1.00 assessed on 30% of criteria
+and a 1.00 assessed on all of them are different claims, and the score alone
+cannot distinguish them.
+
+The synthetic test cases' expected score ranges were written against the old
+denominator: reproducing the old arithmetic lands exactly inside each
+declared range. Recalibrating them was deferred deliberately rather than
+edited to make the suite pass.
+
+## 2026-08-31 — Missing preferences are elicited, not scored
+
+Excluding unknown signals is arithmetically honest but silently narrows what
+the score means. A researcher seeing a number has no way to know that most
+of the criteria went unevaluated because they were brief.
+
+`POST /rank` now returns `unspecified`: the preferences the researcher did
+not state, how much scoring weight each one costs, and the question that
+would close it, ordered by how much coverage an answer would recover. It is
+derived from the parsed preferences with no additional model call.
+
+It only asks about gaps an answer can fix. A signal unscored because the
+trial itself records no phase — 64% of trials, `NA` on 4,869 and NULL on
+2,442 — is not recoverable by anything the researcher can say, so no
+question is generated for it.
+
+## 2026-08-31 — Observational studies cannot match a phase request
+
+`phase_fit` returned `unknown` whenever no phase was recorded, which
+excluded it from scoring and therefore cost the trial nothing. An
+observational cohort study could rank alongside genuine Phase II trials for
+a researcher who had explicitly asked for Phase II.
+
+The two "no phase" cases separate almost perfectly by `study_type`: 2,440
+OBSERVATIONAL with NULL, and 4,869 INTERVENTIONAL with `NA`. An
+observational study has no phase by definition, which is a fact rather than
+an ambiguity, so it now scores `no_match` with the reason stated. An
+interventional trial recording `NA` — common for behavioural, device and
+procedure trials — stays `unknown`.
+
+## 2026-08-31 — Condition matching split, because the filter already answered it
+
+`/rank` selects trials with `condition ILIKE`, so every trial reaching the
+model had already matched on condition. A 30%-weighted `condition_match`
+signal then asked the model whether the condition matched, and it always
+said yes — granting 30% of the score to every trial automatically, which is
+why scores clustered near 1.00 and the ranking barely discriminated. A
+signal that nearly always returns the same value carries no information
+regardless of its weight.
+
+Replaced with two signals asking what the tag cannot answer:
+`condition_is_subject` (20%) — is the condition the trial's actual subject,
+or a comorbidity of enrolled patients, an exclusion criterion, or
+background — and `approach_match` (10%) — does the mechanism or modality
+match what was described. The prompt now states that the condition match is
+already established and is not evidence of fit.
+
+## 2026-08-31 — Few-shot examples removed in favour of schema-constrained output
+
+The replaced prompt carried three worked examples. In all three,
+`prior_treatment_compatible` and `age_range_fit` were filled in identically
+as `{"status": "unknown", "confidence": "low"}`. Read as a pattern rather
+than as three independent judgments, that teaches which fields to leave
+blank; whatever an example holds constant, it teaches.
+
+Both prompts now use `output_config.format` with a JSON schema, so the API
+enforces shape and no example is needed to demonstrate it. This also removed
+a real failure path: the previous code instructed the model to emit only
+JSON and then called `json.loads` on the response, where a malformed reply
+raised into the bare per-trial `except` and silently dropped the trial from
+the results.
+
+## 2026-08-31 — Two test tiers, split by whether they cost money
+
+An LLM feature fails in two ways that look identical from outside: the data
+never reached the model, or the model reasoned badly on data it did receive.
+The bug that actually occurred was the first kind —
+`prior_treatment_compatible` carried 15% of the scoring weight while
+`eligibility_criteria` was never placed in the prompt payload, so the signal
+could only ever return `unknown`. No amount of running the paid harness
+distinguishes that from honest uncertainty, because the output string is the
+same.
+
+`tests/test_ranking_prompt_payload.py` asserts on the constructed payload
+with no API call, and would have caught it immediately. It also asserts that
+the five deterministic fields stay *out* of the payload, so the model cannot
+re-judge settled facts and contradict the evidence displayed beside them.
+`tests/test_ranking_real_data.py` runs every deterministic scorer against
+all 11,474 active trials, read-only — it found no unparsed age, no unhandled
+status, and no scorer exception.
+
+103 tests now run free and belong in CI. The harness in
+`tests/test_ranking_integration.py` makes 48 real calls per pass and stays
+manual, run at decision points only.
+
+## 2026-08-31 — On-disk response cache for the evaluation harness
+
+Most iteration on ranking is on weights, thresholds and presentation, none
+of which need a fresh model judgment. Responses are cached to
+`.ranking_cache/` (gitignored), keyed on
+`sha256(model + effort + system prompt + user content)`, so an identical
+request replays from disk at no cost and only a genuine prompt, model or
+effort change forces new spend. Verified by re-running a full 48-call suite
+for $0.00 immediately after a paid run.
+
+Each entry stores the user content and a hash of the system prompt
+alongside the response, so a cached answer can be audited against the exact
+question that produced it.
+
+## 2026-08-31 — What the ranking evaluation does and does not establish
+
+The harness reported correct ordering in 15 of 15 scenarios. Five of those
+had the top two trials tied on both score and coverage, and Python's stable
+sort resolved them by the order the fixture file listed them — which
+happened to match the expected answer. Reversing the fixture list flipped
+those five to failures with byte-identical scores, so the honest count is 10
+genuinely correct and 5 undetermined.
+
+The synthetic fixtures also do not resemble the stored data: two or three
+trials per scenario against a real task of fifty, no eligibility criteria
+text, one condition tag where a real trial carried nineteen, and every field
+populated where real data is 64% missing phase and 50% missing an upper age
+bound. The missing-data paths most of the design addresses are the ones the
+fixtures never exercise. Published trial-matching systems report
+precision/recall around 0.32-0.45; scoring 1.00 indicates the harness
+measures an easier task, not a better system.
+
+Treated as a regression harness rather than a quality measurement. Real
+measurement needs a clinician reading real ranked output.
+
+## 2026-08-31 — The ranking evaluation suite cannot pass; its rate is not a signal
+
+Asked whether the declared target — top-1 score in [0.75, 0.95] with
+confidence `high` — is reachable at all under the rewritten scoring. It is
+not, for either half. Checked against the response cache at no cost;
+`tests/reachability_check.py` reproduces it.
+
+`confidence: "high"` requires `evaluated_fraction >= 0.80`. Seventy percent
+of the signal weight is preference-gated — status 20, phase 15, prior
+treatment 15, age 10, approach 10 — leaving 30 percentage points
+(`condition_is_subject`, `sites_active`, `enrollment_feasibility`) that are
+always evaluated. Reaching 0.80 therefore requires the researcher to state
+at least 50 of the 70 gated points. The most any of the fifteen test
+interests unlocks is 65%, and most sit between 30% and 55%, so `high` is
+unreachable in 0 of 15 scenarios. It is unreachable in production for the
+same reason: a realistic query rarely specifies all of recruitment status,
+phase, prior therapy, age band and modality. Whether the 0.80 threshold is
+correct — high confidence being genuinely rare — or miscalibrated is now an
+open question; it was inherited from the first implementation and never
+decided.
+
+The score ranges are unreachable for a separate reason. Because `unknown`
+signals are excluded from the denominator, a trial matching everything the
+researcher asked about scores exactly 1.00, with nothing left to lose points
+on. The fixtures deliberately designed their top-ranked trial to match
+everything, so four of the five return 1.00 against a declared ceiling of
+0.95, and the fifth returns 0.94 against a ceiling of 0.75. The ranges were
+written against the old denominator, which reproduces each boundary exactly.
+
+Separately, the harness computes `passed = order_correct and in_range` and
+never asserts confidence at all — so the test case named for confidence
+calibration does not check confidence, and would fail if it did.
+
+Consequences recorded rather than patched, since recalibrating the numbers
+would only hide the structural point: top-1 score is now a weak assertion,
+because "matched everything asked" equals 1.00 however little was asked. The
+informative assertions are the score gap between the first and second
+result, which measures whether the system discriminates at all, and the
+coverage fraction. Until that is settled the suite's pass rate is not a
+regression baseline and must not be quoted as one.

@@ -11,3 +11,4 @@ course-alignment.md
 .claude/skills/
 .claude/hooks/
 skills-lock.json
+.ranking_cache/

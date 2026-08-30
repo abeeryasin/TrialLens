@@ -17,6 +17,7 @@ Also a vehicle for an external engineering course — when the two conflict, cou
 
 - Never "patient eligibility" — use "potential fit," "potential conflict," "requires review," "insufficient information." The system doesn't know enough about a real person to determine eligibility.
 - No real patient data (PHI) — public, registered study data only.
+- **Never write a live credential into a repo file** — no API keys in code, docs, session notes, or handoff files, even untracked ones. Keys live in `.env.local` (gitignored); repo files get a placeholder name only. A committed key can't be un-committed by rotating it.
 - Never invent a study fact, represent an LLM's inference as a source fact, claim a patient is eligible, make a clinical decision, or silently resolve ambiguous eligibility — say so explicitly when evidence is insufficient.
 
 ## 3. Evidence Requirements
@@ -56,12 +57,29 @@ Steps 1-6 are built, tested, and live: schema + ingestion, the
 FastAPI-only-door layer, scheduler/cron automation (a real 6-hour cron
 running on GitHub Actions), Discover live-fallback (`GET /discover`), and
 the Streamlit frontend — Discover, Understand, and the Monitor feed
-(`GET /changes`). Explore and Investigate aren't built yet. **Next: step
-7, AI ranking/evidence layer** — the first LLM in the system; build the
-evaluation harness alongside it, not after (§7).
+(`GET /changes`). Explore and Investigate aren't built yet.
 
-Two standing gotchas worth knowing before touching data: the Neon branch
+**Step 7 (AI ranking/evidence layer) is in progress** — the first LLM in
+the system. `POST /rank` works: five of its eight fit signals run in plain
+code (`api/ranking_deterministic.py`, no model client imported), three are
+model-judged, and the researcher's interest is parsed once per search
+rather than per trial. 103 free tests pass, including every deterministic
+scorer against all 11,474 real trials. **Nothing renders it yet — Unit 4,
+the Streamlit ranking page, is the next task.** Read
+`docs/STEP7_SESSION_SUMMARY.md` first; it carries the eight bugs already
+fixed and four decisions the user has deliberately left open.
+
+**Hard constraint: the Anthropic API budget is $5 total, ~$4.45 left.**
+An on-disk response cache (`.ranking_cache/`) replays identical requests
+for $0, so iterating on weights, scoring, or display costs nothing — only
+a real prompt/model change spends. Never put the paid eval harness in CI.
+
+Three standing gotchas worth knowing before touching data: the Neon branch
 named `dev` is the real live database (`production` is an empty leftover;
-use `sandbox` to rehearse destructive changes), and a `JOIN` against
-`study_conditions` needs `DISTINCT` before its output feeds a write. Full
-status and dated reasoning: `docs/roadmap.md`, `docs/decisions.md`.
+use `sandbox` to rehearse destructive changes); a `JOIN` against
+`study_conditions` needs `DISTINCT` before its output feeds a write; and
+the stored values rarely match what the API docs imply — phase is `PHASE2`
+not "Phase 2", 64% of trials have no usable phase, ages carry units other
+than years, and `CLOSED` is not a real status. Query the real
+distributions before writing a query **or a prompt** (§6). Full status and
+dated reasoning: `docs/roadmap.md`, `docs/decisions.md`.

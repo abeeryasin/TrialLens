@@ -42,3 +42,24 @@ def get(path: str, params: dict = None) -> dict:
         )
 
     return response.json()
+
+
+def post(path: str, data: dict = None, json_data: dict = None, params: dict = None) -> dict:
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}{path}",
+            params=params,
+            data=data,
+            json=json_data,
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise ApiError(f"Could not reach the API at {API_BASE_URL}: {exc}")
+
+    if not response.ok:
+        raise ApiError(
+            f"API returned {response.status_code} for {path}: {response.text}",
+            status_code=response.status_code,
+        )
+
+    return response.json()
