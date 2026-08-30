@@ -67,7 +67,8 @@ rather than per trial. 103 free tests pass, including every deterministic
 scorer against all 11,474 real trials. **Nothing renders it yet — Unit 4,
 the Streamlit ranking page, is the next task.** Read
 `docs/STEP7_SESSION_SUMMARY.md` first; it carries the eight bugs already
-fixed and four decisions the user has deliberately left open.
+fixed and four decisions the user has deliberately left open. **Step 7 is
+not on `main`** — it's on the branch `step7-ranking-deterministic-split`.
 
 **Hard constraint: the Anthropic API budget is $5 total, ~$4.45 left.**
 An on-disk response cache (`.ranking_cache/`) replays identical requests

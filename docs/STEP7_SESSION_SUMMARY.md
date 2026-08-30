@@ -6,6 +6,43 @@ with the code, the code wins — check before trusting this.
 
 ---
 
+## Start here — where the code actually is
+
+**None of step 7 is on `main`.** It lives on the branch
+**`step7-ranking-deterministic-split`** (2 commits ahead of `main`, which is
+still at `35dae21`). If `api/ranking.py` appears to be missing, you are on
+the wrong branch:
+
+```bash
+git checkout step7-ranking-deterministic-split
+```
+
+Merging to `main` was left to the user; don't merge unasked.
+
+**Two things this work depends on are gitignored and do NOT travel with a
+clone.** On the machine where the work was done, both are present:
+
+| | Why it matters if absent |
+|---|---|
+| `.env.local` | Holds `ANTHROPIC_API_KEY` (rotated 2026-08-31) and the DB URLs. Without it the paid harness and `test_ranking_real_data.py` can't run — the latter skips cleanly, it does not fail. |
+| `.ranking_cache/` | 44 recorded responses, covering all 48 requests the harness makes (four trial+interest pairs recur across scenarios). **Without it, re-running the eval harness costs real money instead of $0.00.** Check `ls .ranking_cache \| wc -l` before assuming a re-run is free. |
+
+**Two-minute verification that the tree is sane** (all free, no API calls):
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest tests/ -q \
+  --ignore=tests/test_ranking_integration.py     # expect: 103 passed
+PYTHONPATH=. .venv/bin/python tests/reachability_check.py | tail -1
+                                                 # expect: "$0.0000" — proves the cache is intact
+PYTHONPATH=. .venv/bin/python tests/test_ranking_integration.py --dry-run
+                                                 # expect: 48 total model calls, no spend
+```
+
+If the first command reports fewer than 103, something is wrong — say so
+rather than working around it.
+
+---
+
 ## Where things actually stand
 
 | Unit | State |
