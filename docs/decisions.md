@@ -960,3 +960,67 @@ numbers — the branch created earlier the same day, earning its keep
 immediately. The dedup deletion additionally asserted
 `COUNT(DISTINCT (nct_id, field_name, detected_at))` was unchanged before
 and after, proving only redundant copies were removed, not real history.
+
+## 2026-08-30 — Long text changes: a real word-level diff, and honest "formatting only" labelling
+
+Real use surfaced the problem: an `eligibility_criteria` change rendered
+both versions in full, side by side — roughly 4,000 characters each, 8,400
+in total — to communicate a handful of edited words. Unreadable, and it
+actively buried what changed.
+
+Checked the specific case before building anything (`NCT07787728`, a Phase
+Ib MWN109 obesity trial): the two versions are 94.8% similar by word, and
+after normalising punctuation, casing and whitespace they are **identical**.
+The sponsor had reformatted exclusion criterion 5 from a run-on sentence
+into a bulleted list. Nothing clinical changed at all, and the UI gave a
+researcher no way to know that without reading 8,400 characters.
+
+**Deterministic, not an agent.** A text diff has exactly one correct
+answer, so this is `difflib` (Python stdlib, the same approach `git diff`
+takes), not an LLM call — CLAUDE.md sec. 5's "deterministic first". An LLM
+summarising eligibility criteria would risk paraphrasing or softening
+clinical text, which sec. 2 forbids outright. The diff shows the real words
+that changed; it never rewrites them.
+
+Built in `frontend/labels.py`, shared by Monitor and Understand:
+- `is_long_text()` — a length threshold (200 chars) rather than a
+  hardcoded field list, so it applies to any long value, not just
+  eligibility criteria.
+- `summarize_text_change()` — a short, honest cell label
+  ("Text changed (+3 / −14 words)"), a count of what moved, never a
+  paraphrase of the content.
+- `render_text_diff()` — one inline passage, removals struck through in
+  red, additions highlighted in green, unchanged text plain. Chosen over
+  side-by-side columns because for 4,000 characters of prose, side-by-side
+  reproduces the original problem.
+- `is_formatting_only()` — true only when the two versions differ purely
+  in punctuation, casing or whitespace.
+
+**The formatting-only check is deliberately biased toward saying "no".**
+Only non-alphanumeric differences are ignored, so anything touching a word
+or a number counts as a real change. Missing a genuinely cosmetic edit is
+harmless; the opposite — telling a researcher nothing changed when it did
+— would be a false claim about a study fact. Verified explicitly against
+the cases that would matter most: `BMI 27.0 to 35.0` -> `45.0`,
+`age 18 and 65` -> `75`, `eGFR < 60` -> `< 30`, and `no pregnancy plans` ->
+`pregnancy plans` all correctly return False. Across the real dataset, 2 of
+13 stored text changes are genuinely formatting-only.
+
+The diff earned its place immediately on a different trial (`NCT06585306`),
+surfacing two real changes that had been invisible in the wall of text:
+`sedative gastroscopy` -> `gastrointestinal endoscopy` (procedure scope
+broadened), and a set of airway-difficulty criteria ("interincisal distance
+<6.5cm, no micrognathia, limited mouth opening and limited cervical spine
+movement") replaced outright by `BMI >28kg/m2`. That is exactly the kind of
+protocol change a researcher tracking a trial needs to see.
+
+Left as-is on purpose: CT.gov's own markdown escaping shows through in the
+diff (`BMI\>28kg/m2`). Stripping characters from stored study text would be
+editing the source rather than displaying it.
+
+One testing note for next time: a browser normalises inline `style="...#hex"`
+to `rgb(...)`, so a Playwright selector matching the literal hex string
+finds nothing even when the markup rendered perfectly. Assert on a
+structural property (`style*="line-through"`) or inspect the real DOM
+instead of trusting a hex-string match — this looked like a rendering
+failure for several minutes when nothing was wrong.

@@ -22,7 +22,10 @@ from labels import (
     STRUCTURED_FIELDS,
     format_detected_at,
     humanize_value,
+    is_long_text,
     render_structured_diff,
+    render_text_diff,
+    summarize_text_change,
 )
 
 st.set_page_config(page_title="Understand — TrialLens", page_icon="📄")
@@ -183,6 +186,11 @@ if not is_live:
                 if change["field_name"] in STRUCTURED_FIELDS:
                     st.markdown(f"**{label}** changed ({detected_at})")
                     render_structured_diff(change["old_value"], change["new_value"])
+                elif is_long_text(change["old_value"], change["new_value"]):
+                    summary = summarize_text_change(change["old_value"], change["new_value"])
+                    st.markdown(f"**{label}** — {summary} ({detected_at})")
+                    with st.expander("Show what changed"):
+                        render_text_diff(change["old_value"], change["new_value"])
                 else:
                     old_display = humanize_value(change["field_name"], change["old_value"])
                     new_display = humanize_value(change["field_name"], change["new_value"])

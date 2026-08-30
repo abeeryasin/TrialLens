@@ -3,7 +3,10 @@ history and Monitor's aggregate feed — both render the same study_changes
 rows, just at different scopes, so the label/structure mapping is defined
 once here instead of copied into each page.
 """
+import difflib
+import html
 import json
+import re
 from datetime import datetime, timezone
 
 import streamlit as st
@@ -111,6 +114,95 @@ def format_detected_at(raw_value):
 
     absolute = dt.strftime("%b %d, %Y, %I:%M %p UTC")
     return f"{absolute} ({relative})"
+
+
+# Above this many characters, showing both full versions side by side stops
+# being readable — a real eligibility_criteria change is ~4,000 characters
+# per side, and dumping both to communicate a handful of edited words is
+# what this threshold exists to avoid.
+LONG_TEXT_CHARS = 200
+
+
+def is_long_text(old_value, new_value):
+    return max(len(old_value or ""), len(new_value or "")) > LONG_TEXT_CHARS
+
+
+def _words(text):
+    """Split keeping punctuation attached, so a diff reports real words
+    rather than stray symbols."""
+    return (text or "").split()
+
+
+def is_formatting_only(old_value, new_value):
+    """True when the two versions differ ONLY in punctuation, casing, or
+    whitespace — e.g. a sponsor reformatting a run-on list into bullets.
+    Deterministic string comparison, never a judgement call: the texts are
+    normalized identically and compared exactly.
+
+    Deliberately biased toward saying "no": only non-alphanumeric
+    differences are ignored, so anything that touches a number or a word
+    is a real change. Missing a genuinely cosmetic edit is harmless; the
+    opposite — telling a researcher nothing changed when a BMI cutoff
+    moved 35 -> 45, or an "eGFR < 60" became "< 30", or a "no" was dropped
+    — would be a false claim about a study fact (CLAUDE.md sec. 2). All
+    four of those cases were checked and correctly return False."""
+    def normalize(text):
+        return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split()
+
+    if old_value is None or new_value is None:
+        return False
+    return old_value != new_value and normalize(old_value) == normalize(new_value)
+
+
+def summarize_text_change(old_value, new_value):
+    """A short, honest cell label for a long text change — never a
+    paraphrase of the clinical text itself, just a count of what moved."""
+    if is_formatting_only(old_value, new_value):
+        return "Reformatted only — same wording"
+    matcher = difflib.SequenceMatcher(None, _words(old_value), _words(new_value))
+    added = removed = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("replace", "delete"):
+            removed += i2 - i1
+        if tag in ("replace", "insert"):
+            added += j2 - j1
+    return f"Text changed (+{added} / −{removed} words)"
+
+
+def render_text_diff(old_value, new_value):
+    """Inline word-level diff: one readable passage with removals struck
+    through and additions highlighted, rather than two near-identical walls
+    of text. Uses difflib (the same approach git diff takes) — the exact
+    words that changed, never an LLM's summary of them, which would risk
+    paraphrasing clinical criteria (CLAUDE.md sec. 2)."""
+    if is_formatting_only(old_value, new_value):
+        st.success(
+            "Formatting only — punctuation, capitalisation or layout changed, "
+            "but the wording is identical. No change to what the trial requires."
+        )
+
+    matcher = difflib.SequenceMatcher(None, _words(old_value), _words(new_value))
+    old_words, new_words = _words(old_value), _words(new_value)
+    parts = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            parts.append(html.escape(" ".join(old_words[i1:i2])))
+            continue
+        if tag in ("replace", "delete"):
+            removed = html.escape(" ".join(old_words[i1:i2]))
+            parts.append(
+                f'<span style="background:#ffd7d5;color:#82071e;'
+                f'text-decoration:line-through">{removed}</span>'
+            )
+        if tag in ("replace", "insert"):
+            added = html.escape(" ".join(new_words[j1:j2]))
+            parts.append(f'<span style="background:#ccffd8;color:#0a3622">{added}</span>')
+
+    st.markdown(
+        '<div style="line-height:1.7;white-space:pre-wrap">' + " ".join(parts) + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Struck-through red = removed · green = added · plain = unchanged")
 
 
 def render_structured_diff(old_value, new_value):

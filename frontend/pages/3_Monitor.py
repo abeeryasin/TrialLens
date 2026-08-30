@@ -20,7 +20,10 @@ from labels import (
     STRUCTURED_FIELDS,
     format_detected_at,
     humanize_value,
+    is_long_text,
     render_structured_diff,
+    render_text_diff,
+    summarize_text_change,
 )
 
 st.set_page_config(page_title="Monitor — TrialLens", page_icon="🛰️", layout="wide")
@@ -151,7 +154,14 @@ else:
 
     def display_value(row, col):
         if row["field_name_raw"] in STRUCTURED_FIELDS:
-            return "(changed — see Understand for detail)"
+            return "(changed — select the row for detail)"
+        # A long text field (eligibility criteria runs ~4,000 characters)
+        # dumped into both cells makes the table unreadable and buries what
+        # actually moved. Show a short preview here; the real word-level
+        # diff renders below when the row is selected.
+        if is_long_text(row["old_value"], row["new_value"]):
+            text = row[col] or "—"
+            return text[:70].rstrip() + "…" if len(text) > 70 else text
         return humanize_value(row["field_name_raw"], row[col])
 
     table["field_name_raw"] = [r["field_name"] for r in results]
@@ -186,8 +196,13 @@ else:
                 "being tracked."
             )
 
+        selected_label = FIELD_LABELS.get(selected["field_name"], selected["field_name"])
         if selected["field_name"] in STRUCTURED_FIELDS:
-            with st.expander(f"Show full before/after — {FIELD_LABELS.get(selected['field_name'], selected['field_name'])}"):
+            with st.expander(f"Show full before/after — {selected_label}"):
                 render_structured_diff(selected["old_value"], selected["new_value"])
+        elif is_long_text(selected["old_value"], selected["new_value"]):
+            summary = summarize_text_change(selected["old_value"], selected["new_value"])
+            with st.expander(f"{selected_label} — {summary}"):
+                render_text_diff(selected["old_value"], selected["new_value"])
     else:
         st.caption("Click a row to select a trial, then View.")
