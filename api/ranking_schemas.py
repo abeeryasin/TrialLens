@@ -1,8 +1,11 @@
-"""Pydantic models for Step 7: AI Ranking/Evidence Layer.
+"""Pydantic models for Step 7: AI ranking / evidence layer.
 
-Defines the fit-scoring schema, signals, and evaluation harness structures.
+The response shapes for `POST /rank`, plus the fixture models the synthetic
+test cases are written in. The evaluation-report models that used to live
+here were removed with `tests/test_ranking_harness.py` (2026-08-31) — the
+harness in `tests/test_ranking_integration.py` reports as it goes rather
+than building a report object, so nothing constructed them.
 """
-from datetime import date, datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel
@@ -12,8 +15,10 @@ class FitSignal(BaseModel):
     """One piece of evidence for or against a trial's fit."""
 
     name: str
-    # Examples: "condition_match", "status_recruiting", "phase_fit",
-    #           "prior_treatment_compatible", "age_range_fit", "sites_active"
+    # The eight signals, and where each is decided (see api/ranking.py):
+    #   model — condition_is_subject, approach_match, prior_treatment_compatible
+    #   code  — status_recruiting, phase_fit, age_range_fit, sites_active,
+    #           enrollment_feasibility
 
     status: Literal["match", "no_match", "unknown", "partial"]
     # match: signal is positive
@@ -140,7 +145,7 @@ class RankRequest(BaseModel):
 
 
 # ============================================================================
-# Test & Evaluation Models
+# Test fixture models (used by tests/test_data_synthetic_trials.py)
 # ============================================================================
 
 
@@ -154,17 +159,6 @@ class TestResearcherInterest(BaseModel):
 
     text: str
     # The actual interest statement
-
-
-class ExpectedSignalOutcome(BaseModel):
-    """What we expect for one signal in a test case."""
-
-    name: str
-    expected_status: Literal["match", "no_match", "unknown", "partial"]
-    # What status should we see?
-
-    confidence_requirement: Literal["high", "medium", "low"]
-    # How confident should we be?
 
 
 class SyntheticTestTrial(BaseModel):
@@ -207,33 +201,3 @@ class TestCase(BaseModel):
     # (min, max) for the highest-scoring trial
 
     notes: str
-
-
-class EvaluationResult(BaseModel):
-    """Results from running one test case."""
-
-    test_case_name: str
-    researcher_interest_style: str
-    passed: bool
-    metrics: dict
-    # {
-    #   "precision_at_1": float,
-    #   "precision_at_3": float,
-    #   "ranking_order_correct": bool,
-    #   "top_1_score": float,
-    #   "in_expected_range": bool,
-    #   "errors": [list of errors if any]
-    # }
-    timestamp: datetime
-
-
-class EvaluationReport(BaseModel):
-    """Summary report from running the full test suite."""
-
-    total_tests: int
-    passed: int
-    failed: int
-    pass_rate: float
-    metrics_summary: dict
-    # Aggregated: mean precision_at_1, precision_at_3, etc.
-    timestamp: datetime

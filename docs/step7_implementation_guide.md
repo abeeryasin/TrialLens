@@ -16,6 +16,10 @@
 >   denominator entirely; conflating the two was the bug that capped scores
 >   near 0.65.
 > - The `api/ranking_mock.py` references — that file was deleted.
+> - The `tests/test_ranking_harness.py` references — deleted 2026-08-31;
+>   it ran no tests and nothing imported it. `RankingEvaluator`,
+>   `EvaluationResult` and `EvaluationReport` went with it. The real
+>   harness is `tests/test_ranking_integration.py`.
 > - The Unit 4/5/6 plans below are still broadly valid, but the two design
 >   decisions agreed with the user (score never shown without coverage;
 >   elicit missing preferences rather than penalise them) are recorded only
