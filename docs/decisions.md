@@ -1805,3 +1805,68 @@ docstring says so explicitly, and says what it is waiting for (filter
 predicates, `plan_after_ranking.md` item 4) and that it should be deleted
 rather than left sitting if that work is dropped. `.ranking_cache/`, the
 71 recorded responses, is untouched.
+
+## 2026-09-02 — Where a model earns its place, decided by querying first
+
+The plan after removing the ranking layer was to add one AI call: a "change
+interpreter" turning an amendment into `{category, why_it_matters,
+evidence[]}`. Before writing the prompt, the change-sets were queried —
+§6 applies to a prompt as much as to SQL, which is the lesson step 7 paid
+for. Four findings, and they moved the design more than the plan did.
+
+**1. Most amendments are not interpretable, and shouldn't be sent.**
+Of 212 amendments: 99 (47%) changed nothing TrialLens stores; 38 moved a
+single structured field; 29 are multi-field combinations; 46 changed prose.
+Only the last two categories — 75 of 212 — contain anything a model could
+add to. Sending the other 137 would pay for invention or for arithmetic.
+
+**2. The category half is a lookup, not a judgement.** The plan assumed a
+model would sort changes into administrative / operational / scientific.
+There are 14 distinct content fields in the data and every one maps
+statically. A model asked for that verdict is step 7's error repeated: a
+filter wearing a score's costume. It is now `FIELD_ASPECTS` in
+`api/amendments.py`, free and instant.
+
+**3. One amendment carries 252,041 characters of `locations` JSON.**
+Average is 3,475. A naive "send the change-set" would occasionally ship
+~100k tokens for a list of hospitals, and the honest summary of that diff
+is "5 sites added, 5 removed". Structured list fields are now summarised
+deterministically and never reach a prompt or a diff view.
+
+**4. Dates cannot be subtracted naively.** ~23% of trials report them to
+the month only. A shift is reported in months or weeks whenever either side
+is imprecise, and a sub-fortnight difference between two month-only dates
+is not reported at all — it is an artefact of anchoring to the 1st, not
+movement. Saying "slipped 361 days" about a date CT.gov gave as "2027-06"
+would invent precision the registry never stated (§2).
+
+**What was built, and what deliberately was not.** Everything arithmetic
+can answer: date shifts, headcount deltas, ESTIMATED→ACTUAL, site
+add/remove counts, and status transitions written over status *groups* so
+an unobserved transition still resolves correctly. `describe_effect`
+returns `None` for every prose field, permanently, and a test fails if that
+changes — "+3/−14 words" is arithmetic, "the trial narrowed its population"
+is a reading of clinical text.
+
+**Why this order matters more than the feature.** Shipping the
+deterministic layer first creates a control. "Does a model's prose add
+anything over this?" is now answerable, where step 7's equivalent question
+never was — `docs/verify_ranking_results.md` was written and never run
+partly because there was nothing to compare against. The AI call remains
+unbuilt, and is now a smaller, better-scoped question than the one the plan
+started with.
+
+**Rejected: running it on a local model.** The machine is an 8 GB M1 Air,
+which realistically runs a 3-4B model once macOS and the dev stack have
+taken their share. The task is interpreting clinical prose diffs where
+inventing a fact is the cardinal sin, and a 3B model is the worst available
+tool for it — fluent, confident, and wrong is the exact failure §2 exists to
+prevent. Cheap hosted non-Claude options (Gemini Flash, Groq) remain open
+and would work on public registry data with no PHI concern.
+
+**Two honesty bugs fixed in passing.** `GET /studies/{id}/changes` returned
+200 with an empty list for an nct_id never seen — "no changes recorded" for
+a trial that does not exist, which reads as "this trial has been quiet". It
+had done so since it was written. And `is_formatting_only()`'s docstring
+claimed four clinical cases "were checked"; nothing checked them. Both now
+hold.

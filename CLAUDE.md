@@ -79,15 +79,29 @@ a commit saying "we built this, measured it, and it didn't earn its place"
 is evidence, not clutter.
 
 **Step 7b is in progress, and it is not roadmap step 8 (Explore).** Three
-time-based directions agreed 2026-09-01, none of which needs a model:
-**amendment history** (a trial's changes are its headline) — **first, and
-next**, because it is a build problem not a design problem; **the watch**
-(lead with what is being watched; design the quiet week as the primary
-screen); and **the watch record** (elapsed time is the moat — and shout
-when the cron dies rather than serving a stale feed). See
-`docs/plan_after_ranking.md` for the three, and
-`docs/plan_relevance_column.md` for the paid classifier that is deferred
-until there are credits and a real complaint about mis-tagging.
+time-based directions agreed 2026-09-01. **Direction 1, amendment history,
+is done** (2026-09-02): `GET /studies/{nct_id}/amendments` groups a trial's
+changes into the amendments that caused them, and `api/amendments.py` says
+what each did — dates that slipped, targets that became actuals, sites
+added — with no model. **Next: the watch** (lead with what is being
+watched; design the quiet week as the primary screen), then **the watch
+record** (elapsed time is the moat — and shout when the cron dies rather
+than serving a stale feed).
+
+**One AI call is planned and scoped, not built** (step 7c): interpreting
+the *prose* half of an amendment, in the scheduled job, never in the
+request path. Querying first shrank it from "interpret every amendment" to
+75 of 212 — 47% change nothing we store, and the category half is a static
+field lookup. It is blocked on credits, and the deterministic layer shipped
+first on purpose, so the question "does a model add anything over this?"
+has a control. `docs/plan_relevance_column.md` holds a second, further
+deferred AI feature.
+
+**The amendment grouping key is the trial's own `last_update_post_date`,
+never `detected_at`** — one cron run spreads its writes across a minute
+boundary, so grouping by minute reports one amendment as two. Rows of one
+amendment share an exact `detected_at` because Postgres `now()` is
+transaction-start time; three real-data tests hold that.
 
 **Hard constraint: the Anthropic account is out of credits as of
 2026-09-01.** No paid call can run. Everything except ranking is
