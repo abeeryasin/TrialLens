@@ -102,7 +102,16 @@ def recent_changes(
         note = None
         if row["field_name"] == "active_in_scope" and row["new_value"] == "false":
             note = drop_reason(status, last_update)
-        results.append(ChangeFeedEntry(**row, tracking_note=note))
+        # Set here for the same reason GET /studies/{nct_id}/changes sets
+        # it: category is a property of the field, not a stored column, and
+        # api/tracking.py is its one definition. It was missing until
+        # 2026-09-02, so every row of this feed reported category=null while
+        # the per-trial endpoint reported it correctly — the Monitor page
+        # happened not to notice, because it reads categories from
+        # /changes/fields and filters server-side.
+        results.append(
+            ChangeFeedEntry(**row, tracking_note=note, category=field_category(row["field_name"]))
+        )
 
     return ChangeFeedResponse(
         total=total,

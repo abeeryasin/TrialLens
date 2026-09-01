@@ -1,0 +1,368 @@
+{
+ "derivedSection": {
+  "conditionBrowseModule": {
+   "ancestors": [
+    {
+     "id": "D009371",
+     "term": "Neoplasms by Site"
+    },
+    {
+     "id": "D001941",
+     "term": "Breast Diseases"
+    },
+    {
+     "id": "D017437",
+     "term": "Skin and Connective Tissue Diseases"
+    },
+    {
+     "id": "D005834",
+     "term": "Genital Neoplasms, Male"
+    },
+    {
+     "id": "D014565",
+     "term": "Urogenital Neoplasms"
+    },
+    {
+     "id": "D005832",
+     "term": "Genital Diseases, Male"
+    },
+    {
+     "id": "D000091662",
+     "term": "Genital Diseases"
+    },
+    {
+     "id": "D000091642",
+     "term": "Urogenital Diseases"
+    },
+    {
+     "id": "D011469",
+     "term": "Prostatic Diseases"
+    },
+    {
+     "id": "D052801",
+     "term": "Male Urogenital Diseases"
+    },
+    {
+     "id": "D012142",
+     "term": "Respiratory Tract Neoplasms"
+    },
+    {
+     "id": "D013899",
+     "term": "Thoracic Neoplasms"
+    },
+    {
+     "id": "D008171",
+     "term": "Lung Diseases"
+    },
+    {
+     "id": "D012140",
+     "term": "Respiratory Tract Diseases"
+    },
+    {
+     "id": "D018204",
+     "term": "Neoplasms, Connective and Soft Tissue"
+    },
+    {
+     "id": "D009370",
+     "term": "Neoplasms by Histologic Type"
+    },
+    {
+     "id": "D018358",
+     "term": "Neuroendocrine Tumors"
+    },
+    {
+     "id": "D017599",
+     "term": "Neuroectodermal Tumors"
+    },
+    {
+     "id": "D009373",
+     "term": "Neoplasms, Germ Cell and Embryonal"
+    },
+    {
+     "id": "D009380",
+     "term": "Neoplasms, Nerve Tissue"
+    },
+    {
+     "id": "D018326",
+     "term": "Nevi and Melanomas"
+    },
+    {
+     "id": "D012878",
+     "term": "Skin Neoplasms"
+    },
+    {
+     "id": "D000086982",
+     "term": "Blood-Borne Infections"
+    },
+    {
+     "id": "D003141",
+     "term": "Communicable Diseases"
+    },
+    {
+     "id": "D007239",
+     "term": "Infections"
+    },
+    {
+     "id": "D015229",
+     "term": "Sexually Transmitted Diseases, Viral"
+    },
+    {
+     "id": "D012749",
+     "term": "Sexually Transmitted Diseases"
+    },
+    {
+     "id": "D016180",
+     "term": "Lentivirus Infections"
+    },
+    {
+     "id": "D012192",
+     "term": "Retroviridae Infections"
+    },
+    {
+     "id": "D012327",
+     "term": "RNA Virus Infections"
+    },
+    {
+     "id": "D014777",
+     "term": "Virus Diseases"
+    },
+    {
+     "id": "D007153",
+     "term": "Immunologic Deficiency Syndromes"
+    },
+    {
+     "id": "D007154",
+     "term": "Immune System Diseases"
+    }
+   ],
+   "meshes": [
+    {
+     "id": "D001943",
+     "term": "Breast Neoplasms"
+    },
+    {
+     "id": "D011471",
+     "term": "Prostatic Neoplasms"
+    },
+    {
+     "id": "D008175",
+     "term": "Lung Neoplasms"
+    },
+    {
+     "id": "D012509",
+     "term": "Sarcoma"
+    },
+    {
+     "id": "D008545",
+     "term": "Melanoma"
+    },
+    {
+     "id": "D009369",
+     "term": "Neoplasms"
+    },
+    {
+     "id": "D015658",
+     "term": "HIV Infections"
+    },
+    {
+     "id": "D012871",
+     "term": "Skin Diseases"
+    }
+   ]
+  },
+  "miscInfoModule": {
+   "versionHolder": "2026-08-27"
+  }
+ },
+ "hasResults": false,
+ "protocolSection": {
+  "armsInterventionsModule": {
+   "armGroups": [
+    {
+     "description": "Patients",
+     "label": "Cohort 1"
+    },
+    {
+     "description": "Healthy Volunteers",
+     "label": "Cohort 2"
+    }
+   ]
+  },
+  "conditionsModule": {
+   "conditions": [
+    "Breast Cancer",
+    "Prostate Cancer",
+    "Lung Cancer",
+    "Sarcoma",
+    "Melanoma"
+   ],
+   "keywords": [
+    "Screening",
+    "Cancer",
+    "HIV Infection",
+    "Scans",
+    "Laboratory Tests",
+    "HIV",
+    "Skin Disorders"
+   ]
+  },
+  "contactsLocationsModule": {
+   "locations": [
+    {
+     "city": "Bethesda",
+     "country": "United States",
+     "facility": "National Institutes of Health Clinical Center",
+     "geoPoint": {
+      "lat": 38.98067,
+      "lon": -77.10026
+     },
+     "state": "Maryland",
+     "zip": "20892"
+    }
+   ],
+   "overallOfficials": [
+    {
+     "affiliation": "National Cancer Institute (NCI)",
+     "name": "James L Gulley, M.D.",
+     "role": "PRINCIPAL_INVESTIGATOR"
+    }
+   ]
+  },
+  "descriptionModule": {
+   "briefSummary": "The purpose of this protocol is to provide patients with adequate informed consent to understand that screening tests with minimal health risk will be performed to evaluate their eligibility for a research study. The protocol makes it clear that patients initial visit to the intramural clinical program may include screening studies that are not medically necessary for disease management, but are done purely for research purposes.\n\nPatients with a known or suspected diagnosis of cancer, HIV infection, skin disorder or immunodeficiency who are being considered for enrollment in a National Cancer Institute intramural clinical research protocol will participate in this consent protocol. It informs patients of screening tests and procedures involving minimal risk that are done for research purposes only, including blood tests, electrocardiogram, standard X-rays (e.g., chest X-ray), bone films, computed tomography (CT), magnetic resonance imaging (MRI), and nuclear medicine studies. It explains that other eligibility screens that are more invasive and involve greater risk, such as a biopsy, will require separate consent.\n\n...",
+   "detailedDescription": "Background:\n\nPatients and healthy volunteers who are being evaluated for NIH Intramural Research Program (IRP) protocols must be screened to determine whether they meet the eligibility criteria prior to enrollment.\n\nObjectives:\n\nEvaluate patient or healthy volunteer eligibility for participation in NIH IRP research protocols.\n\nCollect results of screening test for use on subsequent research protocols as baseline (e.g., pretreatment) values.\n\nCollect specific research samples required for the primary research protocol as part of a screening test or procedure in order to avoid from having to subject the patient to a painful procedure on multiple occasions.\n\nEligibility:\n\nPatients and healthy volunteers who are being evaluated for and treated on protocols within the NIH IRP.\n\nDesign:\n\nThis protocol is not a research study of an investigational drug or device.\n\nScreening tests and procedures that are required by the primary research protocols are conducted in order to establish eligibility for these protocols.\n\nIn some cases, specific research samples required for the primary research protocol may be collected during the screening process in order to avoid from having to subject the patient to a painful procedure on multiple occasions.\n\nTissues and biological fluids that are obtained during the screening process will be stored.\n\nOnce a patient or healthy volunteer completes the screening process and is either enrolled onto another NIH study or is returned to the care of their local physician they will be taken off study."
+  },
+  "designModule": {
+   "designInfo": {
+    "observationalModel": "COHORT",
+    "timePerspective": "PROSPECTIVE"
+   },
+   "enrollmentInfo": {
+    "count": 19522,
+    "type": "ACTUAL"
+   },
+   "studyType": "OBSERVATIONAL"
+  },
+  "eligibilityModule": {
+   "eligibilityCriteria": "* INCLUSION CRITERIA:\n* Patients and healthy volunteers who are being evaluated for protocols within the NIH Intramural Research Program (IRP). Note: Participants must be \\> 1 month of age.\n* All patients or their parent/guardians or Legally Authorized Representative (LAR) must sign a document of informed consent indicating their understanding of the research nature and the risks of the procedures that will be performed to assess eligibility for research protocols. NOTE: It is expected that healthy adult volunteers have the capacity to consent (i.e., a LAR may not be used).\n\nEXCLUSION CRITERIA:\n\nNone",
+   "healthyVolunteers": true,
+   "minimumAge": "1 Month",
+   "samplingMethod": "NON_PROBABILITY_SAMPLE",
+   "sex": "ALL",
+   "stdAges": [
+    "CHILD",
+    "ADULT",
+    "OLDER_ADULT"
+   ],
+   "studyPopulation": "Patients and healthy volunteers who are being evaluated for NIH Intramural Research Program (IRP) protocols must be screened to determine whether they meet the eligibility criteria prior to enrollment."
+  },
+  "identificationModule": {
+   "briefTitle": "Eligibility Screening for the NIH Intramural Research Program Clinical Protocols",
+   "nctId": "NCT00026754",
+   "officialTitle": "Eligibility Screening for the NIH Intramural Research Program Clinical Protocols",
+   "orgStudyIdInfo": {
+    "id": "010129"
+   },
+   "organization": {
+    "class": "NIH",
+    "fullName": "National Institutes of Health Clinical Center (CC)"
+   },
+   "secondaryIdInfos": [
+    {
+     "id": "01-C-0129"
+    }
+   ]
+  },
+  "ipdSharingStatementModule": {
+   "accessCriteria": "Clinical data will be made available via subscription to BTRIS and with the permission of the study PI.",
+   "description": "All IPD recorded in the medical record will be shared with intramural investigators upon request.",
+   "infoTypes": [
+    "STUDY_PROTOCOL",
+    "SAP",
+    "ICF"
+   ],
+   "ipdSharing": "YES",
+   "timeFrame": "Clinical data available during the study and indefinitely."
+  },
+  "outcomesModule": {
+   "primaryOutcomes": [
+    {
+     "description": "Tissue remaining from collections during the screening process, either for research eligibility or as clinically indicated may be stored for future research",
+     "measure": "Tissue for future research",
+     "timeFrame": "10 years"
+    },
+    {
+     "description": "Collect results of screening test for use on subsequent research protocols as baseline (e.g., pretreatment) values",
+     "measure": "Screening testing/results",
+     "timeFrame": "10 years"
+    },
+    {
+     "description": "Collect specific research samples required for the primary research protocol as part of a screening test or procedure in order to avoid from having to subject the patient to a painful procedure on multiple occasions",
+     "measure": "Research sample collection",
+     "timeFrame": "10 years"
+    },
+    {
+     "description": "Gather prospective information on the number of patients screened for a particular study and compare to those enrolled onto an interventional study or natural history study.",
+     "measure": "Numbers of screened patients and healthy volunteers",
+     "timeFrame": "10 years"
+    },
+    {
+     "description": "Evaluate patient eligibility for participation in NCI/CCR research protocols",
+     "measure": "Eligibility evaluations",
+     "timeFrame": "10 years"
+    }
+   ]
+  },
+  "oversightModule": {
+   "isFdaRegulatedDevice": false,
+   "isFdaRegulatedDrug": false
+  },
+  "referencesModule": {
+   "seeAlsoLinks": [
+    {
+     "label": "NIH Clinical Center Detailed Web Page",
+     "url": "https://clinicalstudies.info.nih.gov/cgi/detail.cgi?B_2001-C-0129.html"
+    }
+   ]
+  },
+  "sponsorCollaboratorsModule": {
+   "leadSponsor": {
+    "class": "NIH",
+    "name": "National Cancer Institute (NCI)"
+   },
+   "responsibleParty": {
+    "type": "SPONSOR"
+   }
+  },
+  "statusModule": {
+   "completionDateStruct": {
+    "date": "2024-11-29",
+    "type": "ACTUAL"
+   },
+   "expandedAccessInfo": {
+    "hasExpandedAccess": false
+   },
+   "lastUpdatePostDateStruct": {
+    "date": "2025-04-18",
+    "type": "ACTUAL"
+   },
+   "lastUpdateSubmitDate": "2025-04-17",
+   "overallStatus": "COMPLETED",
+   "primaryCompletionDateStruct": {
+    "date": "2024-11-29",
+    "type": "ACTUAL"
+   },
+   "startDateStruct": {
+    "date": "2004-01-14",
+    "type": "ACTUAL"
+   },
+   "statusVerifiedDate": "2025-04",
+   "studyFirstPostDateStruct": {
+    "date": "2001-11-15",
+    "type": "ESTIMATED"
+   },
+   "studyFirstSubmitDate": "2001-11-14",
+   "studyFirstSubmitQcDate": "2001-11-14"
+  }
+ }
+}
