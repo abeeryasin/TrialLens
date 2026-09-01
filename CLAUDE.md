@@ -50,6 +50,14 @@ Every substantive trial claim preserves source study, source field, the relevant
 - Code generating successfully isn't the finish line — run tests, type/lint checks, test actual behavior, inspect real output, verify against acceptance criteria.
 - For AI behavior: explicit evaluation cases (search/ranking/eligibility/change-detection), not qualitative inspection alone, built from the start.
 - Nothing is "done" because a file exists — real evidence only.
+- **No paid model call until a free test of the same path passes**, and
+  batch the paid questions that remain. Run `scripts/paid_preflight.py`
+  first; it refuses when the free suite is red and lists what is still
+  waiting on a paid answer. Bug #9 cost $0.13 to discover live and was
+  findable for $0 by an HTTP-level test written afterwards instead of first.
+- A test that calls an endpoint function directly is not testing the
+  endpoint — request binding and response validation are FastAPI's job, and
+  only an HTTP-level call exercises them.
 
 ## Current Status
 

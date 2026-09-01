@@ -10,14 +10,18 @@ database credentials stays green.
 
 Run: PYTHONPATH=. python3 -m pytest tests/test_ranking_real_data.py -v -s
 """
+import ast
 import os
 from collections import Counter
+from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
 import pytest
 
+from api import ranking_deterministic
 from api.ranking_deterministic import (
+    SCORER_COLUMNS,
     ResearcherPreferences,
     parse_age_to_years,
     parse_phases,
@@ -44,18 +48,79 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# Every column the five deterministic scorers read, plus the ones StudyDetail
+# requires to construct at all. Deliberately not `SELECT *`, and not even the
+# full StudyDetail column set.
+#
+# This fixture reads all 11,469 active rows, and it runs on every `pytest
+# tests/`. `SELECT *` moved 137 MB per run — 95 MB of it raw_json, which
+# StudyDetail drops on arrival. Naming the whole StudyDetail set would still
+# move 42 MB, most of it eligibility_criteria (16 MB), brief_summary (7 MB),
+# primary_outcomes (6 MB) and interventions (4.5 MB) — none of which any
+# deterministic scorer looks at. This list moves roughly 8 MB (measured
+# 2026-08-31), which matters against Neon's 5 GB/month egress allowance.
+#
+# test_fixture_fetches_every_column_the_scorers_read below fails if a scorer
+# starts reading a field that isn't here, so the saving can't quietly become
+# a lie.
+#
+# Imported, not redefined: api/ranking.py's candidate-selection stage reads
+# these same columns for thousands of rows on every search. Two copies would
+# drift, and a drifted copy means a scorer silently reading None.
+
+
 @pytest.fixture(scope="module")
 def trials():
     """Every active trial, as StudyDetail. Read-only."""
     conn = psycopg2.connect(DSN)
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM studies WHERE active_in_scope = true")
+            cur.execute(
+                f"SELECT {', '.join(SCORER_COLUMNS)} FROM studies "
+                f"WHERE active_in_scope = true"
+            )
             rows = cur.fetchall()
     finally:
         conn.close()
 
     return [StudyDetail(**row, conditions=[]) for row in rows]
+
+
+def _attributes_read_from_trials(module) -> set:
+    """Every `trial.<field>` / `study.<field>` the module reads, via AST.
+
+    Deliberately not a grep for a hand-written list of field names. A list
+    only catches the mistakes whoever wrote it already thought of, and the
+    whole risk here is the field nobody anticipated. Walking the syntax tree
+    finds every attribute access that exists, including ones added later by
+    someone who never read this file.
+    """
+    source = Path(module.__file__).read_text()
+    return {
+        node.attr
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id in {"trial", "study"}
+    }
+
+
+def test_fixture_fetches_every_column_the_scorers_read():
+    """Guards the narrowed fixture query above.
+
+    The fixture leaves most StudyDetail columns unfetched, so every trial it
+    builds reports them as None. A scorer that started reading one would go
+    on passing here while silently being tested against nothing at all —
+    which is bug #7 (eligibility_criteria never reaching the prompt) in a new
+    costume. Free: no database, no model, no network.
+    """
+    missing = _attributes_read_from_trials(ranking_deterministic) - set(SCORER_COLUMNS)
+    assert not missing, (
+        f"api/ranking_deterministic.py reads {sorted(missing)} off each trial, "
+        f"but the fixture query in this file doesn't fetch it — every trial "
+        f"would see None and these tests would pass while proving nothing. "
+        f"Add it to SCORER_COLUMNS and accept the extra egress."
+    )
 
 
 # A preference object that exercises every deterministic scorer's live path,

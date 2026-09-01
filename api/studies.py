@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from api.database import get_db, get_readonly_db
 from api.tracking import field_category
 from api.schemas import (
+    STUDY_DETAIL_COLUMNS,
     BatchUpsertResult,
     KnownDatesRequest,
     KnownDatesResponse,
@@ -128,7 +129,7 @@ def list_studies(
 @router.get("/{nct_id}", response_model=StudyDetail)
 def get_study(nct_id: str, conn=Depends(get_readonly_db)):
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM studies WHERE nct_id = %s", (nct_id,))
+        cur.execute(f"SELECT {STUDY_DETAIL_COLUMNS} FROM studies WHERE nct_id = %s", (nct_id,))
         study = cur.fetchone()
         if study is None:
             raise HTTPException(status_code=404, detail=f"No study with nct_id {nct_id}")
@@ -159,7 +160,14 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
     nct_ids = [r.nct_id for r in records]
 
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM studies WHERE nct_id = ANY(%s)", (nct_ids,))
+        # Only the columns the diff below actually compares. raw_json is not
+        # one of them and never has been, so `SELECT *` was pulling the whole
+        # stored CT.gov response across the wire on every cron write just to
+        # drop it — see STUDY_DETAIL_COLUMNS in api/schemas.py.
+        cur.execute(
+            f"SELECT nct_id, {', '.join(DIFF_FIELDS)} FROM studies WHERE nct_id = ANY(%s)",
+            (nct_ids,),
+        )
         existing = {row["nct_id"]: row for row in cur.fetchall()}
 
     def normalize(value):

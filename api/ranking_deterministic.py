@@ -81,7 +81,33 @@ class ResearcherPreferences(BaseModel):
     min_age_years: Optional[float] = None       # the patient population's age floor
     max_age_years: Optional[float] = None
     prior_treatment_context: Optional[str] = None
+    approach_context: Optional[str] = None   # mechanism/modality, e.g. "checkpoint inhibitors"
+    approach_types: Optional[List[str]] = None
+    # The same approach expressed as CT.gov interventionType tokens, so the
+    # obvious category mismatch ("surgical" vs a 100%-DRUG trial) can be
+    # settled in code for $0. See score_approach_category.
     raw_interest: str = ""
+
+
+# Every column the five scorers in this module read, plus the ones
+# StudyDetail needs to construct at all. One definition, used by both the
+# candidate query in api/ranking.py (which reads thousands of rows per
+# search) and the real-data test (which reads all of them) — a second copy
+# would drift, and drifting silently means a scorer reading None.
+#
+# tests/test_ranking_real_data.py asserts by AST that this list covers every
+# `trial.<field>` any scorer here touches.
+SCORER_COLUMNS = [
+    # required to build a StudyDetail
+    "nct_id", "brief_title", "overall_status", "last_update_post_date",
+    "active_in_scope", "fetched_at", "last_matched_at",
+    # read by the scorers themselves
+    "phase", "study_type",                  # score_phase_fit
+    "minimum_age", "maximum_age",           # score_age_range_fit
+    "enrollment_count", "enrollment_type",  # score_enrollment_feasibility
+    "locations",                            # score_sites_active
+    "interventions",                        # score_approach_category
+]                                           # overall_status also feeds score_status_recruiting
 
 
 # ============================================================================
@@ -511,4 +537,99 @@ def score_phase_fit(
         "phase",
         source_value,
         weight,
+    )
+
+
+# ============================================================================
+# Intervention category — the free half of the approach question
+# ============================================================================
+
+# Every interventionType CT.gov actually uses in this database, with counts
+# (11,420 active trials, measured 2026-08-31). Queried, not taken from the
+# docs — sec. 6. An earlier six-value shortlist (DRUG, BEHAVIORAL, PROCEDURE,
+# DEVICE, DIETARY_SUPPLEMENT, OTHER) would have left 2,022 trials' worth of
+# interventions unclassifiable: DIAGNOSTIC_TEST, RADIATION, BIOLOGICAL,
+# COMBINATION_PRODUCT and GENETIC are all real and all missing from it.
+INTERVENTION_TYPES = {
+    "DRUG": 9433, "OTHER": 3939, "BEHAVIORAL": 3475, "PROCEDURE": 2031,
+    "DEVICE": 1037, "DIETARY_SUPPLEMENT": 763, "DIAGNOSTIC_TEST": 625,
+    "RADIATION": 618, "BIOLOGICAL": 575, "COMBINATION_PRODUCT": 136,
+    "GENETIC": 68,
+}
+
+# OTHER is 3,939 interventions and means nothing in particular. Treating it as
+# a category that can *conflict* with a researcher's stated approach would
+# manufacture false no_matches on a third of the database, so a trial carrying
+# it is never ruled out on category grounds.
+_UNINFORMATIVE_TYPES = {"OTHER"}
+
+
+def trial_intervention_types(trial: StudyDetail) -> Set[str]:
+    """The distinct interventionType values recorded for this trial."""
+    return {
+        (i.type or "").strip().upper()
+        for i in (trial.interventions or [])
+        if (i.type or "").strip()
+    }
+
+
+def score_approach_category(
+    trial: StudyDetail, prefs: ResearcherPreferences, weight: float
+) -> Optional[FitSignal]:
+    """A `no_match` on approach when the *categories* cannot possibly agree.
+
+    Returns None when the answer needs judgment — that is the model's job,
+    and this deliberately does not attempt it.
+
+    CT.gov records `interventionType` as structured data, so "the researcher
+    follows surgical approaches, this trial is 100% DRUG" is a fact, not an
+    interpretation, and costs nothing to establish. What it cannot do is tell
+    a GLP-1 agonist from an SGLT2 inhibitor — both are DRUG. So this catches
+    the obvious category mismatch for $0 and leaves the fine distinction to
+    the paid call, exactly as five of the eight signals were already moved
+    into code.
+
+    Two honesty constraints, both from the real distribution:
+      - **985 of 11,420 trials record no interventions at all.** Those must
+        return None (ask the model), never `no_match` — absent data is not
+        evidence against a trial (sec. 2).
+      - A trial tagged OTHER is never ruled out, because OTHER carries no
+        category information and appears on 3,939 interventions.
+    """
+    if not prefs.approach_types:
+        return None                      # researcher named no approach category
+
+    trial_types = trial_intervention_types(trial)
+    if not trial_types:
+        return None                      # 985 trials — a data gap, not a mismatch
+
+    wanted = {t.strip().upper() for t in prefs.approach_types}
+    if trial_types & wanted:
+        return None                      # compatible category; the model refines
+    if trial_types & _UNINFORMATIVE_TYPES:
+        return None                      # OTHER tells us nothing either way
+
+    # Disjoint, and both sides are informative.
+    #
+    # Only ONE side of this comparison is a fact. The trial's types come from
+    # the registry; the researcher's come from a model reading their prose,
+    # so a wrong or under-listed mapping silently rules trials out. The
+    # evidence therefore names both sides and says which is which — a
+    # deterministic verdict resting on an inferred input must disclose the
+    # inference, or it claims more certainty than it has (sec. 3). The
+    # mapping is also surfaced in the response's `preferences`, so the
+    # researcher can see it and correct it.
+    return _signal(
+        "approach_match",
+        "no_match",
+        f"This trial's interventions are registered as "
+        f"{', '.join(sorted(trial_types)).lower()} — no overlap with the "
+        f"{', '.join(sorted(wanted)).lower()} categories your interest was "
+        f"read as. The trial's side is the registry's own value; your side "
+        f"was interpreted from what you wrote, so check it under "
+        f"“how your interest was read” if this looks wrong.",
+        "interventions[].type vs interpreted approach_types",
+        f"{', '.join(sorted(trial_types))} vs {', '.join(sorted(wanted))}",
+        weight,
+        confidence="high",
     )

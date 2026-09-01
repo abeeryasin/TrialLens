@@ -78,6 +78,23 @@ class StudyDetail(StudySummary):
     locations: List[TrialLocation] = []
 
 
+# Every column a StudyDetail (or TrialDetail — same DB-backed field set)
+# needs, and nothing else. Use this instead of `SELECT *`.
+#
+# `SELECT *` also fetches raw_json, the untouched CT.gov response. Nothing
+# reads it — Pydantic silently drops the extra key — but it is 8.7 KB per
+# row and 95 MB of the table's 137 MB (measured 2026-08-31, 11,469 active
+# trials), so every full-table read spent 69% of its bytes on a column that
+# was thrown away on arrival. That is billable egress on Neon's free tier,
+# which is 5 GB/month; see docs/decisions.md.
+#
+# Derived from the model rather than typed out, so a new field can't drift
+# out of sync with the query that has to fetch it.
+STUDY_DETAIL_COLUMNS = ", ".join(
+    name for name in StudyDetail.model_fields if name != "conditions"
+)
+
+
 class StudyList(BaseModel):
     total: int
     limit: int

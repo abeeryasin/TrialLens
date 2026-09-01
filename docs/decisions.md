@@ -1284,3 +1284,432 @@ informative assertions are the score gap between the first and second
 result, which measures whether the system discriminates at all, and the
 coverage fraction. Until that is settled the suite's pass rate is not a
 regression baseline and must not be quoted as one.
+
+## 2026-08-31 — `SELECT *` was spending the Neon transfer budget on a column nothing reads
+
+Neon warned that the project had used 84% (4.2 GB) of its 5 GB monthly
+public network transfer. Nothing about the app's traffic explained it —
+the frontend is one user, the cron runs four times a day.
+
+The cause was `SELECT *`. `studies.raw_json` holds the untouched CT.gov
+response, ~22 KB per row on the wire (249 MB across 11,469 active
+trials). Nothing has ever read it — `StudyDetail` has no such field, so
+Pydantic silently dropped it on arrival. Four queries fetched it anyway:
+`fetch_trials_for_condition`, `get_study`, `discover_trial`, and the
+diff read inside `POST /studies/batch`.
+
+The expensive one was `tests/test_ranking_real_data.py`, which reads
+every active row and runs on every `pytest tests/`. Measured wire cost
+(`sum(octet_length(col::text))`, which is what psycopg2 actually
+receives):
+
+| query shape | per full-table run |
+|---|---|
+| `SELECT *` (before) | **315 MB** |
+| every `StudyDetail` column | 66 MB |
+| only what the scorers read (now) | **16 MB** |
+
+Fourteen runs of the free test suite is 4.4 GB. That is the entire
+allowance, spent on a column that was discarded the moment it arrived.
+
+Two fixes:
+
+1. `STUDY_DETAIL_COLUMNS` in `api/schemas.py`, derived from
+   `StudyDetail.model_fields` so it cannot drift as fields are added.
+   Every former `SELECT *` read now names it. The batch diff selects
+   `DIFF_FIELDS` instead, which is all it ever compared.
+2. The real-data test narrows further, to the columns the five
+   deterministic scorers actually read. It skips `eligibility_criteria`
+   (16 MB), `brief_summary`, `interventions` and `primary_outcomes` —
+   none of which any scorer touches.
+
+The narrowing in (2) creates a trap: an unfetched column arrives as
+`None`, so a scorer that started reading one would be tested against
+nothing while still passing — bug #7 (`eligibility_criteria` never
+reaching the prompt) in a new costume.
+
+`test_fixture_fetches_every_column_the_scorers_read` guards it by walking
+`api/ranking_deterministic.py`'s **AST** for every `trial.<field>` access
+and asserting the fixture query fetches all of them. The first version
+grepped for a hand-written list of omitted names; that was replaced
+because a hand-written list only catches the mistakes whoever wrote it
+already anticipated, and the entire risk here is the field nobody thought
+of. The AST version needs no list, catches fields added later by someone
+who never read the test, and fires in both directions — a scorer reading
+a new field, or someone trimming a column out of the query. Both were
+demonstrated failing before it was accepted. Free: no database, no model,
+no network.
+
+Side effect worth noting as corroboration: the free suite's wall time
+fell from 79s to 10s. The tests were mostly waiting on the network.
+
+**The rule: never `SELECT *` against `studies`.** The table is 69%
+a column no query needs.
+
+## 2026-08-31 — `raw_json` stays; the storage tradeoff is real but not due yet
+
+Questioned during the Neon transfer investigation, since `raw_json` is 52%
+of the `studies` table (95 MB on disk, 249 MB on the wire) against a
+**0.5 GB per-project storage cap** on Neon's free plan, and no query in the
+codebase reads it. An earlier note in this session called it a column
+"nothing reads." That was wrong in the way that matters.
+
+`decisions.md` records it earning its keep three times, each a schema
+backfill run from stored raw records with **no CT.gov re-fetch**:
+narrative fields (11,490 rows), `enrollment_type` (11,482 rows, ~60s),
+`maximum_age` (5,712 rows, ~28s).
+
+Speed is the weaker argument. The real one: **a re-fetch is not a
+re-read.** CT.gov's record today is not the record that was stored, so
+backfilling from a re-fetch would silently mix current values into
+historical rows and make the diff history in `study_changes` a lie.
+`raw_json` is what makes a backfill *honest*, not merely fast. CLAUDE.md
+sec. 4 is right.
+
+Confirmed again while scoping the alerting features below: 1,050 stored
+trials already carry a `resultsSection` and 4,433 a `referencesModule`
+(publication links), neither ever extracted into a column. Both are
+backfillable today for free. That is the fourth payoff.
+
+**Decision: keep it.** Current size 206 MB = 41% of the cap; the wall
+arrives around ~28,000 trials. Revisit then, and the option at that point
+is to *move* it (object storage, or keep only the newest raw record per
+trial) — not to drop it.
+
+## 2026-08-31 — Feature order for post-Step-7 work
+
+Three features discussed with the user. Agreed order, with reasoning:
+
+1. **Advanced filtering / noise reduction** (alert on
+   RECRUITING→TERMINATED, phase change, new site, new results or
+   publication links). First because it is almost entirely deterministic
+   over data already stored — `study_changes` keeps old and new values,
+   and `DIFF_FIELDS` already covers `overall_status`, `phase`,
+   `enrollment_count`, `eligibility_criteria`, `locations`. Costs no API
+   spend. "New site near me" stays at city/country level; real geocoding
+   is scope creep for no extra insight.
+2. **Curated summary of what changed.** Second, because it is the readable
+   summary *of* (1)'s categories — building it first means writing it
+   twice. Mostly counting ("2 opened, 1 completed, 7 amendments"); the
+   model earns its place only for turning a ~4,000-character
+   `eligibility_criteria` diff into one plain sentence. ~7 such changes in
+   4 days, so a few cents.
+3. **Per-user accounts — deferred.** Auth is undifferentiated work that
+   demonstrates none of the skills this project was chosen to practise
+   (2026-08-25), and it *hurts* the portfolio: a reviewer forced to sign
+   up before seeing anything usually leaves. If per-user relevance is
+   wanted, a **watchlist with no login** gives the interesting half — the
+   many-to-many modelling that (1) needs anyway — without the boilerplate.
+
+Grounding for (1): four days of Monitor produced 123 changes across 100
+trials — 7 `overall_status` transitions (incl. RECRUITING →
+ACTIVE_NOT_RECRUITING, ACTIVE_NOT_RECRUITING → COMPLETED,
+NOT_YET_RECRUITING → RECRUITING), 7 `eligibility_criteria` amendments, 3
+`enrollment_count` moves. The substantive signal is real and already on
+disk; the features above are about surfacing it, not producing it.
+
+## 2026-08-31 — Unit 4 verified; two more bugs, one fixed and one open
+
+Building `frontend/pages/4_Ranking.py` and actually running it. Everything
+below was found by running the thing, not by reading it — the page had
+"existed" and compiled for an hour before any of this surfaced.
+
+**Found free, before spending anything:**
+- A `SyntaxError`: Python 3.9 forbids a backslash inside an f-string
+  expression. The file had never been executed.
+- `1 things you didn't specify` — pluralisation, visible to the user.
+
+Free verification used `streamlit.testing.v1.AppTest`, which runs a page
+headlessly and reports exceptions. Cheaper and faster than the Playwright
+approach used for earlier pages, and it caught everything above. Also
+validated all 33 response keys the page reads against the real Pydantic
+models by AST — the previous ranking page was deleted for expecting
+`studies` where `/studies` returns `results`, and that check is free.
+
+**Bug #9 — `POST /rank` had never once returned successfully over HTTP.**
+The endpoint passed a `ResearcherPreferences` (scoring module) into
+`preferences`, typed `ResearcherPreferencesOut` (response schema). FastAPI
+validates the *outgoing* response against `response_model`, so every
+request raised a 500 — **after all 21 model calls had been billed**. Found
+by spending $0.13 on a live 20-trial run that threw the entire result away.
+
+This is bug #1's twin: the tests all called scoring functions directly, so
+nothing exercised request binding or response validation. New free file
+`tests/test_ranking_endpoint.py` calls the endpoint over HTTP with the
+model layer stubbed. Proven to catch it: reintroducing the bug fails the
+test, restoring the fix passes. **A test that calls the endpoint function
+directly is not testing the endpoint.**
+
+The response cache paid for itself here — the re-run after the fix replayed
+all 21 responses for **$0.0000**. The bug cost $0.13 once, not twice.
+
+**Bug #10 — `approach_match` cannot ever score. Found, NOT fixed.**
+Across all 20 real trials, `approach_match` (10% weight) returned `unknown`
+20/20, with evidence "Researcher named no specific approach" — for the
+interest *"...testing immunotherapy or targeted agents in adults."*
+
+`build_semantic_user_content()` sends the model only `condition_terms` and
+`prior_treatment_context`. `raw_interest` appears solely as a *fallback*
+when `condition_terms` is empty. Since the parse populated condition terms,
+the words "immunotherapy or targeted agents" never reached the model.
+
+This is bug #7 exactly — a weighted signal whose input is never plumbed
+into the payload — recurring inside the very function whose docstring
+describes bug #7. The free payload test asserts `eligibility_criteria` is
+present but nothing asserts the approach is.
+
+Worse, the system contradicts itself: `find_unspecified()` correctly did
+*not* ask about approach (`_mentions_an_approach` matched "immunotherap"),
+so it knows the researcher named one, while the signal says they didn't.
+
+Consequence, visible in the real run: the top 5 were intermittent fasting,
+ketorolac/pregabalin, electrosurgery, tDCS, and broccoli microgreens — not
+one an immunotherapy or targeted agent. Half the stated interest was
+silently discarded. **Not fixed here because the fix changes the prompt,
+which invalidates the cache and costs real money to re-verify. The user
+decides.**
+
+**Also observed, corroborating two open questions:**
+- `sites_active` returned `partial` 15/20 — open question #4 confirmed on
+  real data, not just in aggregate.
+- Real scores spread 0.92 → 0.27, against the synthetic harness's flat
+  1.00. Further evidence the synthetic fixtures are far easier than reality.
+- `fetch_trials_for_condition` orders by `last_matched_at DESC LIMIT 20`,
+  so `/rank` scores *the 20 most recently matched* trials, not the best 20
+  of 11,474. For a researcher that is "score these 20," not "search." Worth
+  deciding before the page is called finished.
+
+`Home.py` flipped Ranking to `"live"` only after the page rendered a real
+ranking end to end. 108 free tests pass.
+
+## 2026-08-31 — Researched against the literature: what TrialGPT settles
+
+Searched rather than assumed, prompted by the user asking whether any of
+this is needed. The reference system is **TrialGPT** (NIH/NLM, *Nature
+Communications* 2024) — the same problem, done properly.
+
+**What it validates.** TrialGPT is three modules: Retrieval → Matching →
+Ranking. Retrieval recalls **>90% of relevant trials using <6% of the
+collection**. The two-stage design built today (deterministic shortlist,
+then model on the shortlist) is the same shape, arrived at independently
+from CLAUDE.md sec. 5. Keep it.
+
+**What it corrects — the label set.** TrialGPT labels each criterion
+`{Included, Not included, Not enough information, Not applicable}`.
+**"Not enough information" and "not applicable" are deliberately separate.**
+TrialLens collapses both into `unknown`. That matters: 26.9% of TrialGPT's
+residual errors were exactly this confusion — the second-largest error
+class. And it is bug #3's lesson again ("can't tell" and "doesn't fit"
+must not share an encoding), one level deeper: *"the trial has no phase
+recorded"* and *"phase doesn't apply to an observational study"* are
+currently indistinguishable here, and only one of them is a data gap.
+
+**What it corrects — the benchmark in `step7_implementation_guide.md`.**
+That file records published systems at precision/recall ~0.32-0.45 and the
+2026-08-31 entry above leans on it to argue the synthetic 1.00 is
+implausible. TrialGPT reports **NDCG@10 0.7275, P@10 0.6724**, and
+criterion accuracy 0.873 against expert 0.887-0.900. The 0.32-0.45 figure
+is not the current state of the art. The conclusion (synthetic fixtures are
+far easier than reality) still stands on its own evidence — 2-3 trials per
+scenario, no near-misses — but it should not be argued from that number.
+
+**Other findings worth acting on:**
+- **Chain of thought, ordered.** TrialGPT generates the rationale *first*,
+  then the classification. Check whether `SEMANTIC_SCHEMA` puts `evidence`
+  before `status`; if status comes first the model commits, then
+  rationalises, and the evidence stops being load-bearing.
+- **Aggregation.** Linear (six percentages) plus an LLM-generated
+  relevance/eligibility pair; combining both beat either. TrialLens uses a
+  single weighted average.
+- **Explanations are the measurable part.** 87.8% of TrialGPT's
+  explanations were rated correct, sentence-location F1 88.6%, close to
+  human experts. This is the number a researcher's judgement can actually
+  produce, and it is per-criterion, not per-trial.
+- **LLM-as-judge biases** (2026 literature): verbosity bias (longer text
+  scores higher regardless of quality), position bias, and scoring bias
+  from minor prompt perturbations. Relevant here because `confidence` and
+  `evidence` are both model-generated — length must not become a proxy for
+  certainty.
+- **Do we need the LLM at all?** For screening, LLMs beat the Cochrane
+  highly sensitive filter (sensitivity 100% vs 99.5%, specificity 85.9% vs
+  67.8%). But the local evidence is better than the citation: in today's
+  real 20-trial run `condition_is_subject` returned match 9 / partial 9 /
+  no_match 2 — real variance, on the one question a `condition ILIKE` tag
+  provably cannot answer. That signal earns its cost. `approach_match`
+  has not yet earned anything, because of bug #10.
+
+## 2026-08-31 — The three process fixes, implemented as code not intentions
+
+1. **No paid call until a free test of the same path passes**, and
+2. **batch the paid questions** — both enforced by `scripts/paid_preflight.py`,
+   which runs the free suite, exits non-zero and refuses if it is red, and
+   otherwise prints every question still waiting on a paid answer so they
+   are asked in one run instead of three. Proven in both directions: exit 0
+   green, exit 1 with a refusal when the suite fails. Also written into
+   CLAUDE.md sec. 7, since a rule that lives only in a script is a rule
+   nobody reads first.
+3. **The free payload guard for `approach`** — already built as
+   `TestApproachReachesTheModel`, including a structural assertion that
+   elicitation and the payload can never again disagree about whether an
+   approach was named. That disagreement *was* bug #10.
+
+## 2026-08-31 — Intervention category: the free half of the approach question
+
+User's proposal, and a good one: CT.gov records `interventionType` as
+structured data, so "the researcher follows surgical approaches, this trial
+is 100% DRUG" is a fact, not an interpretation. It cannot tell a GLP-1 from
+an SGLT2 (both DRUG) — so it narrows what needs the paid call rather than
+replacing it, exactly as five of eight signals were already moved to code.
+
+**Querying the real distribution first (sec. 6) changed the design twice:**
+
+1. **There are 11 intervention types, not 6.** The proposal named DRUG,
+   BEHAVIORAL, PROCEDURE, DEVICE, DIETARY_SUPPLEMENT, OTHER. The database
+   also holds DIAGNOSTIC_TEST (625), RADIATION (618), BIOLOGICAL (575),
+   COMBINATION_PRODUCT (136) and GENETIC (68) — 2,022 interventions that
+   the shorter list would have left unclassifiable.
+2. **985 of 11,420 active trials record no interventions at all**, and
+   OTHER appears on 3,939. Both must *defer to the model*, never return
+   `no_match`: absent data is not evidence against a trial (sec. 2), and
+   treating the contentless OTHER as a conflicting category would
+   manufacture false mismatches across a third of the database.
+
+Implemented as `score_approach_category`, which returns a `no_match`
+FitSignal **only** when both sides are informative and disjoint, and `None`
+— defer — otherwise. Used in two places: candidate selection, where it
+removes trials before any model call is spent on them, and `rank_one_trial`,
+where a decisive verdict overrides the model's `approach_match` (a stored
+`interventionType` is a fact; a model's reading of it is an inference).
+
+Measured on the real 5,371-trial breast cancer pool:
+
+| researcher's approach | ruled out for $0 |
+|---|---|
+| surgical / procedure | 3,373 (63%) |
+| behavioural / lifestyle | 3,398 (63%) |
+| immunotherapy (DRUG+BIOLOGICAL) | 1,507 (28%) |
+
+Cost: stage-one transfer rose 10.0 → 12.6 MB per search for the
+`interventions` column. The AST guard in `test_ranking_real_data.py`
+demanded that column automatically the moment a scorer read it — the guard
+working as designed, on its first real opportunity.
+
+## 2026-08-31 — `not_applicable` added, but it belongs to the model, not the code
+
+Added to `_STATUS_ENUM` and `FitSignal` after the TrialGPT research, and
+scored identically to `unknown` (excluded from numerator and denominator)
+while reading very differently to a researcher.
+
+**Then a negative finding worth recording, because it stops this being
+cargo-culted:** there is no clean use for it in any of the *deterministic*
+scorers. TrialGPT's `not_applicable` labels individual eligibility criteria
+within a trial ("must not be pregnant" is not applicable to a male
+patient). TrialLens's eight signals are trial-level preferences that always
+apply — a trial always has a status, always has or lacks a phase, always
+has an age band. Where "the trial doesn't record it" is the answer, that is
+a data gap, which is `unknown` by definition.
+
+It does have a real use in the three **model-judged** signals: prior
+treatment on a prevention trial in healthy volunteers with no treatment
+history to have; approach on a trial registering no interventions. So the
+label is defined in the schema and taught in the prompt, with an explicit
+tie-break — *if unsure which applies, use `unknown`, because calling a
+question meaningless is a stronger claim than admitting you cannot answer
+it*. No deterministic scorer was forced to emit it.
+
+## 2026-08-31 — Evidence before status in the output schema
+
+`_signal_schema_fields` emitted `{name}_status` before `{name}_evidence`.
+JSON is generated in order, so the model committed to a verdict and then
+wrote a justification for it — the evidence was decoration, not reasoning,
+which quietly undercuts sec. 3. TrialGPT generates the rationale first and
+classifies from it, reporting 87.8% explanation accuracy. Reordered to
+evidence → status → confidence, and the prompt now says so explicitly.
+Also added an anti-verbosity instruction, since the 2026 LLM-as-judge
+literature reports length inflating perceived quality and both `evidence`
+and `confidence` here are model-generated.
+
+## 2026-09-01 — Two honesty repairs found by re-reading what the UI claims
+
+**1. A deterministic verdict resting on an inferred input must disclose it.**
+`score_approach_category` rules out up to 63% of a condition's trials and
+its evidence said the categories were "read from the registry's own
+intervention types, not inferred." Half true: the *trial's* types are
+registry fact, but the *researcher's* (`approach_types`) come from a model
+reading their prose. A wrong or under-listed mapping silently removes
+trials while the evidence claims registry certainty. The evidence now names
+both sides and says which is which, `source_value` carries both, and the
+mapping is surfaced in the page's "how your interest was read" panel with
+an explicit warning that trials outside those types are dropped — because
+that panel is the only place a bad mapping could ever be caught.
+
+**2. The page was inferring a cause it had not checked.** An `unknown`
+signal has two very different causes — "you didn't say" (fixable in a
+sentence) and "the record doesn't carry it" (64% of trials have no phase;
+no answer helps) — and they rendered identically. The API already knows
+which is which: `unspecified[].signals_unscored` names exactly the signals
+a researcher's answer would recover, so no schema change was needed.
+
+But the first attempt wrote *"unscored because the trial's record doesn't
+carry it"* for the non-elicitable case, which is an assertion about the
+record the page never inspected — the model may return `unknown` for other
+reasons entirely. Corrected to state only what is actually known:
+*"answering below would recover it"* versus *"nothing you could add would
+change it"*. The signal's own evidence line, directly below, carries the
+real reason. Inventing a cause to sound more helpful is the same failure
+as inventing a study fact (sec. 2), one level down.
+
+## 2026-09-01 — Credits exhausted mid-batch; what was learned before they ran out
+
+The Anthropic account ran out of usage credits during the batched paid run.
+Paid verification stops here. Two of the five questions were answered first.
+
+**1. Bug #10 is fixed, verified on real output.** `approach_match` went from
+`unknown` 20/20 to **`match` 5/5 at high confidence**, with specific and
+correct evidence — inavolisib named as a PI3Kalpha inhibitor, durvalumab as
+anti-PD-L1, Dato-DXd and HER3-DXd as antibody-drug conjugates. The parse
+mapped "immunotherapy or targeted agents" to
+`DRUG, BIOLOGICAL, COMBINATION_PRODUCT, GENETIC` — generous, as the prompt
+asks, so it will not wrongly rule trials out.
+
+**2. The $0.006-per-call figure was wrong, and every projection built on it
+was wrong.** Measured on the canary: **$0.1142 for 6 calls ≈ $0.019/call**,
+~$0.015 marginal once the prompt cache is warm. The old number came from
+this repo's own notes, measured against **synthetic fixtures**; real trial
+records carry up to 2,500 characters of eligibility criteria and cost far
+more. Corrected figures:
+
+| | claimed | measured |
+|---|---|---|
+| 20-trial search | $0.13 | **~$0.32** |
+| monthly re-ranking (271 trials) | $1.62 | **~$4.07** |
+
+That makes the Haiku 4.5 comparison (5× cheaper) the decisive open question
+for whether this feature is affordable at all — and it is now blocked.
+
+**Caught before spending, by reading the API reference rather than
+assuming:** `output_config.effort` is an Opus-tier parameter and is
+**rejected on Haiku 4.5**. Every call in the Haiku comparison would have
+failed. `_structured_call` now sends `effort` only to models that accept it
+(`supports_effort`), and the cache key reflects its absence.
+
+**Graceful failure, found the hard way.** `parse_researcher_interest` runs
+before the per-trial loop and outside its `try`, so an unusable key escaped
+as a raw 500 and a stack trace. Two fixes, both free and tested:
+  - an `anthropic.APIError` from the parse now returns **503** saying nothing
+    was scored and that the tracked data and Monitor feed are unaffected;
+  - **every trial failing is an outage, not a ranking with no results** —
+    it returns 503 rather than a 200 with an empty list, which would render
+    as "no trials matched" and is a false statement about the data (sec. 2).
+
+**The demo survives.** 71 cached responses; the canary request replays at
+**$0.0000** with no credits at all, returning five real trials with real
+scores. Ranking remains demonstrable — for that exact interest, condition
+and limit — with an empty account. `.ranking_cache/` is gitignored, so it
+does not travel with a clone; guard it.
+
+**Still unanswered, blocked on credits:** Haiku vs Opus quality; the
+prior-treatment case against real criteria text; whether effort=high changes
+ordering; and the researcher-judgment protocol in
+`docs/verify_ranking_results.md`, which needs ~$0.32 of fresh ranking (or can
+run against the 5 cached trials for $0).

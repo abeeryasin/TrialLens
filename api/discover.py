@@ -26,7 +26,12 @@ import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.database import get_readonly_db
-from api.schemas import DiscoverResponse, DiscoverResult, TrialDetail
+from api.schemas import (
+    STUDY_DETAIL_COLUMNS,
+    DiscoverResponse,
+    DiscoverResult,
+    TrialDetail,
+)
 from api.tracking import drop_reason
 from ctgov_client import ACTIVE_STATUSES, extract_fields, fetch_pages, fetch_single_study
 
@@ -160,7 +165,7 @@ def discover_trial(nct_id: str, conn=Depends(get_readonly_db)):
     clicked into from a live Discover result is exactly the case this
     exists for — it's a real, current trial, just not one we track."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM studies WHERE nct_id = %s", (nct_id,))
+        cur.execute(f"SELECT {STUDY_DETAIL_COLUMNS} FROM studies WHERE nct_id = %s", (nct_id,))
         study = cur.fetchone()
         if study is not None:
             cur.execute(

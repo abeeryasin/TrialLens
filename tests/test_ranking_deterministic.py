@@ -12,16 +12,18 @@ from datetime import date, datetime
 import pytest
 
 from api.ranking_deterministic import (
+    INTERVENTION_TYPES,
     ResearcherPreferences,
     parse_age_to_years,
     parse_phases,
     score_age_range_fit,
+    score_approach_category,
     score_enrollment_feasibility,
     score_phase_fit,
     score_sites_active,
     score_status_recruiting,
 )
-from api.schemas import StudyDetail, TrialLocation
+from api.schemas import Intervention, StudyDetail, TrialLocation
 
 W = 0.20  # arbitrary weight; scorers must pass it through unchanged
 
@@ -425,3 +427,115 @@ class TestEvidenceContract:
         first = [(s.name, s.status, s.evidence) for s in self._all_signals()]
         for _ in range(5):
             assert [(s.name, s.status, s.evidence) for s in self._all_signals()] == first
+
+
+class TestApproachCategory:
+    """The free half of the approach question, from CT.gov's structured
+    interventionType. Catches the obvious category mismatch for $0; returns
+    None (defer to the model) for everything that needs judgment.
+    """
+
+    def _trial(self, types):
+        return make_trial(interventions=[
+            Intervention(type=t, name=f"{t.lower()} thing") for t in types
+        ])
+
+    def test_disjoint_categories_are_a_deterministic_no_match(self):
+        signal = score_approach_category(
+            self._trial(["DRUG"]),
+            ResearcherPreferences(approach_types=["PROCEDURE"]),
+            0.10,
+        )
+        assert signal is not None
+        assert signal.status == "no_match"
+        assert signal.name == "approach_match"
+        assert signal.confidence == "high"
+        # sec. 3: the stored value, not a paraphrase — and both sides of the
+        # comparison, since only one of them is registry fact.
+        assert "DRUG" in signal.source_value
+        assert "interventions[].type" in signal.source_field
+
+    def test_overlapping_categories_defer_to_the_model(self):
+        """DRUG vs DRUG cannot separate a GLP-1 from an SGLT2. That is
+        exactly the judgment the paid call exists for — answering it here
+        would be guessing with a confident face."""
+        assert score_approach_category(
+            self._trial(["DRUG"]),
+            ResearcherPreferences(approach_types=["DRUG", "BIOLOGICAL"]),
+            0.10,
+        ) is None
+
+    def test_a_trial_with_no_interventions_is_never_ruled_out(self):
+        """985 of 11,420 active trials record no interventions. Absent data
+        is not evidence against a trial (sec. 2) — it must defer, never
+        return no_match."""
+        assert score_approach_category(
+            self._trial([]),
+            ResearcherPreferences(approach_types=["PROCEDURE"]),
+            0.10,
+        ) is None
+
+    def test_other_never_produces_a_mismatch(self):
+        """OTHER appears on 3,939 interventions and carries no category
+        information. Letting it conflict would manufacture false no_matches
+        across a third of the database."""
+        assert score_approach_category(
+            self._trial(["OTHER"]),
+            ResearcherPreferences(approach_types=["PROCEDURE"]),
+            0.10,
+        ) is None
+
+    def test_no_stated_approach_defers(self):
+        assert score_approach_category(
+            self._trial(["DRUG"]), ResearcherPreferences(), 0.10
+        ) is None
+
+    def test_mixed_trial_matching_one_wanted_type_defers(self):
+        """A trial that is part DRUG part PROCEDURE is not a category
+        mismatch for a surgical researcher — 1,732 trials carry more than
+        one type."""
+        assert score_approach_category(
+            self._trial(["DRUG", "PROCEDURE"]),
+            ResearcherPreferences(approach_types=["PROCEDURE"]),
+            0.10,
+        ) is None
+
+    def test_case_and_whitespace_do_not_break_the_comparison(self):
+        assert score_approach_category(
+            self._trial([" drug "]),
+            ResearcherPreferences(approach_types=["drug"]),
+            0.10,
+        ) is None
+
+    def test_every_type_the_parse_may_emit_is_a_real_ctgov_value(self):
+        """The parse's enum and the database's vocabulary must be the same
+        list. A type the parse can emit but the data never uses would
+        silently never match anything."""
+        from api.ranking import INTEREST_PARSE_SCHEMA
+
+        allowed = set(INTEREST_PARSE_SCHEMA["properties"]["approach_types"]["items"]["enum"])
+        assert allowed == set(INTERVENTION_TYPES)
+
+    def test_the_mismatch_discloses_that_the_researcher_side_was_inferred(self):
+        """The third honesty guard.
+
+        The trial's intervention types come from the registry. The
+        researcher's come from a model reading their prose. A deterministic
+        `no_match` that removes thousands of trials rests on both, so the
+        evidence must not present the whole comparison as registry fact —
+        an earlier version said "not inferred", which was half true and
+        therefore misleading (sec. 3).
+        """
+        signal = score_approach_category(
+            self._trial(["DRUG"]),
+            ResearcherPreferences(approach_types=["PROCEDURE"]),
+            0.10,
+        )
+        # Both sides named, and which is which is stated.
+        assert "drug" in signal.evidence.lower()
+        assert "procedure" in signal.evidence.lower()
+        assert "interpreted" in signal.evidence.lower()
+        assert "registry" in signal.evidence.lower()
+        # The source value carries both halves, not just the certain one.
+        assert "DRUG" in signal.source_value and "PROCEDURE" in signal.source_value
+        assert "not inferred" not in signal.evidence.lower()
