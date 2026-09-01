@@ -167,8 +167,24 @@ if not is_live:
                     f"fields TrialLens doesn't store — marked below."
                 )
 
-            for amendment in amendments:
-                st.markdown(f"##### Posted {format_posted_on(amendment['posted_on'])}")
+            for position, amendment in enumerate(amendments):
+                posted = format_posted_on(amendment["posted_on"])
+
+                # An amendment we can't see gets ONE line, not a heading, a
+                # caption and an info box. It was previously given more
+                # visual weight than an amendment with four real field
+                # changes — which inverts the hierarchy, since the whole
+                # point of this page is what actually moved. Still never
+                # silent: CT.gov posted a version, so something changed, and
+                # rendering that as nothing would be a false claim (sec. 2).
+                if not amendment["content_is_visible"]:
+                    st.caption(
+                        f"**{posted}** — amended, but only in fields TrialLens "
+                        f"doesn't store. The record changed; we can't show what."
+                    )
+                    continue
+
+                st.markdown(f"##### Posted {posted}")
                 if amendment["previously_posted_on"]:
                     st.caption(
                         f"Previous version posted "
@@ -176,31 +192,24 @@ if not is_live:
                         f"TrialLens saw this on "
                         f"{format_detected_at(amendment['detected_at'])}"
                     )
-                if amendment["content_is_visible"]:
-                    # Grouped by which aspect of the trial moved, most
-                    # consequential first, so a rewritten primary outcome is
-                    # read before a retitle. The grouping is a field-name
-                    # lookup in api/amendments.py — deterministic, not a
-                    # judgement, and cheap enough to be free.
-                    for aspect in amendment["aspects"]:
-                        in_aspect = [
-                            c for c in amendment["changes"]
-                            if (c.get("aspect") or "Uncategorised") == aspect
-                        ]
-                        st.caption(ASPECT_CAPTIONS.get(aspect, aspect))
-                        for change in in_aspect:
-                            render_change(change)
-                else:
-                    # Never "no changes" — CT.gov posted an amendment, so
-                    # something did change. Saying otherwise would be a
-                    # false claim about a study fact (sec. 2).
-                    st.info(
-                        "ClinicalTrials.gov posted an amendment, but every field "
-                        "it touched is one TrialLens doesn't store — contacts, "
-                        "oversight and sponsor administrative details among them. "
-                        "The record changed; we can't show what."
-                    )
-                st.divider()
+                # Grouped by which aspect of the trial moved, most
+                # consequential first, so a rewritten primary outcome is read
+                # before a retitle. The grouping is a field-name lookup in
+                # api/amendments.py — deterministic, not a judgement.
+                for aspect in amendment["aspects"]:
+                    in_aspect = [
+                        c for c in amendment["changes"]
+                        if (c.get("aspect") or "Uncategorised") == aspect
+                    ]
+                    st.caption(ASPECT_CAPTIONS.get(aspect, aspect))
+                    for change in in_aspect:
+                        render_change(change)
+
+                # Between amendments only. A rule after the last one closes a
+                # section that has already ended, and reads as something
+                # missing below it.
+                if position < len(amendments) - 1:
+                    st.divider()
 
         if history.get("unattributed_changes"):
             # Should never happen; shown rather than dropped, because a

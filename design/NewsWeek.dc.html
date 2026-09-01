@@ -43,11 +43,38 @@
 
   <!-- The news week leads with what changed the SCIENCE, not with a count of rows -->
   <div style="font-size: 26px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 6px;">
-    Three trials changed something scientific.
+    One trial published its results.
   </div>
   <div style="font-size: 16px; color: #4a4c58; margin-bottom: 28px; max-width: 68ch; line-height: 1.55;">
-    Out of 63 amendments in the last 24 hours. The other 60 moved dates, sites,
-    enrolment figures or titles — they are below the fold, not hidden.
+    Three others changed something scientific, out of 63 amendments in the last
+    24 hours. The remaining 59 moved dates, sites, enrolment figures or titles —
+    below, not hidden.
+  </div>
+
+  <!-- The strongest amendment a trial can carry gets its own treatment.
+       hasResults false -> true means the findings are out; TrialLens did not
+       store this field until 2026-09-02, so every one of these used to render
+       as "amended, but we can't see what". -->
+  <div style="border: 1px solid #b8dcc4; background: rgba(33,195,84,0.07); border-radius: 8px; padding: 22px 24px; margin-bottom: 16px;">
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0f8a3c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <path d="M14 2v6h6"></path>
+        <path d="M9 15h6"></path>
+      </svg>
+      <span style="font-size: 13px; font-weight: 600; color: #0f8a3c; text-transform: uppercase; letter-spacing: 0.06em;">Results posted</span>
+    </div>
+    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px;">
+      <div style="font-size: 17px; font-weight: 600;">NCT05599334</div>
+      <div style="font-size: 14px; color: #6c6e7b; white-space: nowrap;">Amended 1 September</div>
+    </div>
+    <div style="font-size: 15px; color: #6c6e7b; margin-top: 2px;">
+      A Retrospective Observational Study of Patients With Early-stage HER2-positive Breast Cancer
+    </div>
+    <div style="font-size: 15px; line-height: 1.5; margin-top: 14px;">
+      <strong style="font-weight: 600;">Posted results</strong> — No → Yes ·
+      <em style="color: #4a4c58;">results have been posted — the trial's findings are now published</em>
+    </div>
   </div>
 
   <!-- one card per trial, aspect-grouped exactly as the built endpoint returns it -->

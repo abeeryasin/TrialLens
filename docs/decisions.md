@@ -1918,3 +1918,32 @@ The generalisable lesson, and it is the same one as 2026-08-31: **the shape
 of the real payload is not the shape the code assumes.** That time it was
 values inside a field (`PHASE2`, not "Phase 2"). This time it was a field
 one level up from where every other field lived.
+
+## 2026-09-02 — The invisible amendment was over-weighted, and its copy guessed
+
+Caught by reading the rendered page rather than the code. An amendment
+TrialLens cannot see was getting a heading, a caption, a three-sentence
+`st.info` box and a divider — **more visual weight than the amendment above
+it carrying four real field changes.** That inverts the hierarchy of a page
+whose entire purpose is what actually moved. Now one caption line.
+
+Worse, the copy said the untouched fields were "contacts, oversight and
+sponsor administrative details among them." **We do not know that.** The
+system knows only that `last_update_post_date` moved and no stored field
+did; which fields CT.gov actually touched is exactly what it cannot see.
+Naming three of them reads as a finding and is a guess.
+
+This is the *same* error as the 2026-09-01 entry above ("The page was
+inferring a cause it had not checked"), committed by the same reasoning:
+the honest line felt too thin, so plausible detail got added to make it
+useful. It is worth naming the pattern, because it has now happened twice
+in two days and both times it looked like helpfulness — **when a true
+statement feels unsatisfying, the fix is a better true statement or
+silence, never a plausible one.**
+
+Corrected to: "amended, but only in fields TrialLens doesn't store. The
+record changed; we can't show what." Every clause is checkable.
+
+Also: the divider now renders only BETWEEN amendments. A rule after the
+last one closes a section that has already ended and reads as something
+missing below it.
