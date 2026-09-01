@@ -16,6 +16,7 @@ import streamlit as st
 
 from api_client import ApiError, get
 from labels import (
+    ASPECT_CAPTIONS,
     CATEGORY_TRACKING,
     ENROLLMENT_TYPE_CAPTIONS,
     FIELD_LABELS,
@@ -177,9 +178,18 @@ if not is_live:
         timestamp on every line was noise once these are grouped."""
         label = FIELD_LABELS.get(change["field_name"], change["field_name"])
         suffix = f" ({format_detected_at(change['detected_at'])})" if show_detected_at else ""
+        effect = change.get("effect")
+
         if change["field_name"] in STRUCTURED_FIELDS:
-            st.markdown(f"**{label}** changed{suffix}")
-            render_structured_diff(change["old_value"], change["new_value"])
+            # A structured field's effect line ("6 sites added, 1 removed")
+            # replaces the diff rather than accompanying it: one real
+            # amendment stores 252,041 characters of locations JSON, and
+            # rendering that is neither readable nor useful.
+            if effect:
+                st.markdown(f"**{label}** — {effect}{suffix}")
+            else:
+                st.markdown(f"**{label}** changed{suffix}")
+                render_structured_diff(change["old_value"], change["new_value"])
         elif is_long_text(change["old_value"], change["new_value"]):
             summary = summarize_text_change(change["old_value"], change["new_value"])
             st.markdown(f"**{label}** — {summary}{suffix}")
@@ -188,7 +198,13 @@ if not is_live:
         else:
             old_display = humanize_value(change["field_name"], change["old_value"])
             new_display = humanize_value(change["field_name"], change["new_value"])
-            st.write(f"**{label}** — {old_display} → {new_display}{suffix}")
+            line = f"**{label}** — {old_display} → {new_display}"
+            # The effect is a deterministic restatement of the two values
+            # beside it, never an interpretation of them. Shown inline so
+            # the reader can check it against the values in the same glance.
+            if effect:
+                line += f"  ·  *{effect}*"
+            st.write(line + suffix)
 
     try:
         history = get(f"/studies/{nct_id}/amendments")
@@ -234,8 +250,19 @@ if not is_live:
                         f"{format_detected_at(amendment['detected_at'])}"
                     )
                 if amendment["content_is_visible"]:
-                    for change in amendment["changes"]:
-                        render_change(change)
+                    # Grouped by which aspect of the trial moved, most
+                    # consequential first, so a rewritten primary outcome is
+                    # read before a retitle. The grouping is a field-name
+                    # lookup in api/amendments.py — deterministic, not a
+                    # judgement, and cheap enough to be free.
+                    for aspect in amendment["aspects"]:
+                        in_aspect = [
+                            c for c in amendment["changes"]
+                            if (c.get("aspect") or "Uncategorised") == aspect
+                        ]
+                        st.caption(ASPECT_CAPTIONS.get(aspect, aspect))
+                        for change in in_aspect:
+                            render_change(change)
                 else:
                     # Never "no changes" — CT.gov posted an amendment, so
                     # something did change. Saying otherwise would be a

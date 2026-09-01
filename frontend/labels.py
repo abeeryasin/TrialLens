@@ -117,6 +117,17 @@ def format_detected_at(raw_value):
     return f"{absolute} ({relative})"
 
 
+# Headings for the aspect groups inside an amendment (api/amendments.py).
+# Each says what the group means rather than just naming it — "Scientific"
+# alone doesn't tell a reader why those rows are first.
+ASPECT_CAPTIONS = {
+    "Scientific": "🔬 **Scientific** — what the trial studies, and in whom",
+    "Operational": "⚙️ **Operational** — how it's running: status, numbers, dates, sites",
+    "Administrative": "📝 **Administrative** — how the record describes itself",
+    "Uncategorised": "**Uncategorised** — a field TrialLens hasn't classified yet",
+}
+
+
 def format_posted_on(raw_value):
     """A date ClinicalTrials.gov stamped on a record version ("2026-08-31").
 

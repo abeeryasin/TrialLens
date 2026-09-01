@@ -154,6 +154,23 @@ class StudyChangeList(BaseModel):
     changes: List[StudyChange]
 
 
+class AmendedField(StudyChange):
+    """One field that moved inside an amendment, with what code can say
+    about it — never what a model thinks it means."""
+
+    aspect: Optional[str] = None
+    # "Scientific" | "Operational" | "Administrative", from api/amendments.py.
+    # None means the field is not yet classified, and the UI shows it as
+    # uncategorised rather than filing it under the least alarming bucket.
+
+    effect: Optional[str] = None
+    # A plain-language, arithmetic-only effect: "pushed about 12 months
+    # later", "6 sites added", "the recruitment target was replaced by a
+    # real enrolled count". None whenever no honest computation exists —
+    # which is always the case for prose fields, where saying what a
+    # rewrite MEANS would be a reading of clinical text, not a calculation.
+
+
 class Amendment(BaseModel):
     """One amendment ClinicalTrials.gov posted to a trial, and what moved.
 
@@ -174,9 +191,14 @@ class Amendment(BaseModel):
     detected_at: datetime
     # When TrialLens saw it. Always >= posted_on, often by hours or more.
 
-    changes: List[StudyChange] = []
+    changes: List[AmendedField] = []
     # The trial-content fields that moved in this amendment. Empty is a
     # real and common answer — see content_is_visible.
+
+    aspects: List[str] = []
+    # Which aspects this amendment touched ("Scientific", "Operational",
+    # "Administrative"), most consequential first. Lets a reader see that a
+    # primary outcome was rewritten without reading every row.
 
     content_is_visible: bool = True
     # False when CT.gov posted an amendment but every field it touched is

@@ -5,10 +5,12 @@ import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from api.amendments import ASPECT_ORDER, describe_effect, field_aspect
 from api.database import get_db, get_readonly_db
 from api.tracking import TRACKING_FIELDS, field_category
 from api.schemas import (
     STUDY_DETAIL_COLUMNS,
+    AmendedField,
     Amendment,
     AmendmentHistory,
     BatchUpsertResult,
@@ -376,17 +378,28 @@ def get_study_amendments(nct_id: str, conn=Depends(get_readonly_db)):
             )
         if row["field_name"] is not None:  # NULL when the LEFT JOIN found nothing
             amendments[-1].changes.append(
-                StudyChange(
+                AmendedField(
                     field_name=row["field_name"],
                     old_value=row["old_value"],
                     new_value=row["new_value"],
                     detected_at=key,
                     category=field_category(row["field_name"]),
+                    aspect=field_aspect(row["field_name"]),
+                    effect=describe_effect(
+                        row["field_name"], row["old_value"], row["new_value"]
+                    ),
                 )
             )
 
     for amendment in amendments:
         amendment.content_is_visible = bool(amendment.changes)
+        # Most consequential aspect first, so "Scientific" is the first thing
+        # read when a primary outcome moved. Unclassified fields sort last
+        # under their own label rather than being dropped.
+        present = {c.aspect for c in amendment.changes}
+        amendment.aspects = [a for a in ASPECT_ORDER if a in present]
+        if None in present:
+            amendment.aspects.append("Uncategorised")
 
     return AmendmentHistory(
         nct_id=nct_id,
