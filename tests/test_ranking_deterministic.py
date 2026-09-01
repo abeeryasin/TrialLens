@@ -507,14 +507,18 @@ class TestApproachCategory:
             0.10,
         ) is None
 
-    def test_every_type_the_parse_may_emit_is_a_real_ctgov_value(self):
-        """The parse's enum and the database's vocabulary must be the same
-        list. A type the parse can emit but the data never uses would
-        silently never match anything."""
-        from api.ranking import INTEREST_PARSE_SCHEMA
-
-        allowed = set(INTEREST_PARSE_SCHEMA["properties"]["approach_types"]["items"]["enum"])
-        assert allowed == set(INTERVENTION_TYPES)
+    # Removed with the ranking layer (2026-09-01):
+    # test_every_type_the_parse_may_emit_is_a_real_ctgov_value asserted that
+    # INTEREST_PARSE_SCHEMA's enum matched INTERVENTION_TYPES. That schema
+    # lived in api/ranking.py, which is deleted — there is no longer a parse
+    # emitting types, so one half of that comparison no longer exists.
+    #
+    # But it was the only test holding INTERVENTION_TYPES to anything, and it
+    # held it to a hand-written enum rather than to the data. Its replacement,
+    # test_every_intervention_type_in_the_database_is_known in
+    # tests/test_ranking_real_data.py, checks the same list against the live
+    # database instead — the source the vocabulary was read off in the first
+    # place (sec. 6).
 
     def test_the_mismatch_discloses_that_the_researcher_side_was_inferred(self):
         """The third honesty guard.

@@ -1,6 +1,19 @@
 # Verifying a ranking run — the researcher-judgment protocol
 
-**Status: NOT YET DONE. This is the missing baseline.**
+> **Cannot be run as written, from 2026-09-01.** The ranking layer this
+> protocol grades was deleted that day: there is no `POST /rank` and no
+> Ranking page, so the "produce a ranking" steps below have nothing to call.
+>
+> The doc is kept because the *method* is the part that matters and it
+> outlives the feature — grade individual criterion-level claims, not whole
+> trials, and grade them against the trial's own record. It is the stated
+> acceptance criterion for the relevance classifier in
+> `docs/plan_after_ranking.md` (criterion 5), which is the next thing in
+> this project that will produce a model's judgment worth checking. Read
+> the method; ignore the invocation steps until there is something to
+> invoke.
+
+**Status: NEVER RUN. This is the missing baseline.**
 
 No clinical researcher has judged a single real TrialLens ranking output.
 Every quality number the project has so far comes from synthetic fixtures

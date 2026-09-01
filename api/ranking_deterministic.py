@@ -1,11 +1,20 @@
 """Deterministic fit signals — the ones that need no language model.
 
-CLAUDE.md sec. 5 is "deterministic first, AI second". Four of the seven fit
-signals are lookups or arithmetic over stored CT.gov fields, and a model
-asked to evaluate them can only lose: it can misread, drift between runs,
-or improvise on a value nobody told it about. Code gets them right every
-time and carries the literal stored value as evidence (sec. 3), not a
-paraphrase of it.
+CLAUDE.md sec. 5 is "deterministic first, AI second". These are lookups or
+arithmetic over stored CT.gov fields, and a model asked to evaluate them
+can only lose: it can misread, drift between runs, or improvise on a value
+nobody told it about. Code gets them right every time and carries the
+literal stored value as evidence (sec. 3), not a paraphrase of it.
+
+**Nothing in the running app imports this file as of 2026-09-01.** The
+ranking layer that combined these signals into a score was deleted that
+day — measuring it showed four of the five were filters wearing a score's
+costume. They survive here to become filter predicates on `/discover` and
+`/changes` (docs/plan_after_ranking.md, item 4), and because the real value
+vocabularies below are hard-won: they were read off the live database, not
+the CT.gov docs, and tests/test_ranking_real_data.py holds them to it. If
+that filter work is dropped, delete this file rather than letting it sit —
+git holds it either way.
 
 Every threshold and vocabulary here comes from the real `dev` database
 (11,490 studies, inspected 2026-08-30), not from the CT.gov docs — see the
@@ -13,12 +22,49 @@ value tables in the docstrings below. That matters: the LLM prompt this
 replaces was written against assumed formats (`Phase 2`, a `CLOSED`
 status) that do not occur in the data at all.
 """
-from typing import List, Optional, Set
+from typing import List, Literal, Optional, Set
 
 from pydantic import BaseModel
 
-from api.ranking_schemas import FitSignal
 from api.schemas import StudyDetail
+
+
+class FitSignal(BaseModel):
+    """One piece of evidence for or against a trial's fit.
+
+    Moved here from `api/ranking_schemas.py` when the ranking layer was
+    deleted (see docs/decisions.md). It stays because the scorers below
+    still produce it, and because `evidence`/`source_field`/`source_value`
+    are what CLAUDE.md sec. 3 requires of any substantive claim — the
+    conclusion never travels without the stored value it came from.
+    """
+
+    name: str
+
+    status: Literal["match", "no_match", "unknown", "partial", "not_applicable"]
+    # match: signal is positive
+    # no_match: signal is negative (trial doesn't fit)
+    # partial: signal is mixed
+    # unknown: not enough information — either the researcher didn't say, or
+    #          the trial's record doesn't carry it. A gap that could be filled.
+    # not_applicable: the criterion has no meaning for this trial — phase for
+    #          an observational study, say. NOT a gap; no answer exists to find.
+    # The last two are kept apart deliberately: they read very differently,
+    # and only `unknown` is ever worth chasing.
+
+    evidence: str
+    # Plain language explaining this signal. For researchers, not devs.
+
+    source_field: str
+    # Which CT.gov field this came from ("overall_status", "minimum_age", ...)
+
+    source_value: str
+    # The actual stored value from CT.gov
+
+    weight: float
+    # How much this signal contributes, when something is combining them.
+
+    confidence: Literal["high", "medium", "low"]
 
 # ============================================================================
 # Real value vocabularies (from the live database, 2026-08-30)

@@ -67,18 +67,12 @@ capabilities = [
         "page": "pages/3_Monitor.py",
         "status": "live",
     },
-    {
-        "icon": "⭐",
-        "name": "Ranking",
-        "desc": "Score tracked trials by fit to your research interest — with visible evidence for every score, not a black box.",
-        "page": "pages/4_Ranking.py",
-        # Flipped to live 2026-08-31, only after the page was actually run:
-        # loaded headlessly, rendered a real 20-trial ranking end to end, and
-        # POST /rank returned 200 over HTTP for the first time (it had never
-        # done so — see bug #9 in docs/decisions.md). "The backend exists" was
-        # never sufficient grounds; this page's docstring forbids it.
-        "status": "live",
-    },
+    # The Ranking card was removed 2026-09-01 along with the layer behind it.
+    # It was genuinely live — POST /rank returned real scored trials over
+    # HTTP — and it is gone anyway: four of its five scored signals were
+    # filters wearing a score's costume, and the one real judgment scales
+    # with volume in a product that sees ~17 changed trials a week. The
+    # reasoning is in docs/decisions.md; what replaces it is step 7b.
     {
         "icon": "🕸️",
         "name": "Explore",

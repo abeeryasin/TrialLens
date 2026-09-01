@@ -1748,3 +1748,60 @@ recorded here now so deleting the file doesn't erase them:**
    breast cancer trials and 1% of obesity trials.
 
 Both are recorded as closed, not as outstanding work.
+
+## 2026-09-01 — The ranking layer removed; what the removal plan got wrong
+
+Executed the deletion `docs/plan_after_ranking.md` specified. Ten files
+gone: `api/ranking.py`, `api/ranking_schemas.py`,
+`frontend/pages/4_Ranking.py`, five ranking test modules,
+`scripts/rank_dry_run.py`, `scripts/cache_coverage.py`. The router is out
+of `api/main.py` and `/rank` no longer exists on the app. 75 free tests
+pass. The reasoning for removing it is in `f9ccb45` and the entries above
+and is unchanged; this entry is only about executing it.
+
+**A removal plan's file list is not the same as the dependency graph.**
+The plan named exactly one test that had to be deleted with the removal.
+Three more breakages were only visible by reading the survivors' imports:
+
+1. `api/ranking_deterministic.py` — a keeper — imported `FitSignal` from
+   `api/ranking_schemas.py`, a deletion. The model moved into the keeper.
+2. `tests/test_ranking_real_data.py` — the other keeper — imported
+   `SIGNAL_WEIGHTS` and `score_signals` from `api/ranking.py`. The weights
+   were only ever passed through to scorers that don't combine them, so
+   they became one named constant; the two tests that genuinely tested
+   *combining* signals into a score were deleted, because nothing combines
+   them any more.
+3. `scripts/paid_preflight.py` — a keeper — excluded a paid harness that no
+   longer exists and carried `COST_PER_CALL = 0.006`, the synthetic-fixture
+   figure this file already corrects to ~$0.019. Both fixed. Its pending-
+   questions list is now correctly empty: nothing in TrialLens calls a
+   model.
+
+The generalisable version: **grep for what the deleted files export, not
+just for their module names.** A module name search finds `import
+api.ranking`; it does not find `SIGNAL_WEIGHTS`, and that is the reference
+that breaks a keeper.
+
+**Deleting a test that guards a vocabulary needs a replacement, not just a
+deletion.** The one test the plan did name —
+`test_every_type_the_parse_may_emit_is_a_real_ctgov_value` — was the only
+thing holding `INTERVENTION_TYPES` to anything at all. It compared that
+list to a hand-written enum in the prompt schema: two hand-written lists
+agreeing with each other, neither checked against the data. Its
+replacement, `test_every_intervention_type_in_the_database_is_known`, asks
+the live database instead and passes against all 11,469 active trials.
+That is a strictly better guard than the one removed, and it exists only
+because the deletion prompted the question "what was this actually
+protecting?" — worth asking of every test a removal takes with it.
+
+**Home lost the Ranking card entirely rather than reverting to
+`"planned"`,** which is what the plan said to do. "Planned" would be a
+false statement about the roadmap: the capability is not deferred, it is
+rejected with the reasons recorded. A card saying "not built yet" invites
+someone to build it.
+
+`api/ranking_deterministic.py` now has no importer in the running app. Its
+docstring says so explicitly, and says what it is waiting for (filter
+predicates, `plan_after_ranking.md` item 4) and that it should be deleted
+rather than left sitting if that work is dropped. `.ranking_cache/`, the
+71 recorded responses, is untouched.

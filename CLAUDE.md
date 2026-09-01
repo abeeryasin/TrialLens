@@ -67,25 +67,27 @@ running on GitHub Actions), Discover live-fallback (`GET /discover`), and
 the Streamlit frontend — Discover, Understand, and the Monitor feed
 (`GET /changes`). Explore and Investigate aren't built yet.
 
-**Step 7 (AI ranking layer) is built, measured, and being removed.** It
-lives on the branch `step7-ranking-deterministic-split`, in two commits:
-`1175b71` (infrastructure that stays) and `f9ccb45` (the ranking layer as
-a documented dead end). 130 free tests pass. **Neither is on `main`.**
+**Step 7 (AI ranking layer) was built, measured, and removed** on
+2026-09-01. Measuring it produced the case against it: four of its five
+scored signals were filters wearing a score's costume, and only "is this
+trial actually about the condition?" was a genuine judgment — whose value
+scales with volume, in a product that is deliberately low-volume (~17
+changed trials a week). `/rank` no longer exists; 75 free tests pass. The
+deterministic scorers survive with no importer yet, waiting to become
+filter predicates. `f9ccb45` stays in history as the documented dead end —
+a commit saying "we built this, measured it, and it didn't earn its place"
+is evidence, not clutter.
 
-Measuring it produced the case against it: four of its five scored signals
-were filters wearing a score's costume, and only "is this trial actually
-about the condition?" was a genuine judgment — whose value scales with
-volume, in a product that is deliberately low-volume (~17 changed trials a
-week). Removal is `git rm`, **not** `git revert f9ccb45` — that reverts
-only this session's changes and leaves the older, buggier ranking in place.
-
-**Next is not roadmap step 8 (Explore).** It is three time-based
-directions agreed 2026-09-01, none of which needs a model:
-**amendment history** (a trial's changes are its headline), **the watch**
+**Step 7b is in progress, and it is not roadmap step 8 (Explore).** Three
+time-based directions agreed 2026-09-01, none of which needs a model:
+**amendment history** (a trial's changes are its headline) — **first, and
+next**, because it is a build problem not a design problem; **the watch**
 (lead with what is being watched; design the quiet week as the primary
-screen), and **the watch record** (elapsed time is the moat — and shout
+screen); and **the watch record** (elapsed time is the moat — and shout
 when the cron dies rather than serving a stale feed). See
-`docs/plan_after_ranking.md`.
+`docs/plan_after_ranking.md` for the three, and
+`docs/plan_relevance_column.md` for the paid classifier that is deferred
+until there are credits and a real complaint about mis-tagging.
 
 **Hard constraint: the Anthropic account is out of credits as of
 2026-09-01.** No paid call can run. Everything except ranking is

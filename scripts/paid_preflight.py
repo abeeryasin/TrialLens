@@ -30,35 +30,34 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # The free suite. Deliberately excludes the paid harness — running the thing
 # you are gating on would defeat the point.
-FREE_SUITE = [
-    sys.executable, "-m", "pytest", "tests/", "-q",
-    "--ignore=tests/test_ranking_integration.py",
-]
+# The paid harness this used to exclude (tests/test_ranking_integration.py)
+# was deleted with the ranking layer on 2026-09-01, so there is nothing to
+# ignore any more. If a paid harness is ever written again, exclude it here:
+# running the thing you are gating on would defeat the point.
+FREE_SUITE = [sys.executable, "-m", "pytest", "tests/", "-q"]
 
 # Everything still awaiting a paid answer. Add to this rather than making a
 # one-off run: the marginal cost of one more question inside an existing run
 # is roughly zero, and a separate run costs another ~$0.13.
 #
 # Each entry: (what it would establish, why free tests cannot establish it).
-PENDING_PAID_CHECKS = [
-    (
-        "approach_match actually scores instead of returning unknown 20/20",
-        "Free tests prove the approach reaches the payload (bug #10's guard). "
-        "Whether the model then uses it is a fact about the model, not the "
-        "plumbing, so only a real call shows it.",
-    ),
-    (
-        "The prior-treatment eval case against real criteria text",
-        "Designed but never built. 3,407 trials carry prior-therapy language; "
-        "the signal carries 15% weight and has never been checked on real text.",
-    ),
-    (
-        "Whether effort=high changes ranking order enough to justify the cost",
-        "--sweep-effort. A judgement about model behaviour, not about code.",
-    ),
-]
+# Emptied 2026-09-01. All three entries were questions about the ranking
+# layer, which is deleted: whether approach_match scored instead of returning
+# unknown (answered — it did, 5/5), the prior-treatment eval case, and
+# whether effort=high changed the ranking order. The first two are recorded
+# as closed in docs/decisions.md; the third died with the score it was about.
+# Nothing in TrialLens calls a model right now, so this list is correctly
+# empty rather than merely unmaintained.
+PENDING_PAID_CHECKS = []
 
-COST_PER_CALL = 0.006  # measured, effort=low, claude-opus-5, prompt caching on
+# Measured on a real run, not estimated: $0.1142 for 6 calls on real trial
+# records (claude-opus-5, effort=low, prompt caching on). The 0.006 that sat
+# here until 2026-09-01 came from this repo's own notes and was measured
+# against synthetic fixtures — real records are ~3x larger. Underlying cause,
+# worth carrying into any future estimate: this project's text runs at 2.61
+# characters per token, not the usual ~4.0 rule of thumb, so assuming 4.0
+# understates a projection by about 53%. Re-measure before quoting.
+COST_PER_CALL = 0.019
 
 
 def free_suite_is_green() -> bool:
