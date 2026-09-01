@@ -161,10 +161,16 @@ if not is_live:
                 f"**Amended {times}** since TrialLens started watching "
                 f"on {recording_since}."
             )
-            if history.get("invisible_amendment_count"):
+            # Said once, here: WHY some amendments have nothing under them.
+            # Each such amendment then states only the fact. Splitting it
+            # this way stops the two lines repeating each other, and drops
+            # the "marked below" pointer that only existed because they did.
+            invisible = history.get("invisible_amendment_count") or 0
+            if invisible:
                 st.caption(
-                    f"{history['invisible_amendment_count']} of these changed only "
-                    f"fields TrialLens doesn't store — marked below."
+                    f"{invisible} of these changed only fields TrialLens doesn't store."
+                    if invisible > 1 else
+                    "One of these changed only fields TrialLens doesn't store."
                 )
 
             for position, amendment in enumerate(amendments):
@@ -178,10 +184,7 @@ if not is_live:
                 # silent: CT.gov posted a version, so something changed, and
                 # rendering that as nothing would be a false claim (sec. 2).
                 if not amendment["content_is_visible"]:
-                    st.caption(
-                        f"**{posted}** — amended, but only in fields TrialLens "
-                        f"doesn't store. The record changed; we can't show what."
-                    )
+                    st.caption(f"**{posted}** — the record changed; we can't show what.")
                     continue
 
                 st.markdown(f"##### Posted {posted}")
