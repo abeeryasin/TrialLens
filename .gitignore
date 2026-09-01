@@ -12,3 +12,7 @@ course-alignment.md
 .claude/hooks/
 skills-lock.json
 .ranking_cache/
+
+# Skills installed into the repo root by an installer, not project content.
+SKILL.md
+**/.claude/skills/
