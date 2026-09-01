@@ -51,6 +51,27 @@ jobs:
           API_BASE_URL: http://127.0.0.1:8000
         run: python scripts/run_monitor.py
 
+      # Data-drift checks, run here rather than in tests.yml on purpose.
+      # These assert things about what ClinicalTrials.gov actually sends —
+      # that every intervention type is one we know, that every stored age
+      # parses, that a trial's changes still group into amendments the way
+      # the endpoint assumes. None of that changes when someone edits code;
+      # it changes when the upstream data does. So they belong on the data's
+      # schedule, immediately after the ingest that would introduce the
+      # drift, not on every push.
+      #
+      # `if: always()` so they still run when the ingest above failed — a
+      # failed ingest is exactly when you want to know whether the data
+      # changed shape underneath it.
+      - name: Check for upstream data drift
+        if: always()
+        env:
+          DATABASE_URL_READONLY: ${{ secrets.DATABASE_URL_READONLY }}
+          PYTHONPATH: .
+        run: |
+          pip install -r requirements-dev.txt
+          pytest tests/ -q -rs
+
       - name: Show API log on failure
         if: failure()
         run: cat api.log

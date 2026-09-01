@@ -1,0 +1,12 @@
+# Test-only dependencies. Kept out of requirements.txt so the scheduled
+# Monitor job — which installs that file every 6 hours on GitHub's runners —
+# doesn't pull a test stack it never uses.
+-r requirements.txt
+
+pytest
+
+# Required by fastapi.testclient. Present transitively today (anthropic
+# pulls it in), which is not a promise. CLAUDE.md sec. 7 makes the
+# HTTP-level tests non-optional — only a real HTTP call exercises request
+# binding and response validation — so their dependency is declared.
+httpx

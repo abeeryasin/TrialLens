@@ -1,0 +1,50 @@
+name: Tests
+
+# The actual test gate. Until 2026-09-02 this repo had none: monitor.yml
+# ran the scheduled ingest and nothing ever ran pytest, so the suite only
+# executed when someone remembered to type it. A cron job is not CI.
+#
+# Deliberately runs WITHOUT database credentials. Every test that needs the
+# live database skips itself when DATABASE_URL_READONLY is unset (89 run,
+# 12 skip), which means:
+#
+#   - a pull request from anywhere gets a real gate, with no secret exposed
+#     to a fork's workflow;
+#   - the gate cannot go red because Neon was cold or briefly unreachable,
+#     which would train everyone to ignore it.
+#
+# The 12 skipped tests are not code regression tests — they detect UPSTREAM
+# DATA DRIFT (a twelfth CT.gov intervention type, an unparseable age unit, a
+# grouping assumption that stopped holding). Drift happens on the data's
+# schedule, not on ours, so those run in monitor.yml every 6 hours where the
+# credentials already live, rather than on every push.
+#
+# Never add a paid model harness to this workflow (CLAUDE.md sec. 7). There
+# is currently no paid path in the codebase at all; if one returns, it gets
+# scripts/paid_preflight.py and a human, not a runner.
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run the free suite
+        env:
+          PYTHONPATH: .
+        # -rs prints why each test skipped. A test that skips for the wrong
+        # reason — or errors instead of skipping when the database is absent —
+        # is then visible in the log rather than silently counted as fine.
+        run: pytest tests/ -q -rs
