@@ -154,6 +154,71 @@ class StudyChangeList(BaseModel):
     changes: List[StudyChange]
 
 
+class Amendment(BaseModel):
+    """One amendment ClinicalTrials.gov posted to a trial, and what moved.
+
+    Dated by the registry's own version stamp (`posted_on`), not by when
+    TrialLens noticed. Those differ — the cron runs every 6 hours, and a
+    trial first seen after a long gap can carry a stamp weeks older than
+    our detection. The registry's date is the fact about the trial; ours is
+    a fact about our scheduler.
+    """
+
+    posted_on: date
+    # CT.gov's last_update_post_date AFTER this amendment.
+
+    previously_posted_on: Optional[date] = None
+    # ...and before it. Together these say "this record went from the
+    # version posted on X to the version posted on Y".
+
+    detected_at: datetime
+    # When TrialLens saw it. Always >= posted_on, often by hours or more.
+
+    changes: List[StudyChange] = []
+    # The trial-content fields that moved in this amendment. Empty is a
+    # real and common answer — see content_is_visible.
+
+    content_is_visible: bool = True
+    # False when CT.gov posted an amendment but every field it touched is
+    # one TrialLens does not store (47% of amendments, measured 2026-09-01).
+    # The UI MUST render this as "amended, but we can't see what" and never
+    # as "no changes" — the latter is a false claim about a study fact
+    # (CLAUDE.md sec. 2). Absence of visible changes is not absence of
+    # change.
+
+
+class AmendmentHistory(BaseModel):
+    """A trial's amendments, newest first — the thing ClinicalTrials.gov
+    structurally cannot show, because it holds only the current version."""
+
+    nct_id: str
+    amendments: List[Amendment] = []
+    total_amendments: int = 0
+
+    invisible_amendment_count: int = 0
+    # How many of the above touched only untracked fields. Surfaced as a
+    # number so the page can be honest about its own blind spot rather than
+    # leaving the reader to count flagged rows.
+
+    recording_since: Optional[datetime] = None
+    # When TrialLens began recording changes AT ALL — the earliest
+    # detected_at in the whole table, not this trial's own start date.
+    # Deliberately a global fact: no per-trial "first observed" column
+    # exists, so claiming this trial was watched from that date would
+    # overstate what is known about it (sec. 2). Every count here means
+    # "since we started watching", never "since the trial was registered":
+    # a trial amended eleven times before this date shows none of them.
+
+    unattributed_changes: List[StudyChange] = []
+    # Content changes belonging to no amendment. Should always be empty:
+    # every content change is written in the same transaction as the
+    # last_update_post_date change that explains it, so they share an exact
+    # detected_at (0 exceptions in 195 changes, measured 2026-09-01).
+    # Returned rather than dropped because if that ever stops being true,
+    # silently discarding real recorded changes would be the worst possible
+    # failure — a trial would look quieter than it was.
+
+
 class ChangeFeedEntry(StudyChange):
     """One row in the aggregate Monitor feed (GET /changes) — same shape as
     StudyChange plus which trial it belongs to, since the feed spans every

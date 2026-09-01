@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from api.database import get_db, get_readonly_db
-from api.tracking import field_category
+from api.tracking import TRACKING_FIELDS, field_category
 from api.schemas import (
     STUDY_DETAIL_COLUMNS,
+    Amendment,
+    AmendmentHistory,
     BatchUpsertResult,
     KnownDatesRequest,
     KnownDatesResponse,
@@ -242,11 +244,26 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
     )
 
 
+def _require_study(cur, nct_id: str) -> None:
+    """404 if we hold no such trial.
+
+    Without this, a history endpoint answers "nothing recorded" for an
+    nct_id that does not exist — which reads as "this trial has been quiet"
+    and is a false statement about a trial we have never seen (CLAUDE.md
+    sec. 2). "We have no record of it" and "we have a record and it shows
+    no changes" are different answers and must not render identically.
+    """
+    cur.execute("SELECT 1 FROM studies WHERE nct_id = %s", (nct_id,))
+    if cur.fetchone() is None:
+        raise HTTPException(status_code=404, detail=f"No study with nct_id {nct_id}")
+
+
 @router.get("/{nct_id}/changes", response_model=StudyChangeList)
 def get_study_changes(nct_id: str, conn=Depends(get_readonly_db)):
     """The real Monitor changelog for one trial — every field-level change
     the expensive-diff step has ever detected for it, newest first."""
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        _require_study(cur, nct_id)
         cur.execute(
             """
             SELECT field_name, old_value, new_value, detected_at
@@ -260,6 +277,126 @@ def get_study_changes(nct_id: str, conn=Depends(get_readonly_db)):
     return StudyChangeList(
         nct_id=nct_id,
         changes=[StudyChange(**c, category=field_category(c["field_name"])) for c in changes],
+    )
+
+
+@router.get("/{nct_id}/amendments", response_model=AmendmentHistory)
+def get_study_amendments(nct_id: str, conn=Depends(get_readonly_db)):
+    """A trial's change history grouped into the amendments that caused it.
+
+    ClinicalTrials.gov serves only a record's current version, so "this
+    primary outcome was rewritten 14 months in" is a question it cannot
+    answer. TrialLens can, from study_changes — but only if those rows are
+    grouped the way the registry actually amends, rather than the way our
+    cron happens to write.
+
+    **The grouping key is the trial's own last_update_post_date, not
+    detected_at.** Verified against the live database 2026-09-01:
+
+      - Every content change shares an EXACT detected_at with the
+        last_update_post_date change that explains it (195 of 195). That is
+        not luck: Postgres `now()` is transaction-start time, and one
+        trial's whole diff is written in one transaction, so the join below
+        is an equality, not a time window with a tunable threshold.
+      - No trial ever receives two last_update_post_date moves in one run
+        (0 cases), so the key is unique.
+      - Tracking fields never co-occur with an amendment (0 of 91
+        active_in_scope events). They are TrialLens's own bookkeeping, not
+        something a sponsor did, and are excluded here — the same line
+        api/tracking.py already draws for the Monitor feed.
+
+    Grouping by `date_trunc('minute', detected_at)` instead would be wrong:
+    one cron run spreads its writes over ~9 seconds and crosses minute
+    boundaries (12:55:52 -> 12:56:00 on 2026-08-28), splitting one
+    amendment into two.
+    """
+    tracking_fields = sorted(TRACKING_FIELDS)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        _require_study(cur, nct_id)
+
+        # One row per (amendment, changed field). LEFT JOIN because an
+        # amendment touching only untracked fields must still come back —
+        # dropping it would report the trial as quieter than it was.
+        cur.execute(
+            """
+            SELECT a.new_value AS posted_on,
+                   a.old_value AS previously_posted_on,
+                   a.detected_at,
+                   c.field_name, c.old_value, c.new_value
+            FROM study_changes a
+            LEFT JOIN study_changes c
+                   ON c.nct_id = a.nct_id
+                  AND c.detected_at = a.detected_at
+                  AND c.field_name <> 'last_update_post_date'
+                  AND NOT (c.field_name = ANY(%s))
+            WHERE a.nct_id = %s
+              AND a.field_name = 'last_update_post_date'
+              AND a.new_value IS NOT NULL
+            ORDER BY a.detected_at DESC, c.field_name
+            """,
+            (tracking_fields, nct_id),
+        )
+        rows = cur.fetchall()
+
+        # Any content change that did NOT land in an amendment above. Always
+        # empty today; see AmendmentHistory.unattributed_changes for why it
+        # is surfaced rather than assumed away.
+        cur.execute(
+            """
+            SELECT c.field_name, c.old_value, c.new_value, c.detected_at
+            FROM study_changes c
+            WHERE c.nct_id = %s
+              AND c.field_name <> 'last_update_post_date'
+              AND NOT (c.field_name = ANY(%s))
+              AND NOT EXISTS (
+                  SELECT 1 FROM study_changes a
+                  WHERE a.nct_id = c.nct_id
+                    AND a.field_name = 'last_update_post_date'
+                    AND a.detected_at = c.detected_at
+              )
+            ORDER BY c.detected_at DESC, c.field_name
+            """,
+            (nct_id, tracking_fields),
+        )
+        orphans = cur.fetchall()
+
+        cur.execute("SELECT min(detected_at) AS since FROM study_changes")
+        recording_since = cur.fetchone()["since"]
+
+    amendments: List[Amendment] = []
+    for row in rows:
+        key = row["detected_at"]
+        if not amendments or amendments[-1].detected_at != key:
+            amendments.append(
+                Amendment(
+                    posted_on=row["posted_on"],
+                    previously_posted_on=row["previously_posted_on"],
+                    detected_at=key,
+                )
+            )
+        if row["field_name"] is not None:  # NULL when the LEFT JOIN found nothing
+            amendments[-1].changes.append(
+                StudyChange(
+                    field_name=row["field_name"],
+                    old_value=row["old_value"],
+                    new_value=row["new_value"],
+                    detected_at=key,
+                    category=field_category(row["field_name"]),
+                )
+            )
+
+    for amendment in amendments:
+        amendment.content_is_visible = bool(amendment.changes)
+
+    return AmendmentHistory(
+        nct_id=nct_id,
+        amendments=amendments,
+        total_amendments=len(amendments),
+        invisible_amendment_count=sum(1 for a in amendments if not a.content_is_visible),
+        recording_since=recording_since,
+        unattributed_changes=[
+            StudyChange(**o, category=field_category(o["field_name"])) for o in orphans
+        ],
     )
 
 

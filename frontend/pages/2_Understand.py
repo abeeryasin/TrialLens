@@ -22,6 +22,8 @@ from labels import (
     format_age_range,
     STRUCTURED_FIELDS,
     format_detected_at,
+    format_posted_on,
+    format_recording_since,
     humanize_value,
     is_long_text,
     render_structured_diff,
@@ -167,55 +169,112 @@ else:
 st.markdown(f"[View {nct_id} on ClinicalTrials.gov ↗](https://clinicaltrials.gov/study/{nct_id})")
 
 if not is_live:
-    st.subheader("Change history")
+    st.subheader("Amendment history")
+
+    def render_change(change, show_detected_at=False):
+        """One changed field. The amendment above it carries the date, so
+        the per-field detected_at is off by default — repeating the same
+        timestamp on every line was noise once these are grouped."""
+        label = FIELD_LABELS.get(change["field_name"], change["field_name"])
+        suffix = f" ({format_detected_at(change['detected_at'])})" if show_detected_at else ""
+        if change["field_name"] in STRUCTURED_FIELDS:
+            st.markdown(f"**{label}** changed{suffix}")
+            render_structured_diff(change["old_value"], change["new_value"])
+        elif is_long_text(change["old_value"], change["new_value"]):
+            summary = summarize_text_change(change["old_value"], change["new_value"])
+            st.markdown(f"**{label}** — {summary}{suffix}")
+            with st.expander("Show what changed"):
+                render_text_diff(change["old_value"], change["new_value"])
+        else:
+            old_display = humanize_value(change["field_name"], change["old_value"])
+            new_display = humanize_value(change["field_name"], change["new_value"])
+            st.write(f"**{label}** — {old_display} → {new_display}{suffix}")
+
+    try:
+        history = get(f"/studies/{nct_id}/amendments")
+    except ApiError as exc:
+        st.caption(f"Could not load amendment history: {exc}")
+    else:
+        amendments = history["amendments"]
+        recording_since = format_recording_since(history.get("recording_since"))
+
+        # The window is stated on every path, including the empty one. A
+        # count of amendments means nothing without it: this history starts
+        # when TrialLens started watching, not when the trial was
+        # registered, and a trial amended eleven times before that shows
+        # none of them here (CLAUDE.md sec. 2 — never imply a completeness
+        # the data doesn't have).
+        if not amendments:
+            st.caption(
+                f"No amendments recorded. TrialLens has been watching for "
+                f"changes since {recording_since}; ClinicalTrials.gov does not "
+                f"publish a record's earlier versions, so anything amended "
+                f"before then cannot be shown here."
+            )
+        else:
+            n = len(amendments)
+            times = {1: "once", 2: "twice", 3: "three times"}.get(n, f"{n} times")
+            st.markdown(
+                f"**Amended {times}** since TrialLens started watching "
+                f"on {recording_since}."
+            )
+            if history.get("invisible_amendment_count"):
+                st.caption(
+                    f"{history['invisible_amendment_count']} of these changed only "
+                    f"fields TrialLens doesn't store — marked below."
+                )
+
+            for amendment in amendments:
+                st.markdown(f"##### Posted {format_posted_on(amendment['posted_on'])}")
+                if amendment["previously_posted_on"]:
+                    st.caption(
+                        f"Previous version posted "
+                        f"{format_posted_on(amendment['previously_posted_on'])} · "
+                        f"TrialLens saw this on "
+                        f"{format_detected_at(amendment['detected_at'])}"
+                    )
+                if amendment["content_is_visible"]:
+                    for change in amendment["changes"]:
+                        render_change(change)
+                else:
+                    # Never "no changes" — CT.gov posted an amendment, so
+                    # something did change. Saying otherwise would be a
+                    # false claim about a study fact (sec. 2).
+                    st.info(
+                        "ClinicalTrials.gov posted an amendment, but every field "
+                        "it touched is one TrialLens doesn't store — contacts, "
+                        "oversight and sponsor administrative details among them. "
+                        "The record changed; we can't show what."
+                    )
+                st.divider()
+
+        if history.get("unattributed_changes"):
+            # Should never happen; shown rather than dropped, because a
+            # silently discarded change makes a trial look quieter than it
+            # was. See AmendmentHistory.unattributed_changes.
+            st.warning(
+                "These recorded changes could not be matched to an amendment. "
+                "That shouldn't happen — please report it."
+            )
+            for change in history["unattributed_changes"]:
+                render_change(change, show_detected_at=True)
+
+    # Our own bookkeeping — deliberately below the amendments and visually
+    # separate. Whether we're still checking a trial is not something the
+    # sponsor did, and burying it among real amendments blurs that line.
     try:
         change_log = get(f"/studies/{nct_id}/changes")
-    except ApiError as exc:
-        st.caption(f"Could not load change history: {exc}")
+    except ApiError:
+        pass
     else:
-        if not change_log["changes"]:
-            st.caption("No changes detected yet for this trial.")
-        else:
-            changes = change_log["changes"]
-            if len(changes) == 1 and changes[0]["field_name"] == "last_update_post_date":
-                st.caption(
-                    "ClinicalTrials.gov marked this record as updated, but none "
-                    "of the other fields we track changed value — the real "
-                    "change may be in something we don't parse yet (e.g. "
-                    "contacts, oversight)."
-                )
-
-            def render_change(change):
-                label = FIELD_LABELS.get(change["field_name"], change["field_name"])
-                detected_at = format_detected_at(change["detected_at"])
-                if change["field_name"] in STRUCTURED_FIELDS:
-                    st.markdown(f"**{label}** changed ({detected_at})")
-                    render_structured_diff(change["old_value"], change["new_value"])
-                elif is_long_text(change["old_value"], change["new_value"]):
-                    summary = summarize_text_change(change["old_value"], change["new_value"])
-                    st.markdown(f"**{label}** — {summary} ({detected_at})")
-                    with st.expander("Show what changed"):
-                        render_text_diff(change["old_value"], change["new_value"])
-                else:
-                    old_display = humanize_value(change["field_name"], change["old_value"])
-                    new_display = humanize_value(change["field_name"], change["new_value"])
-                    st.write(f"**{label}** — {old_display} → {new_display} ({detected_at})")
-
-            # Split by kind: a real registry change (status, eligibility,
-            # outcomes) shouldn't get buried between our own tracking
-            # bookkeeping lines — they answer different questions.
-            content_changes = [c for c in changes if c.get("category") != CATEGORY_TRACKING]
-            tracking_changes = [c for c in changes if c.get("category") == CATEGORY_TRACKING]
-
-            if content_changes:
-                st.markdown("**What ClinicalTrials.gov changed**")
-                for change in content_changes:
-                    render_change(change)
-            if tracking_changes:
-                st.markdown("**Our tracking of this trial**")
-                st.caption(
-                    "Not changes to the trial itself — whether we're still "
-                    "checking it for updates."
-                )
-                for change in tracking_changes:
-                    render_change(change)
+        tracking_changes = [
+            c for c in change_log["changes"] if c.get("category") == CATEGORY_TRACKING
+        ]
+        if tracking_changes:
+            st.subheader("Our tracking of this trial")
+            st.caption(
+                "Not changes to the trial itself — whether we're still "
+                "checking it for updates."
+            )
+            for change in tracking_changes:
+                render_change(change, show_detected_at=True)

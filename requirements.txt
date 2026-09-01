@@ -5,3 +5,8 @@ fastapi
 uvicorn[standard]
 streamlit
 anthropic
+# Required by fastapi.testclient, which the HTTP-level API tests use.
+# Present transitively today (anthropic pulls it), which is not a promise —
+# and CLAUDE.md sec. 7 makes those tests non-optional: only a real HTTP call
+# exercises request binding and response validation.
+httpx

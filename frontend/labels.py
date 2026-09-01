@@ -7,7 +7,7 @@ import difflib
 import html
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import streamlit as st
 
@@ -115,6 +115,36 @@ def format_detected_at(raw_value):
 
     absolute = dt.strftime("%b %d, %Y, %I:%M %p UTC")
     return f"{absolute} ({relative})"
+
+
+def format_posted_on(raw_value):
+    """A date ClinicalTrials.gov stamped on a record version ("2026-08-31").
+
+    Date only, and no relative "3d ago": this is the registry's own version
+    stamp, a fact about the trial. format_detected_at above is for OUR
+    timestamps — when the cron happened to look — and the two must not read
+    alike, because confusing "the sponsor amended this" with "we noticed
+    this" attributes our scheduling to the trial.
+    """
+    if not raw_value:
+        return "—"
+    try:
+        return date.fromisoformat(str(raw_value)).strftime("%d %B %Y")
+    except ValueError:
+        return str(raw_value)
+
+
+def format_recording_since(raw_value):
+    """When TrialLens began recording changes at all — a date, not a
+    timestamp, because the claim it supports ("watching since X") is only
+    ever true to the day."""
+    if not raw_value:
+        return "we began tracking"
+    try:
+        dt = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(raw_value)
+    return dt.strftime("%d %B %Y")
 
 
 # Above this many characters, showing both full versions side by side stops
