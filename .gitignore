@@ -16,3 +16,6 @@ skills-lock.json
 # Skills installed into the repo root by an installer, not project content.
 SKILL.md
 **/.claude/skills/
+
+# Seeded design canvas: ~2.5MB of embedded editor, rebuilt from design/*.dc.html
+design/triallens-the-watch.html
