@@ -71,11 +71,13 @@ capabilities = [
         "icon": "⭐",
         "name": "Ranking",
         "desc": "Score tracked trials by fit to your research interest — with visible evidence for every score, not a black box.",
-        "page": None,
-        # POST /rank works and is tested; nothing renders it yet, so this
-        # stays "planned". Marking it live because the backend exists would
-        # be exactly the thing this page's docstring forbids.
-        "status": "planned",
+        "page": "pages/4_Ranking.py",
+        # Flipped to live 2026-08-31, only after the page was actually run:
+        # loaded headlessly, rendered a real 20-trial ranking end to end, and
+        # POST /rank returned 200 over HTTP for the first time (it had never
+        # done so — see bug #9 in docs/decisions.md). "The backend exists" was
+        # never sufficient grounds; this page's docstring forbids it.
+        "status": "live",
     },
     {
         "icon": "🕸️",

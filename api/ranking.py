@@ -31,8 +31,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from api.database import get_readonly_db
 from api.ranking_deterministic import (
+    INTERVENTION_TYPES,
+    SCORER_COLUMNS,
     ResearcherPreferences,
     score_age_range_fit,
+    score_approach_category,
     score_enrollment_feasibility,
     score_phase_fit,
     score_sites_active,
@@ -43,9 +46,10 @@ from api.ranking_schemas import (
     FitRankingResponse,
     FitSignal,
     RankRequest,
+    ResearcherPreferencesOut,
     UnspecifiedPreference,
 )
-from api.schemas import StudyDetail
+from api.schemas import STUDY_DETAIL_COLUMNS, StudyDetail
 
 router = APIRouter()
 
@@ -59,6 +63,17 @@ MODEL = os.getenv("RANKING_MODEL", "claude-opus-5")
 # and answer "does effort change ranking quality here?" with a measurement
 # rather than an assumption — see docs/step7_implementation_guide.md.
 EFFORT = os.getenv("RANKING_EFFORT", "low")
+
+# `output_config.effort` is an Opus-tier parameter. Sending it to Haiku 4.5
+# is rejected outright — so a Haiku comparison run would have failed on every
+# single call, verified against the Anthropic API reference before spending
+# rather than discovered mid-run. Structured output (`output_config.format`)
+# is supported on all current models; only `effort` is gated.
+MODELS_SUPPORTING_EFFORT = ("claude-opus-", "claude-sonnet-5", "claude-fable-")
+
+
+def supports_effort(model: str) -> bool:
+    return model.startswith(MODELS_SUPPORTING_EFFORT)
 
 # Hard ceiling on trials per request. Ranking costs one model call per trial;
 # this is the guard that keeps a single search from running away, independent
@@ -81,12 +96,30 @@ SIGNAL_WEIGHTS = {
     "enrollment_feasibility": 0.05,
 }
 
+# Share of the scoring weight decided in code, and therefore the share the
+# free candidate-selection stage can see. The rest — condition_is_subject,
+# prior_treatment_compatible, approach_match — needs the model, so it is only
+# ever applied to the shortlist. Computed, not typed, so it cannot drift from
+# SIGNAL_WEIGHTS above.
+DETERMINISTIC_WEIGHT = sum(
+    SIGNAL_WEIGHTS[name] for name in
+    ("status_recruiting", "phase_fit", "age_range_fit", "sites_active", "enrollment_feasibility")
+)
+
 # Eligibility criteria are free text and occasionally very long. Truncate for
 # the prompt, and say so in the evidence when it happens rather than letting
 # a silent cut look like the whole document.
 ELIGIBILITY_CHAR_LIMIT = 2500
 
-_STATUS_ENUM = ["match", "partial", "no_match", "unknown"]
+# `not_applicable` is deliberately distinct from `unknown`. TrialGPT keeps
+# {Not enough information} and {Not applicable} as separate labels, and 26.9%
+# of its residual errors came from models confusing the two — its second
+# largest error class. "The registry records no phase for this trial" is a
+# data gap; "phase does not apply, this is an observational study" is not a
+# gap at all, and only the first could ever be filled in. Collapsing them
+# repeats bug #3's mistake ("can't tell" and "doesn't fit" sharing an
+# encoding) one level down.
+_STATUS_ENUM = ["match", "partial", "no_match", "unknown", "not_applicable"]
 _CONFIDENCE_ENUM = ["high", "medium", "low"]
 
 
@@ -105,7 +138,9 @@ Field notes:
 - phases: use CT.gov tokens — EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4. "Phase II-III" becomes ["PHASE2","PHASE3"]. "early-phase" becomes ["EARLY_PHASE1","PHASE1"]. Null if no phase preference was expressed.
 - require_recruiting: true only if the researcher asked for open/recruiting/enrolling trials. Null if they said nothing about trial status.
 - min_age_years / max_age_years: the age band of the patient population described, in years (a 6-month-old is 0.5). Null unless an age or life-stage was actually described. "adults" implies min 18. "children"/"paediatric" implies max 17.
-- prior_treatment_context: what the researcher said about prior lines of therapy or treatment-naive status, verbatim-ish. Null if unmentioned."""
+- prior_treatment_context: what the researcher said about prior lines of therapy or treatment-naive status, verbatim-ish. Null if unmentioned.
+- approach_context: the mechanism, modality or intervention type the researcher follows, in their own words — drug classes ("checkpoint inhibitors", "GLP-1 agonists"), but equally procedures, devices, or behavioural and dietary approaches ("bariatric surgery", "exercise programmes"). Over half the interventions in this space are not drugs. Null if the researcher named no particular approach.
+- approach_types: the same approach expressed as ClinicalTrials.gov interventionType tokens, so it can be checked against structured data. Use only these: DRUG, BIOLOGICAL, DEVICE, PROCEDURE, RADIATION, BEHAVIORAL, DIETARY_SUPPLEMENT, DIAGNOSTIC_TEST, GENETIC, COMBINATION_PRODUCT, OTHER. "Checkpoint inhibitors" is ["DRUG","BIOLOGICAL"]; "bariatric surgery" is ["PROCEDURE"]; "exercise programme" is ["BEHAVIORAL"]; "wearables" is ["DEVICE"]. **Be generous — list every type the approach could plausibly be registered under.** A missing type causes a trial to be wrongly ruled out on category grounds, which is far worse than an extra one. Null whenever approach_context is null, or when the approach doesn't map cleanly onto these categories."""
 
 INTEREST_PARSE_SCHEMA = {
     "type": "object",
@@ -122,10 +157,16 @@ INTEREST_PARSE_SCHEMA = {
         "min_age_years": {"type": ["number", "null"]},
         "max_age_years": {"type": ["number", "null"]},
         "prior_treatment_context": {"type": ["string", "null"]},
+        "approach_context": {"type": ["string", "null"]},
+        "approach_types": {
+            "type": ["array", "null"],
+            "items": {"type": "string", "enum": sorted(INTERVENTION_TYPES)},
+        },
     },
     "required": [
         "condition_terms", "phases", "require_recruiting",
         "min_age_years", "max_age_years", "prior_treatment_context",
+        "approach_context", "approach_types",
     ],
     "additionalProperties": False,
 }
@@ -159,7 +200,14 @@ SIGNAL 3 — prior_treatment_compatible: do the trial's prior-therapy requiremen
 - If they did, read the eligibility criteria for treatment-naive / prior-line requirements and judge overlap.
 - If the criteria text is absent, or present but silent on prior therapy, return unknown. Note which of those two it is in your evidence — "no criteria recorded" and "criteria say nothing about prior therapy" are different facts.
 
+UNKNOWN vs NOT_APPLICABLE — these are different answers, do not merge them:
+- unknown: an answer exists but you cannot reach it. The researcher didn't say, or the record doesn't carry it. Someone could in principle fill this gap.
+- not_applicable: the question has no meaning for this trial, so no answer exists to find. Prior treatment on a prevention trial in healthy volunteers with no treatment history to have. Approach on a trial that registers no interventions at all.
+- If you are unsure which of the two applies, use unknown. Claiming a question is meaningless is a stronger statement than admitting you cannot answer it.
+
 RULES FOR ALL THREE:
+- Write the evidence FIRST, then choose the status it supports. The evidence is the reasoning, not a justification written afterwards for a verdict you already picked.
+- Evidence length must not track your confidence. A one-line certainty and a one-line doubt are both fine; do not pad to sound sure.
 - Use only what is in the trial record. Never state a fact about the trial that is not in the data given to you.
 - Quote or name the specific field your judgment rests on in the evidence.
 - Prefer unknown over a guess. An honest "we can't tell from this record" is a correct answer, not a failure.
@@ -167,11 +215,21 @@ RULES FOR ALL THREE:
 - Never state or imply that a patient is eligible for a trial. You are assessing whether a trial is worth the researcher's attention, nothing more."""
 
 def _signal_schema_fields(*names: str) -> dict:
-    """status/evidence/confidence triple per signal, flat (no $refs)."""
+    """evidence/status/confidence triple per signal, flat (no $refs).
+
+    **Evidence comes first on purpose.** JSON is generated in order, so a
+    schema listing `status` first makes the model commit to a verdict and
+    then write a justification for it — the evidence becomes decoration
+    rather than the thing the verdict rests on. TrialGPT (Nature Comms 2024)
+    generates the rationale first and then classifies from it, and reports
+    87.8% explanation accuracy doing so. Reordered 2026-08-31 after that was
+    checked against the literature; sec. 3 requires the evidence to be load-
+    bearing, not merely present.
+    """
     props = {}
     for name in names:
-        props[f"{name}_status"] = {"type": "string", "enum": _STATUS_ENUM}
         props[f"{name}_evidence"] = {"type": "string"}
+        props[f"{name}_status"] = {"type": "string", "enum": _STATUS_ENUM}
         props[f"{name}_confidence"] = {"type": "string", "enum": _CONFIDENCE_ENUM}
     return props
 
@@ -295,7 +353,12 @@ CACHE_ENABLED = os.getenv("RANKING_CACHE", "1") != "0"
 
 def _cache_key(system: str, user_content: str) -> str:
     payload = json.dumps(
-        {"model": MODEL, "effort": EFFORT, "system": system, "user": user_content},
+        {
+            "model": MODEL,
+            "effort": EFFORT if supports_effort(MODEL) else None,
+            "system": system,
+            "user": user_content,
+        },
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()
@@ -359,12 +422,16 @@ def _structured_call(
         spend.record_cache_hit()
         return cached
 
+    output_config = {"format": {"type": "json_schema", "schema": schema}}
+    if supports_effort(MODEL):
+        output_config["effort"] = EFFORT
+
     response = client.messages.create(
         model=MODEL,
         max_tokens=2000,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_content}],
-        output_config={"format": {"type": "json_schema", "schema": schema}, "effort": EFFORT},
+        output_config=output_config,
     )
     spend.record(response.usage)
 
@@ -404,6 +471,8 @@ def parse_researcher_interest(
         min_age_years=data.get("min_age_years"),
         max_age_years=data.get("max_age_years"),
         prior_treatment_context=data.get("prior_treatment_context"),
+        approach_context=data.get("approach_context"),
+        approach_types=data.get("approach_types"),
         raw_interest=interest,
     )
 
@@ -445,9 +514,16 @@ def build_semantic_user_content(
     plumbing is free to test.
     """
     prior_context = prefs.prior_treatment_context or "(the researcher said nothing about prior therapy)"
+    # Bug #10: approach_match carries 10% of the weight, and this line is the
+    # only thing that lets it ever return anything but `unknown`. Stated
+    # explicitly when absent, for the same reason prior therapy is — a field
+    # that is simply missing reads to the model as an empty string, whereas
+    # "named no particular approach" is an instruction it can act on.
+    approach_context = prefs.approach_context or "(the researcher named no particular approach)"
     return (
         f"Researcher is tracking: {', '.join(prefs.condition_terms) or prefs.raw_interest}\n"
-        f"Researcher's patient population, re prior therapy: {prior_context}\n\n"
+        f"Researcher's patient population, re prior therapy: {prior_context}\n"
+        f"Approach/modality the researcher follows: {approach_context}\n\n"
         f"Trial record:\n{_trial_context(trial)}"
     )
 
@@ -508,6 +584,13 @@ def evaluate_semantic_signals(
 
 _CONTRIBUTION = {"match": 1.0, "partial": 0.5, "no_match": 0.0}
 
+# Statuses excluded from numerator *and* denominator. Both mean "this
+# criterion produced no verdict", so scoring them 0.0 would make an
+# unanswerable question indistinguishable from a failed one (bug #3). They
+# are separate labels because they read differently to a researcher, not
+# because they score differently.
+_NOT_SCORED = ("unknown", "not_applicable")
+
 
 def score_signals(signals: List[FitSignal]) -> Tuple[float, str, float]:
     """Weighted score over the signals that could actually be evaluated.
@@ -524,7 +607,7 @@ def score_signals(signals: List[FitSignal]) -> Tuple[float, str, float]:
     evaluated_confidences = []
 
     for signal in signals:
-        if signal.status == "unknown":
+        if signal.status in _NOT_SCORED:
             continue
         denominator += signal.weight
         numerator += signal.weight * _CONTRIBUTION.get(signal.status, 0.0)
@@ -603,10 +686,13 @@ def find_unspecified(prefs: ResearcherPreferences) -> List[UnspecifiedPreference
         "require_recruiting": prefs.require_recruiting is not None,
         "age_band": prefs.min_age_years is not None or prefs.max_age_years is not None,
         "prior_treatment_context": prefs.prior_treatment_context is not None,
-        # The parse doesn't extract a modality field; approach_match returns
-        # unknown when the researcher named none. Inferred from the interest
-        # text rather than guessed at.
-        "approach": _mentions_an_approach(prefs.raw_interest),
+        # Reads the parsed field, like every other entry here. It used to
+        # keyword-match `raw_interest` because the parse had no approach
+        # field — which let the two halves disagree: elicitation correctly
+        # stayed quiet about approach (it matched "immunotherap") while the
+        # signal scored it "researcher named no specific approach". One
+        # source of truth means they can no longer contradict each other.
+        "approach": prefs.approach_context is not None,
     }
 
     out = []
@@ -662,20 +748,29 @@ _APPROACH_HINTS = (
 
 
 def _mentions_an_approach(interest: str) -> bool:
+    # No longer part of scoring or elicitation — `approach_context` from the
+    # parse replaced it (bug #10). Kept only for tests/reachability_check.py,
+    # which analyses cached responses recorded before that field existed.
     lowered = (interest or "").lower()
     return any(hint in lowered for hint in _APPROACH_HINTS)
 
 
-def ranking_sort_key(r: FitRanking) -> Tuple[float, float]:
-    """Sort by fit, then break ties toward the better-evidenced trial.
+def ranking_sort_key(r: FitRanking):
+    """Sort by fit, then evidence, then recency.
 
     `score` is conditional — it answers "of the criteria we could assess,
     what fraction matched?". Two trials can both score 1.00 while one was
     assessed on every signal and the other on two of seven. Those are not
     equally good answers to the researcher's question, and leaving the tie
     to database order would decide it arbitrarily.
+
+    Recency is the final tiebreak, chosen by the user on 2026-08-31: best
+    fit first, and where the criteria genuinely cannot separate two trials,
+    the one ClinicalTrials.gov updated most recently wins. Note this is a
+    *disclosed* tiebreak on equal scores, not a scoring weight — it never
+    moves a worse-fitting trial above a better one.
     """
-    return (r.score, r.evaluated_weight_fraction)
+    return (r.score, r.evaluated_weight_fraction, r.last_update_post_date)
 
 
 def build_ranking(
@@ -686,6 +781,11 @@ def build_ranking(
     matches = [s for s in signals if s.status == "match"]
     unknowns = [s for s in signals if s.status == "unknown"]
     against = [s for s in signals if s.status == "no_match"]
+    # Reported separately from `unknowns` below: a criterion that cannot
+    # apply to this trial is not a gap anyone can close, so listing it as a
+    # caveat alongside real gaps would send the reader looking for an answer
+    # that does not exist.
+    not_applicable = [s for s in signals if s.status == "not_applicable"]
 
     if evaluated_fraction == 0.0:
         summary = (
@@ -714,6 +814,11 @@ def build_ranking(
     caveats = []
     for signal in unknowns:
         caveats.append(f"{signal.name.replace('_', ' ')}: {signal.evidence}")
+    for signal in not_applicable:
+        caveats.append(
+            f"{signal.name.replace('_', ' ')}: doesn't apply to this trial — "
+            f"{signal.evidence}"
+        )
     for signal in signals:
         if signal.status != "unknown" and signal.confidence == "low":
             caveats.append(
@@ -731,6 +836,7 @@ def build_ranking(
         caveats=caveats,
         source="tracked",
         evaluated_weight_fraction=evaluated_fraction,
+        last_update_post_date=trial.last_update_post_date,
     )
 
 
@@ -740,8 +846,23 @@ def rank_one_trial(
     prefs: ResearcherPreferences,
     spend: SpendTracker,
 ) -> FitRanking:
-    """Five deterministic signals plus three judged ones, for a single trial."""
-    signals = evaluate_semantic_signals(client, trial, prefs, spend) + [
+    """Five deterministic signals plus three judged ones, for a single trial.
+
+    One exception: when the trial's registered intervention *categories*
+    cannot possibly match the researcher's stated approach, that is settled
+    from structured data and the model's answer for `approach_match` is
+    discarded. Not to save a call — the same call still judges the other two
+    signals — but because a stored `interventionType` is a fact and a model's
+    reading of it is an inference, and sec. 4 prefers the fact.
+    """
+    category_verdict = score_approach_category(
+        trial, prefs, SIGNAL_WEIGHTS["approach_match"]
+    )
+    semantic = evaluate_semantic_signals(client, trial, prefs, spend)
+    if category_verdict is not None:
+        semantic = [s for s in semantic if s.name != "approach_match"] + [category_verdict]
+
+    signals = semantic + [
         score_status_recruiting(trial, prefs, SIGNAL_WEIGHTS["status_recruiting"]),
         score_phase_fit(trial, prefs, SIGNAL_WEIGHTS["phase_fit"]),
         score_age_range_fit(trial, prefs, SIGNAL_WEIGHTS["age_range_fit"]),
@@ -756,31 +877,117 @@ def rank_one_trial(
 # ============================================================================
 
 
-def fetch_trials_for_condition(conn, condition: str, limit: int) -> List[StudyDetail]:
-    """Full trial records for a condition, most recently matched first.
-
-    The subquery form (rather than a JOIN against study_conditions) is
-    deliberate: a trial carrying several matching condition tags would
-    otherwise appear once per tag — the duplication bug found in step 6b.
-    """
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+def count_candidates(conn, condition: str) -> int:
+    """How many tracked trials this condition has. Cheap — a count, no rows."""
+    with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT * FROM studies
+            SELECT count(*) FROM studies
             WHERE nct_id IN (
                 SELECT nct_id FROM study_conditions WHERE condition ILIKE %s
             )
             AND active_in_scope = true
-            ORDER BY last_matched_at DESC
-            LIMIT %s
             """,
-            (f"%{condition}%", limit),
+            (f"%{condition}%",),
+        )
+        return cur.fetchone()[0]
+
+
+def deterministic_prescore(trial: StudyDetail, prefs: ResearcherPreferences) -> Tuple[float, float]:
+    """Score one trial on the code-only signals. No model, no cost.
+
+    Includes the intervention-category verdict when it is decisive, which is
+    where it earns most of its keep: ruling a 100%-DRUG trial out of a
+    surgical researcher's shortlist happens here, before any model call is
+    spent on it, rather than after.
+    """
+    signals = [
+        score_status_recruiting(trial, prefs, SIGNAL_WEIGHTS["status_recruiting"]),
+        score_phase_fit(trial, prefs, SIGNAL_WEIGHTS["phase_fit"]),
+        score_age_range_fit(trial, prefs, SIGNAL_WEIGHTS["age_range_fit"]),
+        score_sites_active(trial, SIGNAL_WEIGHTS["sites_active"]),
+        score_enrollment_feasibility(trial, SIGNAL_WEIGHTS["enrollment_feasibility"]),
+    ]
+    category = score_approach_category(trial, prefs, SIGNAL_WEIGHTS["approach_match"])
+    if category is not None:
+        signals.append(category)
+
+    score, _confidence, evaluated = score_signals(signals)
+    return score, evaluated
+
+
+def select_ranking_candidates(
+    conn, condition: str, prefs: ResearcherPreferences, limit: int
+) -> Tuple[List[StudyDetail], int]:
+    """The best `limit` trials for this interest, out of every trial tracked
+    for the condition. Returns (trials, size of the pool they came from).
+
+    Replaces `ORDER BY last_matched_at DESC LIMIT 20`, which scored *the 20
+    most recently ingested* trials — an arbitrary sample, not a search. A
+    researcher asking for the best 20 of 5,401 was getting 20 of 5,401
+    chosen by ingestion order.
+
+    Ranking all 5,401 with the model is ~5,400 calls, roughly $32 — fourteen
+    times the entire project budget. So this is CLAUDE.md sec. 5 applied
+    literally: **deterministic first, AI second.** Stage one scores every
+    candidate on the five code-only signals, free; stage two spends the
+    model's 20 calls on the survivors.
+
+    **The honest limitation, disclosed in `notes` and on the page:** the
+    shortlist is chosen on the 55% of scoring weight the deterministic
+    signals carry. The model's three signals — condition_is_subject,
+    approach_match, prior_treatment_compatible — never see the other 5,381.
+    A trial that would have scored well on those alone can be missed. That
+    is a real recall limit, not a rounding error.
+    """
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Narrow columns on purpose: the full StudyDetail set over 5,401 rows
+        # is ~31 MB per search against a 5 GB/month allowance, and stage one
+        # reads none of it. Full records are fetched below, for 20 trials.
+        cur.execute(
+            f"""
+            SELECT {', '.join(SCORER_COLUMNS)} FROM studies
+            WHERE nct_id IN (
+                SELECT nct_id FROM study_conditions WHERE condition ILIKE %s
+            )
+            AND active_in_scope = true
+            """,
+            (f"%{condition}%",),
+        )
+        candidates = [StudyDetail(**row, conditions=[]) for row in cur.fetchall()]
+
+    if not candidates:
+        return [], 0
+
+    # Recency breaks ties, per the user's decision (2026-08-31): best fit
+    # first, and between trials the criteria cannot separate, the one
+    # ClinicalTrials.gov updated most recently wins.
+    ranked = sorted(
+        candidates,
+        key=lambda t: deterministic_prescore(t, prefs) + (t.last_update_post_date,),
+        reverse=True,
+    )
+    shortlist = [t.nct_id for t in ranked[:limit]]
+    return fetch_trials_by_id(conn, shortlist), len(candidates)
+
+
+def fetch_trials_by_id(conn, nct_ids: List[str]) -> List[StudyDetail]:
+    """Full records for a specific shortlist, in the order given.
+
+    The subquery/ANY form (rather than a JOIN against study_conditions) is
+    deliberate: a trial carrying several matching condition tags would
+    otherwise appear once per tag — the duplication bug found in step 6b.
+    """
+    if not nct_ids:
+        return []
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT {STUDY_DETAIL_COLUMNS} FROM studies WHERE nct_id = ANY(%s)",
+            (nct_ids,),
         )
         rows = cur.fetchall()
         if not rows:
             return []
-
-        nct_ids = [r["nct_id"] for r in rows]
         cur.execute(
             "SELECT nct_id, condition FROM study_conditions WHERE nct_id = ANY(%s)",
             (nct_ids,),
@@ -789,10 +996,19 @@ def fetch_trials_for_condition(conn, condition: str, limit: int) -> List[StudyDe
         for row in cur.fetchall():
             by_trial.setdefault(row["nct_id"], []).append(row["condition"])
 
-    return [
-        StudyDetail(**row, conditions=sorted(by_trial.get(row["nct_id"], [])))
-        for row in rows
-    ]
+    # `= ANY(...)` returns rows in whatever order Postgres finds them, not the
+    # order of the list passed in. Restoring the caller's order matters
+    # because the shortlist arrives already ranked by the free stage — losing
+    # it would silently hand the model an arbitrary order and make the
+    # docstring above a lie.
+    position = {nct_id: i for i, nct_id in enumerate(nct_ids)}
+    return sorted(
+        (
+            StudyDetail(**row, conditions=sorted(by_trial.get(row["nct_id"], [])))
+            for row in rows
+        ),
+        key=lambda t: position[t.nct_id],
+    )
 
 
 # ============================================================================
@@ -810,8 +1026,10 @@ def rank_trials(body: RankRequest, conn=Depends(get_readonly_db)) -> FitRankingR
 
     limit = max(1, min(body.limit, MAX_TRIALS_PER_REQUEST))
 
-    trials = fetch_trials_for_condition(conn, body.condition, limit)
-    if not trials:
+    # Cheap existence check before anything is billed. Candidate selection
+    # now needs the parsed preferences, and the parse is a paid call — so an
+    # untracked condition must be caught here, not after spending on it.
+    if not count_candidates(conn, body.condition):
         return FitRankingResponse(
             researcher_interest=body.researcher_interest,
             ranked_trials=[],
@@ -828,8 +1046,28 @@ def rank_trials(body: RankRequest, conn=Depends(get_readonly_db)) -> FitRankingR
     client = _client()
     spend = SpendTracker(MODEL)
 
-    prefs = parse_researcher_interest(client, body.researcher_interest, spend)
+    try:
+        prefs = parse_researcher_interest(client, body.researcher_interest, spend)
+    except anthropic.APIError as exc:
+        # A key that exists but cannot be used — exhausted credits, a revoked
+        # key, a rate limit. This call sits before the per-trial loop, so
+        # without this it escaped as a raw 500 and a stack trace. Confirmed
+        # the hard way on 2026-09-01, when the account ran out of credits.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Ranking is unavailable: the model API rejected the request "
+                f"({type(exc).__name__}). Nothing was scored. This is a "
+                f"credentials or billing problem, not a problem with the "
+                f"trials — the tracked data and the Monitor feed are unaffected."
+            ),
+        )
+
     unspecified = find_unspecified(prefs)
+
+    # Stage one: score every candidate on the five free signals and keep the
+    # best `limit`. Stage two (below) spends the model only on those.
+    trials, pool_size = select_ranking_candidates(conn, body.condition, prefs, limit)
 
     rankings: List[FitRanking] = []
     failures: List[str] = []
@@ -844,23 +1082,52 @@ def rank_trials(body: RankRequest, conn=Depends(get_readonly_db)) -> FitRankingR
             # the list was incomplete.
             failures.append(f"{trial.nct_id}: {type(exc).__name__} — {exc}")
 
+    # Every single trial failing is not a ranking with zero results — it is an
+    # outage. Returning 200 with an empty list would render as "no trials
+    # matched", which is a false statement about the data (sec. 2).
+    if trials and not rankings:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Ranking is unavailable: all {len(trials)} trials failed to "
+                f"score. First error — {failures[0] if failures else 'unknown'}. "
+                f"No trial was judged, so this is not a statement about fit."
+            ),
+        )
+
     rankings.sort(key=ranking_sort_key, reverse=True)
 
-    notes = f"Ranked {len(rankings)} of {len(trials)} tracked trials for '{body.condition}'."
+    notes = (
+        f"Ranked the best {len(rankings)} of {pool_size:,} tracked "
+        f"'{body.condition}' trials."
+    )
+    if pool_size > len(trials):
+        # Stated plainly rather than buried: the shortlist was chosen on the
+        # deterministic signals alone, so the model never saw the rest.
+        notes += (
+            f" The shortlist was chosen in code on recruitment status, phase, "
+            f"age, sites and enrollment — {DETERMINISTIC_WEIGHT:.0%} of the fit "
+            f"criteria. The remaining {pool_size - len(trials):,} were not "
+            f"assessed on condition relevance, approach or prior treatment."
+        )
     if failures:
         notes += (
             f" {len(failures)} trial(s) could not be scored and are listed in "
             f"`failures` — this list is incomplete."
         )
-    if len(trials) == limit:
-        notes += f" Capped at {limit} most recently updated."
 
     return FitRankingResponse(
         researcher_interest=body.researcher_interest,
         ranked_trials=rankings,
         total_trials=len(trials),
         notes=notes,
-        preferences=prefs,
+        # ResearcherPreferences (scoring) and ResearcherPreferencesOut
+        # (response schema) carry identical fields but are deliberately
+        # separate classes, so the response schema doesn't depend on the
+        # scoring module. That means the endpoint has to convert — passing
+        # `prefs` straight through raised a ValidationError on every single
+        # request, after all N model calls had already been paid for.
+        preferences=ResearcherPreferencesOut(**prefs.model_dump()),
         failures=failures,
         spend_note=spend.summary(),
         unspecified=unspecified,

@@ -237,6 +237,7 @@ class TestElicitation:
             min_age_years=18,
             max_age_years=75,
             prior_treatment_context="two prior lines",
+            approach_context="immunotherapy",
             raw_interest="breast cancer immunotherapy, phase II, recruiting, adults 18-75, after two prior lines",
         )
         assert find_unspecified(prefs) == []
@@ -266,19 +267,54 @@ class TestElicitation:
         assert weights == sorted(weights, reverse=True)
 
     def test_a_named_mechanism_is_recognised(self):
-        """If they said 'immunotherapy', don't ask them for a modality."""
+        """If they said 'immunotherapy', don't ask them for a modality.
+
+        Reads `approach_context` from the parse. It used to keyword-match
+        `raw_interest`, because the parse had no approach field at all —
+        which is precisely what let bug #10 hide: elicitation stayed quiet
+        (the keyword matched) while `approach_match` scored "researcher
+        named no specific approach" (the payload never carried it). The two
+        halves now read the same field and cannot disagree.
+        """
         from api.ranking import find_unspecified
         from api.ranking_deterministic import ResearcherPreferences
 
-        for interest in (
-            "breast cancer immunotherapy trials",
-            "trials using checkpoint inhibitors",
-            "GLP-1 agonists for obesity",
-            "CAR-T in lymphoma",
-        ):
-            prefs = ResearcherPreferences(condition_terms=["x"], raw_interest=interest)
+        for approach in ("immunotherapy", "checkpoint inhibitors",
+                         "GLP-1 agonists", "CAR-T", "bariatric surgery",
+                         "structured exercise programmes"):
+            prefs = ResearcherPreferences(
+                condition_terms=["x"], approach_context=approach,
+                raw_interest=f"trials using {approach}",
+            )
             fields = {u.field for u in find_unspecified(prefs)}
-            assert "approach" not in fields, f"should not re-ask for: {interest!r}"
+            assert "approach" not in fields, f"should not re-ask for: {approach!r}"
+
+    def test_elicitation_and_the_payload_agree_about_the_approach(self):
+        """Bug #10's structural guard, not just its symptom.
+
+        The bug was two components disagreeing: one knew the researcher had
+        named an approach, the other told the model they hadn't. Whatever
+        elicitation decides, the payload must say the same thing.
+        """
+        from api.ranking import build_semantic_user_content, find_unspecified
+        from api.ranking_deterministic import ResearcherPreferences
+        from api.schemas import StudyDetail
+        from datetime import date, datetime
+
+        trial = StudyDetail(
+            nct_id="NCT1", brief_title="t", overall_status="RECRUITING",
+            last_update_post_date=date(2026, 8, 1), active_in_scope=True,
+            fetched_at=datetime(2026, 8, 30), last_matched_at=datetime(2026, 8, 30),
+        )
+        for approach in (None, "checkpoint inhibitors"):
+            prefs = ResearcherPreferences(condition_terms=["x"], approach_context=approach)
+            asked = "approach" in {u.field for u in find_unspecified(prefs)}
+            told_model_none = "named no particular approach" in build_semantic_user_content(trial, prefs)
+            assert asked == told_model_none, (
+                f"approach_context={approach!r}: elicitation "
+                f"{'asked' if asked else 'stayed quiet'} but the payload "
+                f"{'said none was named' if told_model_none else 'carried one'}"
+            )
 
     def test_no_mechanism_named_is_asked_about(self):
         from api.ranking import find_unspecified

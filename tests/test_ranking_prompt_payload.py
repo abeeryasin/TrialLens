@@ -200,3 +200,69 @@ class TestPromptAndSchemaAgree:
     def test_prompt_prefers_unknown_over_guessing(self):
         assert "unknown" in SEMANTIC_SYSTEM.lower()
         assert "guess" in SEMANTIC_SYSTEM.lower()
+
+
+class TestApproachReachesTheModel:
+    """Bug #10's regression guard.
+
+    `approach_match` carries 10% of the scoring weight and returned
+    `unknown` on 20 of 20 real trials, reporting "Researcher named no
+    specific approach" — for the interest "...testing immunotherapy or
+    targeted agents in adults."
+
+    `build_semantic_user_content()` sent only `condition_terms` and
+    `prior_treatment_context`; `raw_interest` appeared solely as a fallback
+    for when condition terms were empty. So the words "immunotherapy or
+    targeted agents" never reached the model at all.
+
+    That is bug #7 exactly — a weighted signal whose input is never plumbed
+    into the payload — recurring inside the very function whose docstring
+    describes bug #7. It cost $0.13 to find live. These assertions cost $0.
+    """
+
+    APPROACH_PREFS = ResearcherPreferences(
+        condition_terms=["breast cancer"],
+        approach_context="immunotherapy or targeted agents",
+        raw_interest="I follow breast cancer trials testing immunotherapy or targeted agents.",
+    )
+
+    def test_stated_approach_is_in_the_payload(self):
+        content = build_semantic_user_content(make_trial(), self.APPROACH_PREFS)
+        assert "immunotherapy or targeted agents" in content
+
+    def test_absent_approach_is_stated_explicitly_not_omitted(self):
+        """Same rule as prior therapy: a silently missing field reads as an
+        empty string. 'The researcher named no approach' is an instruction;
+        saying nothing is not."""
+        content = build_semantic_user_content(make_trial(), ResearcherPreferences())
+        assert "no particular approach" in content
+
+    def test_the_parse_can_actually_return_an_approach(self):
+        """The payload can only carry what the parse extracts. Before the
+        fix there was no such field anywhere in the schema, so no wording of
+        the interest could ever have populated it."""
+        assert "approach_context" in INTEREST_PARSE_SCHEMA["properties"]
+        assert "approach_context" in INTEREST_PARSE_SCHEMA["required"]
+
+    def test_every_weighted_model_signal_has_its_input_in_the_payload(self):
+        """The general form of bugs #7 and #10, rather than a third
+        one-off. Every signal the model is asked to judge must have the
+        researcher's side of the comparison present in the payload."""
+        content = build_semantic_user_content(
+            make_trial(),
+            ResearcherPreferences(
+                condition_terms=["breast cancer"],
+                prior_treatment_context="two prior lines",
+                approach_context="checkpoint inhibitors",
+            ),
+        )
+        for signal, researcher_input in [
+            ("condition_is_subject", "breast cancer"),
+            ("prior_treatment_compatible", "two prior lines"),
+            ("approach_match", "checkpoint inhibitors"),
+        ]:
+            assert researcher_input in content, (
+                f"{signal} is a weighted signal but the researcher's input "
+                f"({researcher_input!r}) never reaches the model — it can only "
+                f"ever return 'unknown'."
+            )

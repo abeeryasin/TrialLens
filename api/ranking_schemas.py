@@ -6,6 +6,7 @@ here were removed with `tests/test_ranking_harness.py` (2026-08-31) — the
 harness in `tests/test_ranking_integration.py` reports as it goes rather
 than building a report object, so nothing constructed them.
 """
+from datetime import date
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel
@@ -20,11 +21,17 @@ class FitSignal(BaseModel):
     #   code  — status_recruiting, phase_fit, age_range_fit, sites_active,
     #           enrollment_feasibility
 
-    status: Literal["match", "no_match", "unknown", "partial"]
+    status: Literal["match", "no_match", "unknown", "partial", "not_applicable"]
     # match: signal is positive
     # no_match: signal is negative (trial doesn't fit)
-    # unknown: can't determine from available data
     # partial: signal is mixed
+    # unknown: not enough information — either the researcher didn't say, or
+    #          the trial's record doesn't carry it. A gap that could be filled.
+    # not_applicable: the criterion has no meaning for this trial — phase for
+    #          an observational study, say. NOT a gap; no answer exists to find.
+    # The last two are kept apart deliberately (see _STATUS_ENUM in
+    # api/ranking.py): they score identically but read very differently, and
+    # only `unknown` is ever worth chasing.
 
     evidence: str
     # Plain language explaining this signal. For researchers, not devs.
@@ -53,6 +60,11 @@ class FitRanking(BaseModel):
     summary: str
     caveats: List[str]
     source: Literal["tracked", "live"]
+
+    last_update_post_date: date
+    # When ClinicalTrials.gov last updated the record. Breaks ties between
+    # trials the fit criteria cannot separate (api.ranking.ranking_sort_key),
+    # and worth showing: "best fit" and "most current" are different claims.
 
     evaluated_weight_fraction: float = 1.0
     # How much of the total signal weight could actually be assessed. A 0.9
@@ -128,6 +140,8 @@ class ResearcherPreferencesOut(BaseModel):
     min_age_years: Optional[float] = None
     max_age_years: Optional[float] = None
     prior_treatment_context: Optional[str] = None
+    approach_context: Optional[str] = None
+    approach_types: Optional[List[str]] = None
     raw_interest: str = ""
 
 
