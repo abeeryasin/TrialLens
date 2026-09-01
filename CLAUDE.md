@@ -67,21 +67,35 @@ running on GitHub Actions), Discover live-fallback (`GET /discover`), and
 the Streamlit frontend — Discover, Understand, and the Monitor feed
 (`GET /changes`). Explore and Investigate aren't built yet.
 
-**Step 7 (AI ranking/evidence layer) is in progress** — the first LLM in
-the system. `POST /rank` works: five of its eight fit signals run in plain
-code (`api/ranking_deterministic.py`, no model client imported), three are
-model-judged, and the researcher's interest is parsed once per search
-rather than per trial. 103 free tests pass, including every deterministic
-scorer against all 11,474 real trials. **Nothing renders it yet — Unit 4,
-the Streamlit ranking page, is the next task.** Read
-`docs/STEP7_SESSION_SUMMARY.md` first; it carries the eight bugs already
-fixed and four decisions the user has deliberately left open. **Step 7 is
-not on `main`** — it's on the branch `step7-ranking-deterministic-split`.
+**Step 7 (AI ranking layer) is built, measured, and being removed.** It
+lives on the branch `step7-ranking-deterministic-split`, in two commits:
+`1175b71` (infrastructure that stays) and `f9ccb45` (the ranking layer as
+a documented dead end). 130 free tests pass. **Neither is on `main`.**
 
-**Hard constraint: the Anthropic API budget is $5 total, ~$4.45 left.**
-An on-disk response cache (`.ranking_cache/`) replays identical requests
-for $0, so iterating on weights, scoring, or display costs nothing — only
-a real prompt/model change spends. Never put the paid eval harness in CI.
+Measuring it produced the case against it: four of its five scored signals
+were filters wearing a score's costume, and only "is this trial actually
+about the condition?" was a genuine judgment — whose value scales with
+volume, in a product that is deliberately low-volume (~17 changed trials a
+week). Removal is `git rm`, **not** `git revert f9ccb45` — that reverts
+only this session's changes and leaves the older, buggier ranking in place.
+
+**Next is not roadmap step 8 (Explore).** It is three time-based
+directions agreed 2026-09-01, none of which needs a model:
+**amendment history** (a trial's changes are its headline), **the watch**
+(lead with what is being watched; design the quiet week as the primary
+screen), and **the watch record** (elapsed time is the moat — and shout
+when the cron dies rather than serving a stale feed). See
+`docs/plan_after_ranking.md`.
+
+**Hard constraint: the Anthropic account is out of credits as of
+2026-09-01.** No paid call can run. Everything except ranking is
+unaffected. Real measured cost is **~$0.019 per trial** on the step-7
+prompt, and **~$0.0016** on the one-question replacement — *not* the
+$0.006 in older notes, which was measured against synthetic fixtures. This
+project's real text is **2.61 characters per token**, not the usual ~4.0
+rule of thumb; assuming 4.0 understates any estimate by ~53%. Re-measure
+before quoting. `.ranking_cache/` still replays recorded requests for $0.
+Never put a paid harness in CI.
 
 Three standing gotchas worth knowing before touching data: the Neon branch
 named `dev` is the real live database (`production` is an empty leftover;

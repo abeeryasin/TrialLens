@@ -1713,3 +1713,38 @@ prior-treatment case against real criteria text; whether effort=high changes
 ordering; and the researcher-judgment protocol in
 `docs/verify_ranking_results.md`, which needs ~$0.32 of fresh ranking (or can
 run against the 5 cached trials for $0).
+
+## 2026-09-01 — Step 7's two working docs deleted; what they held
+
+`docs/STEP7_SESSION_SUMMARY.md` (361 lines) and
+`docs/step7_implementation_guide.md` (237 lines) removed as redundant.
+Both were working documents for a layer that is being removed, and both
+were checked for unique content first rather than assumed redundant.
+
+The implementation guide already carried a STALE banner naming six of its
+own claims as wrong, and stated it was "retained for the research findings
+near the bottom, in particular precision/recall around 0.32-0.45." That
+figure is the one the 2026-08-31 TrialGPT entry above **corrects** —
+NDCG@10 0.7275, P@10 0.6724 — so the doc's only stated reason to exist was
+itself the error. Its other content (unit checklists, a files-created list
+naming two files already deleted, six generic workflow findings) is either
+superseded by the code or by that entry.
+
+The session summary's substance — the eight bugs, the budget and cache
+mechanics, the gitignored files that don't travel with a clone, the
+`sites_active` and confidence-threshold questions — is all recorded above
+and in CLAUDE.md. **Two of its four open questions were not, and are
+recorded here now so deleting the file doesn't erase them:**
+
+1. **The ranking tie.** When a researcher stated no preference, a
+   recruiting and a completed trial could score identically. Options were
+   (a) leave tied, (b) weak defaults, (c) a disclosed tiebreak. Partly
+   answered 2026-08-31 — recency became the disclosed tiebreak — and
+   **moot from here, because the score is being removed.**
+2. **The paid prior-treatment eval case.** Designed against the real
+   criteria text of the 3,407 trials carrying prior-therapy language,
+   never built. **Moot: the `prior_treatment_compatible` signal is being
+   cut** — it carried 15% of the weight while being relevant to 28% of
+   breast cancer trials and 1% of obesity trials.
+
+Both are recorded as closed, not as outstanding work.

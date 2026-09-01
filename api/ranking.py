@@ -712,49 +712,6 @@ def find_unspecified(prefs: ResearcherPreferences) -> List[UnspecifiedPreference
     return sorted(out, key=lambda u: u.weight_unscored, reverse=True)
 
 
-# Vocabulary for "did the researcher already name an approach?" — used only to
-# decide whether to ask, never to score. The signal itself is judged by the
-# model and is not limited to this list.
-#
-# Weighted toward what the database actually contains rather than toward drug
-# trials. Intervention types across 11,490 studies (2026-08-31): DRUG 9,455,
-# OTHER 3,967, BEHAVIORAL 3,518, PROCEDURE 2,042, DEVICE 1,045,
-# DIETARY_SUPPLEMENT 767, RADIATION 619, BIOLOGICAL 578. Non-drug is over half,
-# and obesity — one of the two tracked conditions — is heavily behavioural. An
-# earlier drug-only list would have asked a researcher who said "behavioural
-# weight-loss interventions" what mechanism they follow.
-#
-# A miss costs a redundant question, never a wrong score, so erring toward
-# more vocabulary is the safe direction.
-_APPROACH_HINTS = (
-    # drug / biologic
-    "immunotherap", "checkpoint", "pd-1", "pd-l1", "ctla", "car-t", "car t",
-    "glp-1", "glp1", "sglt2", "agonist", "antagonist", "inhibitor", "antibody",
-    "monoclonal", "kinase", "biologic", "bispecific", "engager", "conjugate",
-    "chemotherap", "hormone therap", "endocrine therap", "targeted therap",
-    "gene therap", "cell therap", "vaccine", "peptide", "statin", "insulin",
-    # procedure / device / radiation
-    "surgical", "surgery", "bariatric", "radiotherap", "radiation", "ablation",
-    "device", "implant", "stimulation", "endoscop", "catheter",
-    # behavioural / lifestyle / dietary — over a third of interventions
-    "behavio", "lifestyle", "diet", "nutrition", "exercise", "physical activity",
-    "counsel", "psychotherap", "cognitive behavio", "cbt", "mindfulness",
-    "education", "coaching", "supplement", "probiotic", "fasting",
-    "physiotherap", "rehabilitation", "sleep",
-    # digital / delivery
-    "digital", "telehealth", "telemedicine", "app-based", "mobile health",
-    "mhealth", "wearable", "remote monitoring", "screening",
-)
-
-
-def _mentions_an_approach(interest: str) -> bool:
-    # No longer part of scoring or elicitation — `approach_context` from the
-    # parse replaced it (bug #10). Kept only for tests/reachability_check.py,
-    # which analyses cached responses recorded before that field existed.
-    lowered = (interest or "").lower()
-    return any(hint in lowered for hint in _APPROACH_HINTS)
-
-
 def ranking_sort_key(r: FitRanking):
     """Sort by fit, then evidence, then recency.
 
