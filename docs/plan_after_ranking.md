@@ -180,14 +180,32 @@ claim that the trial is relevant.
 
 ## What gets deleted
 
-`git revert f9ccb45` removes: `api/ranking.py`, `api/ranking_schemas.py`,
-`frontend/pages/4_Ranking.py`, `tests/test_ranking_endpoint.py`,
-`scripts/rank_dry_run.py`, `scripts/cache_coverage.py`, and the ranking
-test suites, and reverts `frontend/Home.py` to "planned".
+**Removal is `git rm`, NOT `git revert f9ccb45`.** Reverting that commit
+only undoes the 2026-09-01 changes to `api/ranking.py` and restores the
+*older, buggier* ranking from `main` — the file is modified by that commit,
+not created by it. Verified 2026-09-01 by running `git revert -n` and
+reading the result: `api/ranking.py` came back as `M`, not `D`.
 
-Verified 2026-09-01 that this revert leaves the egress fix and all 50
-`decisions.md` entries intact — that is why the branch was split into two
-commits.
+Delete outright:
+
+    api/ranking.py                    frontend/pages/4_Ranking.py
+    api/ranking_schemas.py            tests/test_ranking_endpoint.py
+    tests/test_ranking_scoring.py     tests/test_ranking_prompt_payload.py
+    tests/test_ranking_integration.py tests/test_data_synthetic_trials.py
+    scripts/rank_dry_run.py           scripts/cache_coverage.py
+
+**Keep** `api/ranking_deterministic.py` and
+`tests/test_ranking_real_data.py` — those are the filter logic and its
+guard, which survive. Revert `frontend/Home.py` to `"planned"`.
+
+**One test must go with the removal, not before:**
+`test_every_type_the_parse_may_emit_is_a_real_ctgov_value` in
+`tests/test_ranking_deterministic.py` asserts against
+`INTEREST_PARSE_SCHEMA`, which lives in a deleted file.
+
+The branch was split into two commits so that `1175b71` — the egress fix,
+the scorers, the AST guard, and all of `decisions.md` — is never entangled
+with this removal.
 
 **Kept:** the deterministic scorers, `STUDY_DETAIL_COLUMNS`, the AST column
 guard, `scripts/paid_preflight.py`, the response cache, and every dated
