@@ -40,6 +40,7 @@ DIFF_FIELDS = [
     "eligibility_criteria", "last_update_post_date",
     "brief_summary", "lead_sponsor", "start_date", "primary_completion_date",
     "completion_date", "interventions", "primary_outcomes", "locations",
+    "has_results",
 ]
 
 UPSERT_STUDIES = """
@@ -48,7 +49,7 @@ UPSERT_STUDIES = """
         phase, enrollment_count, enrollment_type, sex, minimum_age, maximum_age, healthy_volunteers,
         eligibility_criteria, last_update_post_date, raw_json,
         brief_summary, lead_sponsor, start_date, primary_completion_date,
-        completion_date, interventions, primary_outcomes, locations,
+        completion_date, interventions, primary_outcomes, locations, has_results,
         fetched_at, active_in_scope, last_matched_at
     ) VALUES %s
     ON CONFLICT (nct_id) DO UPDATE SET
@@ -59,6 +60,7 @@ UPSERT_STUDIES = """
         phase = EXCLUDED.phase,
         enrollment_count = EXCLUDED.enrollment_count,
         enrollment_type = EXCLUDED.enrollment_type,
+        has_results = EXCLUDED.has_results,
         sex = EXCLUDED.sex,
         minimum_age = EXCLUDED.minimum_age,
         maximum_age = EXCLUDED.maximum_age,
@@ -216,6 +218,7 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
             psycopg2.extras.Json(normalize(r.interventions)),
             psycopg2.extras.Json(normalize(r.primary_outcomes)),
             psycopg2.extras.Json(normalize(r.locations)),
+            r.has_results,
         )
         for r in records
     ]

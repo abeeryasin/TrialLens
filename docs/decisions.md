@@ -1870,3 +1870,51 @@ a trial that does not exist, which reads as "this trial has been quiet". It
 had done so since it was written. And `is_formatting_only()`'s docstring
 claimed four clinical cases "were checked"; nothing checked them. Both now
 hold.
+
+## 2026-09-02 — Why an amendment was invisible: we were not looking at the field
+
+"Why can't we see one of the amendments?" turned out to have a better
+answer than "CT.gov changed something we don't store."
+
+The diff compares **21 normalized columns**. The raw record carries 11
+protocol modules plus two top-level keys, and the most consequential thing
+in it was never read: **`hasResults`**. It sits at the TOP level of the API
+response, not inside `protocolSection`, so a parser that walked every
+module one level down never saw it.
+
+**1,056 of 11,518 stored trials already have results posted** — 751 of them
+completed. A trial going `false -> true` means its findings are published,
+which is the single most consequential amendment a researcher following a
+therapeutic area can receive, and every one of those had been rendering as
+"amended, but we can't see what."
+
+Now stored, diffed, classified Scientific, and described in words
+("results have been posted — the trial's findings are now published").
+
+**The backfill needed no network call, and that is the point.** §4 says to
+keep the raw record alongside the normalized one. This is the first time
+that decision paid: `has_results` was recovered for all 11,518 trials
+straight out of stored `raw_json`. A field nobody thought to normalize in
+August was recoverable in September for free. Without raw_json it would
+have meant refetching 11,518 records from a public API at ~50 req/min.
+
+**Backfilled values are deliberately NOT written to `study_changes`.**
+Doing so would log 1,056 "results were posted" amendments dated today for
+trials that published months or years ago — a false claim about when
+something happened (§2). The backfill sets the baseline; only transitions
+the real diff detects from here are amendments.
+
+**What is still unread, in descending order of likely value:**
+`referencesModule` (4,443 trials — a new publication attached to a trial is
+real news), `oversightModule` (11,361), central contacts (5,044), and
+`derivedSection`. The remaining "invisible" amendments are mostly these.
+A cheaper general fix exists and is not built: at diff time we hold both
+the old and the new `raw_json` for the ~91 trials a run refetches, so
+naming *which modules* changed would cost one extra column in a query
+already running, and would convert most of the remaining invisible
+amendments into "the sponsor changed the references section."
+
+The generalisable lesson, and it is the same one as 2026-08-31: **the shape
+of the real payload is not the shape the code assumes.** That time it was
+values inside a field (`PHASE2`, not "Phase 2"). This time it was a field
+one level up from where every other field lived.

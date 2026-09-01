@@ -19,6 +19,7 @@ FIELD_LABELS = {
     "phase": "Phase",
     "enrollment_count": "Enrollment",
     "enrollment_type": "Enrollment figure type (target vs. actual)",
+    "has_results": "Posted results",
     "sex": "Sex",
     "minimum_age": "Minimum age",
     "maximum_age": "Maximum age",

@@ -22,6 +22,7 @@ from api.amendments import (
     describe_date_shift,
     describe_effect,
     describe_enrollment_type,
+    describe_results_posting,
     describe_list_shift,
     describe_status_change,
     field_aspect,
@@ -209,3 +210,39 @@ class TestDescribeEffectBoundary:
             "pushed about 12 months later"
         assert describe_effect("enrollment_count", "1155", "1195") == "increased by 40"
         assert "real enrolled count" in describe_effect("enrollment_type", "ESTIMATED", "ACTUAL")
+
+
+class TestResultsPosting:
+    """has_results, added 2026-09-02 after finding it was never stored.
+
+    `hasResults` sits at the TOP level of the CT.gov response rather than
+    inside protocolSection, so the original parser — which read every module
+    one level down — never saw it. 1,056 of 11,518 stored trials already had
+    results posted, and every one of those amendments had been reported as
+    "amended, but we can't see what".
+    """
+
+    def test_false_to_true_is_stated_as_the_findings_being_published(self):
+        result = describe_results_posting("false", "true")
+        assert "results have been posted" in result
+        assert "published" in result
+
+    def test_stringified_booleans_from_study_changes_are_handled(self):
+        """study_changes stores everything as TEXT, so the values arrive as
+        "true"/"false" strings, not Python booleans."""
+        assert describe_results_posting("false", "true") == describe_results_posting(False, True)
+
+    def test_withdrawal_of_results_is_flagged_as_unusual(self):
+        assert "unusual" in describe_results_posting("true", "false")
+
+    def test_no_change_and_missing_values_produce_nothing(self):
+        assert describe_results_posting("true", "true") is None
+        assert describe_results_posting(None, "true") is None
+        assert describe_results_posting("false", None) is None
+
+    def test_it_is_classified_as_scientific_not_administrative(self):
+        """Results appearing is the trial's whole point, not bookkeeping."""
+        assert field_aspect("has_results") == ASPECT_SCIENTIFIC
+
+    def test_it_routes_through_describe_effect(self):
+        assert "results have been posted" in describe_effect("has_results", "false", "true")

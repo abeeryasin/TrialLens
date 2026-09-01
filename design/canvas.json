@@ -1,0 +1,31 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1280, "h": 1120, "title": "The quiet week — primary screen" },
+    { "file": "NewsWeek.dc.html", "x": 1400, "y": 0, "w": 1280, "h": 1260, "title": "A week with real news" },
+    { "file": "Alarm.dc.html", "x": 2800, "y": 0, "w": 1280, "h": 900, "title": "The cron has died" }
+  ],
+  "annotations": [
+    {
+      "id": "quiet-is-the-point",
+      "x": 0,
+      "y": -190,
+      "w": 520,
+      "text": "This is the screen a researcher sees most often.\n29 and 30 August had zero amendments — that is real data, not a placeholder.\nToday it renders as an empty table, which reads as a broken app."
+    },
+    {
+      "id": "news-hierarchy",
+      "x": 1400,
+      "y": -190,
+      "w": 520,
+      "text": "Scientific changes lead; the other 60 amendments are subordinate but never hidden.\nGrouping and the effect lines come from the endpoint that already ships."
+    },
+    {
+      "id": "alarm-replaces",
+      "x": 2800,
+      "y": -190,
+      "w": 520,
+      "text": "The alarm REPLACES the page rather than sitting above it.\nA stale feed under a small warning still reads as current — that is the failure being designed out."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

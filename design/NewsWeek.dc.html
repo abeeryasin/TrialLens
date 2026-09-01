@@ -1,0 +1,151 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Source Sans 3', 'Source Sans Pro', system-ui, sans-serif; }
+    a { color: #0068c9; text-decoration: none; }
+    a:hover { color: #00509b; text-decoration: underline; }
+  </style>
+</helmet>
+
+<div style="background: #ffffff; color: #31333f; min-height: 100%; padding: 40px 56px 56px;">
+
+  <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 40px;">
+    <div style="font-size: 20px; font-weight: 700; letter-spacing: -0.01em;">TrialLens</div>
+    <div style="font-size: 14px; color: #6c6e7b;">Watching breast cancer and obesity</div>
+  </div>
+
+  <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 40px; margin-bottom: 12px;">
+    <div>
+      <div style="font-size: 44px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1;">
+        Watching 11,427 trials
+      </div>
+      <div style="font-size: 17px; color: #6c6e7b; margin-top: 8px;">
+        Checked every 6 hours · last checked 2 hours ago, at 18:03
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; background: rgba(33,195,84,0.10); border-radius: 8px; padding: 10px 14px; white-space: nowrap;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0f8a3c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 6 9 17l-5-5"></path>
+      </svg>
+      <span style="font-size: 14px; font-weight: 600; color: #0f8a3c;">Watch is healthy</span>
+    </div>
+  </div>
+
+  <div style="height: 1px; background: #e6eaf1; margin: 28px 0 32px;"></div>
+
+  <!-- The news week leads with what changed the SCIENCE, not with a count of rows -->
+  <div style="font-size: 26px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 6px;">
+    Three trials changed something scientific.
+  </div>
+  <div style="font-size: 16px; color: #4a4c58; margin-bottom: 28px; max-width: 68ch; line-height: 1.55;">
+    Out of 63 amendments in the last 24 hours. The other 60 moved dates, sites,
+    enrolment figures or titles — they are below the fold, not hidden.
+  </div>
+
+  <!-- one card per trial, aspect-grouped exactly as the built endpoint returns it -->
+  <div style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 32px;">
+
+    <div style="border: 1px solid #e6eaf1; border-left: 3px solid #d14b8f; border-radius: 8px; padding: 20px 24px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px;">
+        <div style="font-size: 17px; font-weight: 600;">NCT06585306</div>
+        <div style="font-size: 14px; color: #6c6e7b; white-space: nowrap;">Amended 28 August</div>
+      </div>
+      <div style="font-size: 15px; color: #6c6e7b; margin-top: 2px;">
+        High-flow Nasal Oxygen Therapy in Obese Patients Undergoing Sedative Gastroscopy
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin: 16px 0 8px;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #d14b8f;"></span>
+        <span style="font-size: 13px; font-weight: 600; color: #4a4c58;">Scientific</span>
+      </div>
+      <div style="font-size: 15px; line-height: 1.5;">
+        <strong style="font-weight: 600;">Eligibility criteria</strong> — text changed (+3 / −14 words)
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin: 14px 0 8px;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #8b8fa3;"></span>
+        <span style="font-size: 13px; font-weight: 600; color: #4a4c58;">Operational</span>
+      </div>
+      <div style="font-size: 15px; line-height: 1.5;">
+        <strong style="font-weight: 600;">Status</strong> — RECRUITING → COMPLETED ·
+        <em style="color: #6c6e7b;">finished — results may start appearing</em>
+      </div>
+    </div>
+
+    <div style="border: 1px solid #e6eaf1; border-left: 3px solid #d14b8f; border-radius: 8px; padding: 20px 24px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px;">
+        <div style="font-size: 17px; font-weight: 600;">NCT01901094</div>
+        <div style="font-size: 14px; color: #6c6e7b; white-space: nowrap;">Amended 31 August</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin: 16px 0 8px;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #d14b8f;"></span>
+        <span style="font-size: 13px; font-weight: 600; color: #4a4c58;">Scientific</span>
+      </div>
+      <div style="font-size: 15px; line-height: 1.5;">
+        <strong style="font-weight: 600;">Eligibility criteria</strong> — text changed (+7 / −0 words)
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin: 14px 0 8px;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #8b8fa3;"></span>
+        <span style="font-size: 13px; font-weight: 600; color: #4a4c58;">Operational</span>
+      </div>
+      <div style="font-size: 15px; line-height: 1.5;">
+        <strong style="font-weight: 600;">Location(s)</strong> — 5 sites added, 5 removed
+      </div>
+    </div>
+
+    <div style="border: 1px solid #e6eaf1; border-left: 3px solid #d14b8f; border-radius: 8px; padding: 20px 24px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px;">
+        <div style="font-size: 17px; font-weight: 600;">NCT05379153</div>
+        <div style="font-size: 14px; color: #6c6e7b; white-space: nowrap;">Amended 31 August</div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin: 16px 0 8px;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #d14b8f;"></span>
+        <span style="font-size: 13px; font-weight: 600; color: #4a4c58;">Scientific</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.5;">
+        <div><strong style="font-weight: 600;">Primary outcomes</strong> — changed</div>
+        <div><strong style="font-weight: 600;">Eligibility criteria</strong> — text changed</div>
+        <div><strong style="font-weight: 600;">Summary</strong> — text changed</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- the amendments that are real but not news: present, subordinate, never hidden -->
+  <div style="background: #f0f2f6; border-radius: 10px; padding: 20px 24px; margin-bottom: 32px;">
+    <div style="font-size: 15px; font-weight: 600; margin-bottom: 6px;">60 other amendments</div>
+    <div style="font-size: 15px; color: #4a4c58; line-height: 1.55;">
+      25 completion dates, 24 status changes, 20 site lists, 10 enrolment figures.
+      <a href="#">See all in Monitor</a>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 56px; padding-top: 28px; border-top: 1px solid #e6eaf1;">
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Watching since</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">28 August 2026</div>
+    </div>
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Changes recorded</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">498</div>
+    </div>
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Amendments seen</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">212</div>
+    </div>
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Checks run</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">21</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

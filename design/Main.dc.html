@@ -1,0 +1,137 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Source Sans 3', 'Source Sans Pro', system-ui, sans-serif; }
+    a { color: #0068c9; text-decoration: none; }
+    a:hover { color: #00509b; text-decoration: underline; }
+  </style>
+</helmet>
+
+<div style="background: #ffffff; color: #31333f; min-height: 100%; padding: 40px 56px 56px;">
+
+  <!-- masthead -->
+  <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 40px;">
+    <div style="font-size: 20px; font-weight: 700; letter-spacing: -0.01em;">TrialLens</div>
+    <div style="font-size: 14px; color: #6c6e7b;">Watching breast cancer and obesity</div>
+  </div>
+
+  <!-- THE WATCH: the statement that leads, instead of a search box -->
+  <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 40px; margin-bottom: 12px;">
+    <div>
+      <div style="font-size: 44px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1;">
+        Watching 11,427 trials
+      </div>
+      <div style="font-size: 17px; color: #6c6e7b; margin-top: 8px;">
+        Checked every 6 hours · last checked 2 hours ago, at 18:03
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 8px; background: rgba(33,195,84,0.10); border-radius: 8px; padding: 10px 14px; white-space: nowrap;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0f8a3c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 6 9 17l-5-5"></path>
+      </svg>
+      <span style="font-size: 14px; font-weight: 600; color: #0f8a3c;">Watch is healthy</span>
+    </div>
+  </div>
+
+  <div style="height: 1px; background: #e6eaf1; margin: 28px 0 32px;"></div>
+
+  <!-- THE QUIET WEEK, stated as a finding rather than an empty table -->
+  <div style="background: #f0f2f6; border-radius: 10px; padding: 28px 32px; margin-bottom: 32px;">
+    <div style="font-size: 26px; font-weight: 700; letter-spacing: -0.01em;">
+      Nothing has changed in 48 hours.
+    </div>
+    <div style="font-size: 16px; color: #4a4c58; margin-top: 10px; max-width: 68ch; line-height: 1.55;">
+      All 11,427 trials were checked on 29 and 30 August and none of them was amended.
+      Most weeks look like this — a quiet week is the watch working, not the watch broken.
+    </div>
+
+    <!-- the 7-day record: shows the quiet days ARE data, not absence of data -->
+    <div style="display: flex; gap: 10px; margin-top: 24px;">
+      <div style="display: flex; flex-direction: column; gap: 6px; align-items: center;">
+        <div style="width: 44px; height: 44px; border-radius: 6px; background: #cfd6e4; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; color: #31333f;">79</div>
+        <div style="font-size: 12px; color: #6c6e7b;">28 Aug</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; align-items: center;">
+        <div style="width: 44px; height: 44px; border-radius: 6px; background: #ffffff; border: 1px solid #e6eaf1; display: flex; align-items: center; justify-content: center; font-size: 15px; color: #a3a8b8;">0</div>
+        <div style="font-size: 12px; color: #6c6e7b;">29 Aug</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; align-items: center;">
+        <div style="width: 44px; height: 44px; border-radius: 6px; background: #ffffff; border: 1px solid #e6eaf1; display: flex; align-items: center; justify-content: center; font-size: 15px; color: #a3a8b8;">0</div>
+        <div style="font-size: 12px; color: #6c6e7b;">30 Aug</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; align-items: center;">
+        <div style="width: 44px; height: 44px; border-radius: 6px; background: #cfd6e4; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; color: #31333f;">70</div>
+        <div style="font-size: 12px; color: #6c6e7b;">31 Aug</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; align-items: center;">
+        <div style="width: 44px; height: 44px; border-radius: 6px; background: #cfd6e4; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; color: #31333f;">63</div>
+        <div style="font-size: 12px; color: #6c6e7b;">1 Sep</div>
+      </div>
+      <div style="display: flex; align-items: center; margin-left: 8px;">
+        <span style="font-size: 13px; color: #6c6e7b;">amendments per day</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEVER AN EMPTY SCREEN: the last real thing that happened -->
+  <div style="font-size: 13px; font-weight: 600; color: #6c6e7b; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 14px;">
+    The last thing that happened
+  </div>
+
+  <div style="border: 1px solid #e6eaf1; border-radius: 10px; padding: 22px 24px; margin-bottom: 32px;">
+    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px;">
+      <div style="font-size: 17px; font-weight: 600;">
+        NCT02954874 · Amended 31 August
+      </div>
+      <div style="font-size: 14px; color: #6c6e7b; white-space: nowrap;">2 days ago</div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 8px; margin: 16px 0 10px;">
+      <span style="width: 8px; height: 8px; border-radius: 50%; background: #8b8fa3;"></span>
+      <span style="font-size: 13px; font-weight: 600; color: #4a4c58;">Operational</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 8px; font-size: 15px; line-height: 1.5;">
+      <div><strong style="font-weight: 600;">Completion date</strong> — 2026-08-31 → 2027-08-27 · <em style="color: #6c6e7b;">pushed about 12 months later</em></div>
+      <div><strong style="font-weight: 600;">Enrollment</strong> — 1,155 → 1,195 · <em style="color: #6c6e7b;">increased by 40</em></div>
+      <div><strong style="font-weight: 600;">Enrollment figure type</strong> — ESTIMATED → ACTUAL · <em style="color: #6c6e7b;">the recruitment target was replaced by a real enrolled count</em></div>
+    </div>
+  </div>
+
+  <!-- THE WATCH RECORD: the moat a fresh clone does not have -->
+  <div style="display: flex; gap: 56px; padding-top: 28px; border-top: 1px solid #e6eaf1;">
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Watching since</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">28 August 2026</div>
+    </div>
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Changes recorded</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">498</div>
+    </div>
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Amendments seen</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">212</div>
+    </div>
+    <div>
+      <div style="font-size: 13px; color: #6c6e7b;">Checks run</div>
+      <div style="font-size: 22px; font-weight: 600; margin-top: 4px;">21</div>
+    </div>
+  </div>
+
+  <div style="font-size: 13px; color: #8b8fa3; margin-top: 20px; max-width: 78ch; line-height: 1.5;">
+    ClinicalTrials.gov publishes only a trial's current version, so anything amended before
+    28 August cannot be shown here. Everything since has been recorded.
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

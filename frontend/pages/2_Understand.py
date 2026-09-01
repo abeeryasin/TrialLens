@@ -64,10 +64,22 @@ if is_live:
         "history is available since we don't track it."
     )
 
-status_col, phase_col, type_col = st.columns(3)
+status_col, phase_col, type_col, results_col = st.columns(4)
 status_col.markdown(f"**Status**\n\n{study['overall_status']}")
 phase_col.markdown(f"**Phase**\n\n{study['phase'] or '—'}")
 type_col.markdown(f"**Study type**\n\n{study['study_type'] or '—'}")
+
+# Whether the findings are published — the thing a researcher following a
+# trial is ultimately waiting for. Three states, not two: None means we
+# have no record of it (a live snapshot from before this was stored), which
+# is different from knowing there are none (sec. 2).
+has_results = study.get("has_results")
+if has_results is None:
+    results_col.markdown("**Results**\n\nNot recorded")
+elif has_results:
+    results_col.markdown("**Results**\n\n✅ Posted")
+else:
+    results_col.markdown("**Results**\n\nNot yet posted")
 
 if not is_live and study["active_in_scope"] is False:
     reason = study.get("tracking_note") or (
@@ -79,95 +91,10 @@ if not is_live and study["active_in_scope"] is False:
         f"of date. {reason}"
     )
 
-st.subheader("Conditions")
-st.write(", ".join(study["conditions"]) or "—")
-
-if study.get("brief_summary"):
-    st.subheader("What this trial is studying")
-    st.write(study["brief_summary"])
-
-if study.get("interventions"):
-    st.subheader("Intervention" + ("s" if len(study["interventions"]) > 1 else ""))
-    for iv in study["interventions"]:
-        label = iv.get("name") or "—"
-        if iv.get("type"):
-            label = f"{label} ({iv['type']})"
-        st.markdown(f"**{label}**")
-        if iv.get("description"):
-            st.caption(iv["description"])
-
-if study.get("primary_outcomes"):
-    # No explanatory caption here on purpose: "primary outcome" is standard
-    # vocabulary for the clinical researcher this is built for (CLAUDE.md
-    # sec. 1), so defining it on every trial is repetition, not help. The
-    # eligibility caption below is a different thing entirely — a safety
-    # disclaimer required by sec. 2, not a definition — and stays.
-    st.subheader("Primary outcome" + ("s" if len(study["primary_outcomes"]) > 1 else ""))
-    for o in study["primary_outcomes"]:
-        st.markdown(f"**{o.get('measure') or '—'}**")
-        details = []
-        if o.get("time_frame"):
-            details.append(f"Time frame: {o['time_frame']}")
-        if o.get("description"):
-            details.append(o["description"])
-        if details:
-            st.caption(" · ".join(details))
-
-detail_cols = st.columns(4)
-detail_cols[0].markdown(f"**Sponsor**\n\n{study.get('lead_sponsor') or '—'}")
-detail_cols[1].markdown(f"**Start date**\n\n{study.get('start_date') or '—'}")
-detail_cols[2].markdown(f"**Primary completion**\n\n{study.get('primary_completion_date') or '—'}")
-detail_cols[3].markdown(f"**Completion**\n\n{study.get('completion_date') or '—'}")
-
-if study.get("locations"):
-    locs = study["locations"]
-    st.subheader("Locations")
-    countries = sorted({loc["country"] for loc in locs if loc.get("country")})
-    st.caption(f"{len(locs)} site(s)" + (f" across {', '.join(countries)}" if countries else ""))
-    with st.expander(f"All {len(locs)} location(s)"):
-        for loc in locs:
-            parts = [p for p in (loc.get("facility"), loc.get("city"), loc.get("country")) if p]
-            st.write(", ".join(parts) or "—")
-
-st.subheader("Eligibility — source text, not an assessment")
-st.caption(
-    "This is ClinicalTrials.gov's own eligibility criteria text for this "
-    "trial. TrialLens never determines whether a specific person qualifies "
-    "— that requires review against the full protocol."
-)
-sex_col, age_col, hv_col = st.columns(3)
-sex_col.write(f"**Sex:** {study['sex'] or '—'}")
-age_col.write(f"**Age:** {format_age_range(study.get('minimum_age'), study.get('maximum_age'))}")
-hv = study["healthy_volunteers"]
-hv_col.write(f"**Healthy volunteers:** {'—' if hv is None else ('Yes' if hv else 'No')}")
-
-if study.get("eligibility_criteria"):
-    with st.expander("Full eligibility criteria (source text)"):
-        st.text(study["eligibility_criteria"])
-else:
-    st.caption("No eligibility criteria text on file — insufficient information, not zero criteria.")
-
-st.subheader("Enrollment")
-if study["enrollment_count"] is None:
-    st.write("—")
-else:
-    st.write(f"{study['enrollment_count']:,} participants")
-    # The bare number is ambiguous on its own: most CT.gov records report a
-    # recruitment target, not a real headcount. Say which — and say so
-    # honestly when CT.gov didn't specify.
-    st.caption(ENROLLMENT_TYPE_CAPTIONS.get(
-        study.get("enrollment_type"),
-        "ClinicalTrials.gov doesn't say whether this is an actual count or a target.",
-    ))
-
-if is_live:
-    st.caption("Fetched just now, live · source: ClinicalTrials.gov")
-else:
-    st.caption(
-        f"Fetched {study['fetched_at']} · last matched tracking criteria "
-        f"{study['last_matched_at']} · source: ClinicalTrials.gov"
-    )
-st.markdown(f"[View {nct_id} on ClinicalTrials.gov ↗](https://clinicaltrials.gov/study/{nct_id})")
+# Amendment history leads the page, deliberately (docs/plan_after_ranking.md):
+# a trial's changes are its headline, not a footnote. ClinicalTrials.gov can
+# show you what a trial says today; only this section can show what it used
+# to say. The static detail below is the same in every registry.
 
 if not is_live:
     st.subheader("Amendment history")
@@ -305,3 +232,96 @@ if not is_live:
             )
             for change in tracking_changes:
                 render_change(change, show_detected_at=True)
+
+
+st.divider()
+
+st.subheader("Conditions")
+st.write(", ".join(study["conditions"]) or "—")
+
+if study.get("brief_summary"):
+    st.subheader("What this trial is studying")
+    st.write(study["brief_summary"])
+
+if study.get("interventions"):
+    st.subheader("Intervention" + ("s" if len(study["interventions"]) > 1 else ""))
+    for iv in study["interventions"]:
+        label = iv.get("name") or "—"
+        if iv.get("type"):
+            label = f"{label} ({iv['type']})"
+        st.markdown(f"**{label}**")
+        if iv.get("description"):
+            st.caption(iv["description"])
+
+if study.get("primary_outcomes"):
+    # No explanatory caption here on purpose: "primary outcome" is standard
+    # vocabulary for the clinical researcher this is built for (CLAUDE.md
+    # sec. 1), so defining it on every trial is repetition, not help. The
+    # eligibility caption below is a different thing entirely — a safety
+    # disclaimer required by sec. 2, not a definition — and stays.
+    st.subheader("Primary outcome" + ("s" if len(study["primary_outcomes"]) > 1 else ""))
+    for o in study["primary_outcomes"]:
+        st.markdown(f"**{o.get('measure') or '—'}**")
+        details = []
+        if o.get("time_frame"):
+            details.append(f"Time frame: {o['time_frame']}")
+        if o.get("description"):
+            details.append(o["description"])
+        if details:
+            st.caption(" · ".join(details))
+
+detail_cols = st.columns(4)
+detail_cols[0].markdown(f"**Sponsor**\n\n{study.get('lead_sponsor') or '—'}")
+detail_cols[1].markdown(f"**Start date**\n\n{study.get('start_date') or '—'}")
+detail_cols[2].markdown(f"**Primary completion**\n\n{study.get('primary_completion_date') or '—'}")
+detail_cols[3].markdown(f"**Completion**\n\n{study.get('completion_date') or '—'}")
+
+if study.get("locations"):
+    locs = study["locations"]
+    st.subheader("Locations")
+    countries = sorted({loc["country"] for loc in locs if loc.get("country")})
+    st.caption(f"{len(locs)} site(s)" + (f" across {', '.join(countries)}" if countries else ""))
+    with st.expander(f"All {len(locs)} location(s)"):
+        for loc in locs:
+            parts = [p for p in (loc.get("facility"), loc.get("city"), loc.get("country")) if p]
+            st.write(", ".join(parts) or "—")
+
+st.subheader("Eligibility — source text, not an assessment")
+st.caption(
+    "This is ClinicalTrials.gov's own eligibility criteria text for this "
+    "trial. TrialLens never determines whether a specific person qualifies "
+    "— that requires review against the full protocol."
+)
+sex_col, age_col, hv_col = st.columns(3)
+sex_col.write(f"**Sex:** {study['sex'] or '—'}")
+age_col.write(f"**Age:** {format_age_range(study.get('minimum_age'), study.get('maximum_age'))}")
+hv = study["healthy_volunteers"]
+hv_col.write(f"**Healthy volunteers:** {'—' if hv is None else ('Yes' if hv else 'No')}")
+
+if study.get("eligibility_criteria"):
+    with st.expander("Full eligibility criteria (source text)"):
+        st.text(study["eligibility_criteria"])
+else:
+    st.caption("No eligibility criteria text on file — insufficient information, not zero criteria.")
+
+st.subheader("Enrollment")
+if study["enrollment_count"] is None:
+    st.write("—")
+else:
+    st.write(f"{study['enrollment_count']:,} participants")
+    # The bare number is ambiguous on its own: most CT.gov records report a
+    # recruitment target, not a real headcount. Say which — and say so
+    # honestly when CT.gov didn't specify.
+    st.caption(ENROLLMENT_TYPE_CAPTIONS.get(
+        study.get("enrollment_type"),
+        "ClinicalTrials.gov doesn't say whether this is an actual count or a target.",
+    ))
+
+if is_live:
+    st.caption("Fetched just now, live · source: ClinicalTrials.gov")
+else:
+    st.caption(
+        f"Fetched {study['fetched_at']} · last matched tracking criteria "
+        f"{study['last_matched_at']} · source: ClinicalTrials.gov"
+    )
+st.markdown(f"[View {nct_id} on ClinicalTrials.gov ↗](https://clinicaltrials.gov/study/{nct_id})")

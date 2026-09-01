@@ -135,6 +135,10 @@ def extract_fields(study: dict) -> dict:
         "interventions": interventions,
         "primary_outcomes": primary_outcomes,
         "locations": locations,
+        # Top-level, NOT inside protocolSection — the one field that says
+        # the trial's results are published. Diffed, so false -> true is
+        # reportable as its own amendment.
+        "has_results": study.get("hasResults"),
         "raw_json": study,
     }
 

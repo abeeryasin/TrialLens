@@ -60,6 +60,7 @@ class StudyDetail(StudySummary):
     study_type: Optional[str] = None
     enrollment_count: Optional[int] = None
     enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
+    has_results: Optional[bool] = None  # CT.gov has posted results for this trial
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
     maximum_age: Optional[str] = None
@@ -113,6 +114,7 @@ class StudyUpsert(BaseModel):
     phase: Optional[str] = None
     enrollment_count: Optional[int] = None
     enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
+    has_results: Optional[bool] = None  # CT.gov has posted results for this trial
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
     maximum_age: Optional[str] = None
@@ -335,6 +337,7 @@ class TrialDetail(BaseModel):
     phase: Optional[str] = None
     enrollment_count: Optional[int] = None
     enrollment_type: Optional[str] = None  # ACTUAL vs ESTIMATED — see ctgov_client.py
+    has_results: Optional[bool] = None  # CT.gov has posted results for this trial
     sex: Optional[str] = None
     minimum_age: Optional[str] = None
     maximum_age: Optional[str] = None

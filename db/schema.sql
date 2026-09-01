@@ -123,3 +123,13 @@ CREATE INDEX IF NOT EXISTS idx_study_changes_nct_id ON study_changes(nct_id);
 -- help it. Added now rather than waiting for the table to grow, per
 -- explicit decision the same day.
 CREATE INDEX IF NOT EXISTS idx_study_changes_detected_at ON study_changes(detected_at DESC);
+
+-- Whether ClinicalTrials.gov has posted RESULTS for this trial (2026-09-02).
+-- Stored and diffed because false -> true is the single most consequential
+-- amendment a researcher can receive: the trial's findings are out. It lives
+-- at the TOP level of the API response (`hasResults`), not inside
+-- protocolSection, which is why the first pass over the record missed it —
+-- 1,056 of 11,518 stored trials already have it true, 751 of them completed,
+-- and every one of those amendments was previously reported as "amended, but
+-- we can't see what". See docs/decisions.md, 2026-09-02.
+ALTER TABLE studies ADD COLUMN IF NOT EXISTS has_results BOOLEAN;

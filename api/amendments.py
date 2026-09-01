@@ -51,6 +51,7 @@ FIELD_ASPECTS = {
     "brief_summary": ASPECT_SCIENTIFIC,         # 19 / 16
     "interventions": ASPECT_SCIENTIFIC,         # 5 / 5
     "healthy_volunteers": ASPECT_SCIENTIFIC,    # 1 / 1
+    "has_results": ASPECT_SCIENTIFIC,           # tracked from 2026-09-02
 
     # How the trial is running: is it recruiting, how many, when, where.
     # Real but rarely a change in the science.
@@ -223,6 +224,29 @@ _STATUS_STOPPED = {"TERMINATED", "SUSPENDED", "WITHDRAWN"}
 _STATUS_PENDING = {"NOT_YET_RECRUITING"}
 
 
+def describe_results_posting(old_value, new_value) -> Optional[str]:
+    """false -> true means the trial's findings are published.
+
+    This is the most consequential amendment a researcher can receive, and
+    until 2026-09-02 TrialLens did not store the field at all — every one of
+    these was reported as "amended, but we can't see what". 1,056 of 11,518
+    stored trials already had results posted when the column was added.
+
+    Values arrive stringified from study_changes ("true"/"false"), so both
+    forms are accepted rather than assuming one.
+    """
+    def truthy(value):
+        return str(value).strip().lower() in {"true", "t", "1"}
+
+    if old_value is None or new_value is None or old_value == new_value:
+        return None
+    if not truthy(old_value) and truthy(new_value):
+        return "results have been posted — the trial's findings are now published"
+    if truthy(old_value) and not truthy(new_value):
+        return "posted results were withdrawn — unusual; worth a look"
+    return None
+
+
 def describe_status_change(old_value, new_value) -> Optional[str]:
     """What a status transition means in practice.
 
@@ -270,6 +294,8 @@ def describe_effect(field_name: str, old_value, new_value) -> Optional[str]:
     """
     if field_name in _DATE_FIELDS:
         return describe_date_shift(old_value, new_value)
+    if field_name == "has_results":
+        return describe_results_posting(old_value, new_value)
     if field_name == "overall_status":
         return describe_status_change(old_value, new_value)
     if field_name == "enrollment_count":
