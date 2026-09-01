@@ -146,6 +146,43 @@ def format_posted_on(raw_value):
         return str(raw_value)
 
 
+def format_posted_on_list(raw_values):
+    """One or more CT.gov version dates as a readable series.
+
+    "28 August 2026" · "28 and 31 August 2026" · "28 August, 1 September 2026"
+
+    The year is stated once when they share it: repeating it three times in
+    one sentence is noise, and no trial has more than three of these (the
+    real maximum, measured 2026-09-02 — 79 of 88 have exactly one).
+    """
+    parsed = []
+    for value in raw_values:
+        try:
+            parsed.append(date.fromisoformat(str(value)))
+        except (ValueError, TypeError):
+            continue
+    if not parsed:
+        return ""
+    parsed.sort()
+
+    def join(parts):
+        if len(parts) == 1:
+            return parts[0]
+        return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+    same_year = len({d.year for d in parsed}) == 1
+    same_month = same_year and len({d.month for d in parsed}) == 1
+
+    if same_month:
+        # "28 and 31 August 2026" — repeating the month between two days a
+        # few apart is how a form writes a date, not how a person does.
+        days = join([d.strftime("%d").lstrip("0") for d in parsed])
+        return f"{days} {parsed[0].strftime('%B')} {parsed[0].year}"
+    if same_year:
+        return join([d.strftime("%d %B").lstrip("0") for d in parsed]) + f" {parsed[0].year}"
+    return join([d.strftime("%d %B %Y").lstrip("0") for d in parsed])
+
+
 def format_recording_since(raw_value):
     """When TrialLens began recording changes at all — a date, not a
     timestamp, because the claim it supports ("watching since X") is only

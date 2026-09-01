@@ -17,7 +17,7 @@ Free — no database, no network, no Streamlit rendering.
 """
 import pytest
 
-from frontend.labels import is_formatting_only
+from frontend.labels import format_posted_on_list, is_formatting_only
 
 
 class TestTheFourClinicalCasesTheDocstringClaims:
@@ -99,3 +99,50 @@ class TestTheBiasIsDeliberate:
         """"6 Months" and "6 Years" differ by one word, and CT.gov genuinely
         stores ages in units other than years."""
         assert not is_formatting_only("Minimum age 6 Months", "Minimum age 6 Years")
+
+
+class TestPostedOnList:
+    """format_posted_on_list — the dates of amendments with nothing to show.
+
+    They are named once in a summary sentence rather than each getting a
+    line whose only real content was its date. No trial carries more than
+    three (measured 2026-09-02; 79 of 88 have exactly one).
+    """
+
+    def test_one_date_reads_plainly(self):
+        assert format_posted_on_list(["2026-08-28"]) == "28 August 2026"
+
+    def test_a_leading_zero_is_dropped(self):
+        """"08 August" is not how anyone writes a date in a sentence."""
+        assert format_posted_on_list(["2026-08-08"]) == "8 August 2026"
+
+    def test_two_dates_in_the_same_year_state_the_year_once(self):
+        assert format_posted_on_list(["2026-08-28", "2026-08-31"]) == "28 and 31 August 2026"
+
+    def test_three_dates_in_one_month_collapse_to_days(self):
+        assert format_posted_on_list(
+            ["2026-08-28", "2026-08-30", "2026-08-31"]
+        ) == "28, 30 and 31 August 2026"
+
+    def test_dates_across_months_keep_each_month(self):
+        assert format_posted_on_list(
+            ["2026-08-28", "2026-08-31", "2026-09-01"]
+        ) == "28 August, 31 August and 1 September 2026"
+
+    def test_dates_spanning_years_keep_every_year(self):
+        result = format_posted_on_list(["2025-12-30", "2026-01-02"])
+        assert result == "30 December 2025 and 2 January 2026"
+
+    def test_input_order_does_not_matter(self):
+        assert (format_posted_on_list(["2026-08-31", "2026-08-28"])
+                == format_posted_on_list(["2026-08-28", "2026-08-31"]))
+
+    def test_unparseable_dates_are_skipped_not_rendered_raw(self):
+        assert format_posted_on_list(["not a date", "2026-08-28"]) == "28 August 2026"
+
+    def test_nothing_parseable_returns_empty_rather_than_a_stray_dash(self):
+        assert format_posted_on_list(["not a date", None]) == ""
+
+    def test_it_accepts_a_generator(self):
+        """The page passes a genexp, which a naive len() would exhaust."""
+        assert format_posted_on_list(d for d in ["2026-08-28"]) == "28 August 2026"

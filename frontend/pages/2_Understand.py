@@ -24,6 +24,7 @@ from labels import (
     STRUCTURED_FIELDS,
     format_detected_at,
     format_posted_on,
+    format_posted_on_list,
     format_recording_since,
     humanize_value,
     is_long_text,
@@ -161,33 +162,46 @@ if not is_live:
                 f"**Amended {times}** since TrialLens started watching "
                 f"on {recording_since}."
             )
-            # Said once, here: WHY some amendments have nothing under them.
-            # Each such amendment then states only the fact. Splitting it
-            # this way stops the two lines repeating each other, and drops
-            # the "marked below" pointer that only existed because they did.
-            invisible = history.get("invisible_amendment_count") or 0
-            if invisible:
+            # Amendments with nothing to show are accounted for HERE, by
+            # date, and then not listed again. A line of their own carried
+            # exactly one fact — which date — and restated this sentence
+            # after the dash; naming the dates here says the same thing once.
+            unseeable = [a for a in amendments if not a["content_is_visible"]]
+            if unseeable:
+                when = format_posted_on_list(a["posted_on"] for a in unseeable)
+                if len(unseeable) == len(amendments) == 1:
+                    subject = "It"
+                elif len(unseeable) == len(amendments):
+                    subject = f"All of them — {when} —"
+                elif len(unseeable) == 1:
+                    subject = f"One of them, on {when},"
+                else:
+                    subject = f"{len(unseeable)} of them — {when} —"
                 st.caption(
-                    f"{invisible} of these changed only fields TrialLens doesn't store."
-                    if invisible > 1 else
-                    "One of these changed only fields TrialLens doesn't store."
+                    f"{subject} changed only fields TrialLens doesn't store — "
+                    f"the record changed, but not in anything we hold."
                 )
 
-            for position, amendment in enumerate(amendments):
-                posted = format_posted_on(amendment["posted_on"])
+            # A divider goes BEFORE each amendment after the first one
+            # actually rendered — counting positions in `amendments` would
+            # leave a rule hanging when the last entries are unseeable ones
+            # that render nothing.
+            rendered_any = False
 
-                # An amendment we can't see gets ONE line, not a heading, a
-                # caption and an info box. It was previously given more
-                # visual weight than an amendment with four real field
-                # changes — which inverts the hierarchy, since the whole
-                # point of this page is what actually moved. Still never
-                # silent: CT.gov posted a version, so something changed, and
-                # rendering that as nothing would be a false claim (sec. 2).
+            for amendment in amendments:
+                # Amendments with nothing to show were accounted for by date
+                # in the caption above, so they are not listed again here.
+                # Never silent, just not repeated: CT.gov posted a version,
+                # so something changed, and rendering that as nothing would
+                # be a false claim (sec. 2).
                 if not amendment["content_is_visible"]:
-                    st.caption(f"**{posted}** — the record changed; we can't show what.")
                     continue
 
-                st.markdown(f"##### Posted {posted}")
+                if rendered_any:
+                    st.divider()
+                rendered_any = True
+
+                st.markdown(f"##### Posted {format_posted_on(amendment['posted_on'])}")
                 if amendment["previously_posted_on"]:
                     st.caption(
                         f"Previous version posted "
@@ -208,11 +222,6 @@ if not is_live:
                     for change in in_aspect:
                         render_change(change)
 
-                # Between amendments only. A rule after the last one closes a
-                # section that has already ended, and reads as something
-                # missing below it.
-                if position < len(amendments) - 1:
-                    st.divider()
 
         if history.get("unattributed_changes"):
             # Should never happen; shown rather than dropped, because a
