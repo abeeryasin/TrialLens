@@ -81,12 +81,28 @@ is evidence, not clutter.
 **Step 7b is in progress, and it is not roadmap step 8 (Explore).** Three
 time-based directions agreed 2026-09-01. **Direction 1, amendment history,
 is done** (2026-09-02): `GET /studies/{nct_id}/amendments` groups a trial's
-changes into the amendments that caused them, and `api/amendments.py` says
-what each did — dates that slipped, targets that became actuals, sites
-added — with no model. **Next: the watch** (lead with what is being
-watched; design the quiet week as the primary screen), then **the watch
-record** (elapsed time is the moat — and shout when the cron dies rather
-than serving a stale feed).
+changes into the amendments that caused them, `api/amendments.py` says what
+each did — dates that slipped, targets that became actuals, sites added,
+results posted — with no model, and Understand leads with it.
+**Direction 2, the watch, is designed but not built** — three artboards in
+`design/`, deliberately Streamlit-shaped so they can be. Build the quiet
+week into `frontend/Home.py` next, then **direction 3, the watch record**
+(a `monitor_runs` table; nothing records that a check happened, so the app
+cannot say "last checked 2 hours ago" or shout when the cron dies).
+
+**`has_results` was found missing on 2026-09-02 and added.** `hasResults`
+sits at the TOP level of the CT.gov response, not inside `protocolSection`,
+so the parser never saw it; 1,056 of 11,518 trials already had results
+posted, and each of those amendments had been rendering as "the record
+changed; we can't show what". Backfilled from stored `raw_json` with no
+network call — the first time §4's keep-the-raw-record rule paid for
+itself. Roughly 40% of amendments still show nothing: `referencesModule`
+(4,443 trials), `oversightModule` and central contacts remain unread.
+
+**There is a README, and CI actually runs the tests** (both new 2026-09-02).
+`tests.yml` runs the suite on every push without secrets — 189 pass, 12
+skip; the 12 data-drift tests run in `monitor.yml` instead, on the data's
+schedule. Before this, nothing ever ran the suite automatically.
 
 **One AI call is planned and scoped, not built** (step 7c): interpreting
 the *prose* half of an amendment, in the scheduled job, never in the
