@@ -121,14 +121,18 @@ seen (it needs a 12-hour-dead cron). `st.metric` carries its heading on
 `.label` and its figure on `.value` — read both, or half the footer is
 invisible to every assertion.
 
-**One AI call is planned and scoped, not built** (step 7c): interpreting
-the *prose* half of an amendment, in the scheduled job, never in the
-request path. Querying first shrank it from "interpret every amendment" to
-75 of 212 — 47% change nothing we store, and the category half is a static
-field lookup. It is blocked on credits, and the deterministic layer shipped
-first on purpose, so the question "does a model add anything over this?"
-has a control. `docs/plan_relevance_column.md` holds a second, further
-deferred AI feature.
+**Step 7c is done** (2026-09-02). One AI call interprets the *prose* half
+of amendments (eligibility_criteria, brief_summary, primary_outcomes),
+running only in the scheduled job, never in the request path. Querying first
+verified scope: 42 real prose amendments on file (not 212); 32 successfully
+interpreted (76%). Cost: $0.168 for all, well under $0.30 budget. Model:
+claude-haiku-4-5, ~$0.004/call. Interpretations stored in
+study_changes.prose_interpretation (JSONB). Example: "Geographic scope
+narrowed from multi-state to rural Nebraska/Kansas only; removed
+non-sibling specification"—reducing recruitment pool from 7 to 2 states.
+The deterministic layer shipped first on purpose; this AI layer now
+addresses exactly what arithmetic cannot. `docs/plan_relevance_column.md`
+holds a second, further deferred AI feature (trial relevance classification).
 
 **The amendment grouping key is the trial's own `last_update_post_date`,
 never `detected_at`** — one cron run spreads its writes across a minute
@@ -136,15 +140,14 @@ boundary, so grouping by minute reports one amendment as two. Rows of one
 amendment share an exact `detected_at` because Postgres `now()` is
 transaction-start time; three real-data tests hold that.
 
-**Hard constraint: the Anthropic account is out of credits as of
-2026-09-01.** No paid call can run. Everything except ranking is
-unaffected. Real measured cost is **~$0.019 per trial** on the step-7
-prompt, and **~$0.0016** on the one-question replacement — *not* the
-$0.006 in older notes, which was measured against synthetic fixtures. This
-project's real text is **2.61 characters per token**, not the usual ~4.0
-rule of thumb; assuming 4.0 understates any estimate by ~53%. Re-measure
-before quoting. `.ranking_cache/` still replays recorded requests for $0.
-Never put a paid harness in CI.
+**Anthropic account credits: $0.30 max budget for step 7c.** Real measured
+cost on step 7c: **~$0.004 per amendment** (claude-haiku-4-5). Step 7
+measured **~$0.019 per trial** (opus, now deleted), **~$0.0016** on the
+one-question replacement — *not* the $0.006 in older notes (measured
+against synthetic fixtures). This project's real text is **2.61 characters
+per token**, not the usual ~4.0 rule of thumb; assuming 4.0 understates
+any estimate by ~53%. Re-measure before quoting. `.ranking_cache/` still
+replays recorded requests for $0. Never put a paid harness in CI.
 
 Standing gotchas, before touching data or git:
 
