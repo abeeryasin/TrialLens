@@ -90,14 +90,16 @@ def run_prose_interpretation():
         for result in results:
             interp = result.get("prose_interpretation")
             if interp:
+                # By primary key. The previous version was
+                # `WHERE nct_id = %s AND field_name = %s ORDER BY detected_at
+                # DESC LIMIT 1` — MySQL syntax that Postgres rejects outright
+                # ("syntax error at or near ORDER"), swallowed by this
+                # function's except clause and printed as a one-line ERROR.
+                # It never stored a single row: step 7c's $0.168 bought
+                # interpretations that were computed and then dropped.
                 cursor.execute(
-                    """
-                    UPDATE study_changes
-                    SET prose_interpretation = %s
-                    WHERE nct_id = %s AND field_name = %s
-                    ORDER BY detected_at DESC LIMIT 1
-                    """,
-                    (json.dumps(interp), result["nct_id"], result["field_name"]),
+                    "UPDATE study_changes SET prose_interpretation = %s WHERE id = %s",
+                    (json.dumps(interp), result["id"]),
                 )
                 if cursor.rowcount > 0:
                     stored += 1

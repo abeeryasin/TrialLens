@@ -33,13 +33,20 @@ COST_ESTIMATE_PER_CALL = 0.004  # measured against haiku-4-5
 def get_prose_amendments(conn, hours_ago: int = 24) -> list[dict]:
     """Query study_changes for prose field changes in the last N hours.
 
-    Returns list of {nct_id, field_name, old_value, new_value, detected_at}.
+    Returns list of {id, nct_id, field_name, old_value, new_value, detected_at}.
+
+    `id` is carried so the interpretation can be written back to the exact row
+    it describes. Matching on (nct_id, field_name) instead is ambiguous: a
+    trial that amends the same prose field twice inside one window has two
+    rows, and the interpretation of the older one would land on the newer —
+    an inference attached to source text it was not drawn from (CLAUDE.md
+    sec. 3).
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     placeholders = ", ".join(["%s"] * len(PROSE_FIELDS))
     cursor.execute(
         f"""
-        SELECT nct_id, field_name, old_value, new_value, detected_at
+        SELECT id, nct_id, field_name, old_value, new_value, detected_at
         FROM study_changes
         WHERE field_name IN ({placeholders})
           AND detected_at > now() - interval '{hours_ago} hours'

@@ -46,9 +46,24 @@ jobs:
           cat api.log
           exit 1
 
+      # DATABASE_URL is needed here as well as by the API step above:
+      # run_monitor.py opens its own connection to write the monitor_runs
+      # record (step 7b direction 3) and to store prose interpretations
+      # (step 7c). Locally those are invisible because load_dotenv reads
+      # .env.local; in this job the environment is the only source, and
+      # without this the script dies on KeyError: 'DATABASE_URL' before the
+      # first condition is ingested.
+      #
+      # ANTHROPIC_API_KEY is deliberately absent: no such secret is
+      # configured on this repo, so step 7c's interpretation call cannot run
+      # here. It fails inside run_prose_interpretation's except clause and
+      # the monitor job continues, which is the intended degradation — but
+      # it does mean prose interpretation has never actually run on the
+      # schedule. Add the secret to turn it on.
       - name: Run the Monitor job
         env:
           API_BASE_URL: http://127.0.0.1:8000
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/run_monitor.py
 
       # Data-drift checks, run here rather than in tests.yml on purpose.
