@@ -2107,3 +2107,40 @@ along with the implementation.
 Verified live before claiming done: `/watch` over HTTP against the real
 database returns healthy, 4.95 hours since check, reading run #1. 278 tests
 pass, including the 12 that need the live database.
+
+## 2026-09-02 — Record the writer's own count, not a timestamp window
+
+`monitor_runs.changes_detected` was first written by re-deriving it after the
+run: `count(*) FROM study_changes WHERE detected_at >= started_at`. That is
+close to right and quietly not true — the window also catches rows written by
+anything else active at the same time (a manual ingest, a backfill) and files
+them under this run's id. A number that is usually correct, in a column
+nothing reads yet, is the easiest kind of wrong to ship.
+
+**The exact number already existed and was being discarded.** `sync_group`
+sums what POST /studies/batch reports as it writes, printed it to the log,
+and returned a bare `set` of nct_ids. It and `run_ingest` now return an
+`IngestResult(nct_ids, changes)` named tuple and `run_monitor.py` sums that;
+`count_changes_detected`, its query, and the second database connection it
+opened are deleted. The general form: before deriving a value, check whether
+something upstream already knows it exactly. Re-derivation is how an
+approximation gets into a table that is later displayed as fact (sec. 3).
+
+**Urgency came from the column being unread, not despite it.** Nothing
+displays `changes_detected` yet, so the instinct was to defer. Backwards:
+every cron run writes another approximate row, and once a screen shows the
+number the wrong history is already on file and cannot be recomputed — the
+evidence of what each past run found is gone. Cheap now, impossible later.
+
+**Documented rather than changed:** nothing marks a run `'failed'`. A run
+that dies leaves its row `'running'`, `/watch` keeps reading the last
+completed run, and the gap grows until the alarm fires — the honest outcome
+for a run that did not finish, so the comment now says so to stop a later
+reader "fixing" it.
+
+`tests/test_ingest_counts.py` is the first test to touch `scripts/ingest.py`;
+the module had zero coverage, so the suite went green on this refactor while
+proving nothing about it. Five tests, no network or database. Proven able to
+fail before being trusted (sec. 7): dropping the trailing batch flush, `=`
+for `+=`, and returning studies counted instead of changes each turn it red.
+283 tests pass.
