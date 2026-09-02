@@ -152,3 +152,142 @@ CREATE TABLE IF NOT EXISTS monitor_runs (
     changes_detected INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_monitor_runs_completed_at ON monitor_runs(completed_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Explore / knowledge graph (step 8 unit 2, 2026-09-03).
+--
+-- These tables do not create a graph; they make the one already in `studies`
+-- walkable. `lead_sponsor` holding 'Mayo Clinic' on 134 rows is already 134
+-- edges — written as a repeated string, which is awkward to traverse and
+-- impossible to attach anything to. See docs/decisions.md, 2026-09-02, for
+-- why this is relational tables rather than a graph database.
+--
+-- NOTHING HERE IS MERGED. Every distinct source string gets its own row, so
+-- 381 Madrid facility strings become 381 sites and 55 semaglutide names
+-- become 55 terms. That is deliberate: merging is a decision about the data
+-- and belongs in its own reversible step, checked against this unmerged
+-- extraction as the baseline. Extracting and merging in one pass would leave
+-- no record of what the registry actually said (CLAUDE.md sec. 3).
+-- ---------------------------------------------------------------------------
+
+-- ONE table for lead sponsors and collaborators, not two. Measured
+-- 2026-09-03: 887 of the 3,915 distinct collaborator names are also lead
+-- sponsors on other trials. Bristol-Myers Squibb leading one trial and
+-- collaborating on another is one organization in two roles — split into
+-- two tables it becomes two nodes, and "who else works with them?" silently
+-- returns half the answer. The role lives on the edge, where it belongs.
+CREATE TABLE IF NOT EXISTS organizations (
+    id      SERIAL PRIMARY KEY,
+    name    TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS trial_organizations (
+    nct_id     TEXT NOT NULL REFERENCES studies(nct_id) ON DELETE CASCADE,
+    org_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL,   -- 'LEAD' | 'COLLABORATOR'
+    -- INDUSTRY / OTHER_GOV / NIH / ... as reported on THIS trial. Kept on the
+    -- edge rather than the organization because that is what the source says;
+    -- one org can be filed under different classes by different registrants,
+    -- and picking a winner would invent a fact (CLAUDE.md sec. 2).
+    org_class  TEXT,
+    PRIMARY KEY (nct_id, org_id, role)
+);
+
+-- Identity is the (facility, city, country) triple, not the facility name:
+-- the same name recurs in different cities. 142,698 location mentions
+-- collapse to 51,233 distinct triples (measured 2026-09-03). 24 mentions
+-- have no facility and 1 has no city, so the identity index coalesces —
+-- a plain UNIQUE would treat every NULL as distinct and duplicate them.
+CREATE TABLE IF NOT EXISTS sites (
+    id        SERIAL PRIMARY KEY,
+    facility  TEXT,
+    city      TEXT,
+    country   TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_identity
+    ON sites (coalesce(facility, ''), coalesce(city, ''), coalesce(country, ''));
+
+CREATE TABLE IF NOT EXISTS trial_sites (
+    nct_id   TEXT NOT NULL REFERENCES studies(nct_id) ON DELETE CASCADE,
+    site_id  INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    PRIMARY KEY (nct_id, site_id)
+);
+
+-- Identity is (name, affiliation). Name alone is not enough: 286 investigator
+-- names appear under more than one affiliation (measured 2026-09-03), and
+-- keying on name would merge people who may be different people — the exact
+-- Procrustean cut this step is supposed to avoid. Only 10 of 9,228 mentions
+-- carry no affiliation at all.
+CREATE TABLE IF NOT EXISTS investigators (
+    id           SERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    affiliation  TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_investigators_identity
+    ON investigators (name, coalesce(affiliation, ''));
+
+CREATE TABLE IF NOT EXISTS trial_investigators (
+    nct_id           TEXT NOT NULL REFERENCES studies(nct_id) ON DELETE CASCADE,
+    investigator_id  INTEGER NOT NULL REFERENCES investigators(id) ON DELETE CASCADE,
+    role             TEXT NOT NULL,  -- PRINCIPAL_INVESTIGATOR | STUDY_DIRECTOR | STUDY_CHAIR
+    PRIMARY KEY (nct_id, investigator_id, role)
+);
+
+-- "term", not "intervention": these are surface forms as the registry
+-- received them, not canonical drugs. 13,307 distinct names, 11,598 of them
+-- used exactly once. Identity is (name, type) because 363 names appear under
+-- more than one type, and a DRUG called X is not the OTHER called X.
+CREATE TABLE IF NOT EXISTS intervention_terms (
+    id     SERIAL PRIMARY KEY,
+    name   TEXT NOT NULL,
+    type   TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_intervention_terms_identity
+    ON intervention_terms (name, type);
+
+CREATE TABLE IF NOT EXISTS trial_interventions (
+    nct_id   TEXT NOT NULL REFERENCES studies(nct_id) ON DELETE CASCADE,
+    term_id  INTEGER NOT NULL REFERENCES intervention_terms(id) ON DELETE CASCADE,
+    PRIMARY KEY (nct_id, term_id)
+);
+
+-- Each edge table's PRIMARY KEY indexes nct_id first, which answers "what
+-- does this trial connect to". The reverse — "which trials connect to this
+-- organization/site/person/term" — is the direction Explore actually walks,
+-- and without these it is a sequential scan every hop.
+CREATE INDEX IF NOT EXISTS idx_trial_organizations_org ON trial_organizations(org_id);
+CREATE INDEX IF NOT EXISTS idx_trial_sites_site ON trial_sites(site_id);
+CREATE INDEX IF NOT EXISTS idx_trial_investigators_inv ON trial_investigators(investigator_id);
+CREATE INDEX IF NOT EXISTS idx_trial_interventions_term ON trial_interventions(term_id);
+
+-- ---------------------------------------------------------------------------
+-- Withdrawn edges (2026-09-03).
+--
+-- Trials drop sites, swap investigators and retire intervention arms. The
+-- extraction only ever INSERTs, so without this an edge outlives the record
+-- that justified it: one 6-hour monitor run left 15 trial_sites edges whose
+-- trial no longer lists that location, and Explore would have gone on saying
+-- the trial runs there. That is a connection the registry does not state
+-- (CLAUDE.md sec. 2).
+--
+-- Deleting them would fix the lie and destroy the finding. This is a
+-- watch-over-time product: "this trial quietly dropped three sites" is a
+-- result, not an error, and sec. 3 wants the evidence kept rather than
+-- silently reconciled away. So the edge stays and carries the date the
+-- backfill first saw it gone.
+--
+-- NULL means live — the connection is in the current record. A timestamp is
+-- the first run that could not find it. It is NOT the date the trial made
+-- the change; nothing on file says that, and writing the real amendment date
+-- here would be inventing precision the backfill does not have. Query
+-- `WHERE withdrawn_at IS NULL` for the graph as it stands today.
+--
+-- An edge that comes back (a site re-listed) has its stamp cleared, which is
+-- why the backfill's ON CONFLICT clauses are DO UPDATE rather than DO
+-- NOTHING. Entity rows are never withdrawn: a withdrawn edge still points at
+-- its site, and the site was genuinely reported once.
+-- ---------------------------------------------------------------------------
+ALTER TABLE trial_organizations ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+ALTER TABLE trial_sites         ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+ALTER TABLE trial_investigators ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+ALTER TABLE trial_interventions ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;

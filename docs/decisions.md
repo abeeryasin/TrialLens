@@ -2144,3 +2144,148 @@ proving nothing about it. Five tests, no network or database. Proven able to
 fail before being trusted (sec. 7): dropping the trailing batch flush, `=`
 for `+=`, and returning studies counted instead of changes each turn it red.
 283 tests pass.
+
+## 2026-09-02 — Step 8 unit 1: the Explore graph is tables, not a graph database
+
+**No Neo4j.** The graph already exists — `studies.lead_sponsor` holding
+"Mayo Clinic" on 134 rows *is* 134 edges, just written in a shape that is
+awkward to walk. Step 8 makes it walkable; it does not create it.
+
+A native graph database earns its keep through index-free adjacency, which
+pays off when traversals are deep and the graph is large. Measured shape
+here: 11,518 trials, 3,173 sponsors, largest sponsor 163 trials, and the
+questions Explore answers ("who else works in this space?") are 2-3 hops.
+Postgres joins over 11k rows are not the bottleneck at any of those numbers.
+The conditions that would reverse this, recorded so the decision can be
+re-opened honestly: row counts in the millions, materially denser linkage,
+or traversals that are deep and open-ended rather than 2-3 hops.
+
+The operational half is decisive on its own. A second database is a second
+sync path and a second thing that can be stale, and sec. 5 says FastAPI is
+the only door to the database. Two stores means two doors, or a door behind
+a door.
+
+**Controlled vs. free text is a property of a FIELD, not an entity.** The
+useful test for whether an entity's identity can be defined upfront is
+whether CT.gov enforces a controlled value or accepts free-typed text — and
+almost every entity here is half of each. Measured 2026-09-02:
+
+| Field | Distinct | Collapsed on case/space | Verdict |
+|---|---|---|---|
+| `lead_sponsor` | 3,173 | 3,173 | controlled, zero duplicates |
+| location `country` | 123 | 123 | controlled |
+| intervention `type` | 11 | — | controlled enum |
+| investigator `role` | 3 | — | controlled enum |
+| location `facility` | 42,842 | 41,710 | free text — 1,132 differ only by case |
+| intervention `name` | 13,307 | — | free text — 11,598 used exactly once |
+| investigator `name` | 7,332 | 7,275 | free text |
+
+Madrid alone carries 381 distinct facility strings, New York 322. A city does
+not have 381 trial sites; those are the same institutions typed differently.
+So sponsors and countries get identity upfront, while facility, intervention
+and investigator identity has to emerge from the real values.
+
+**The intervention merge rule.** Merge only when the difference is *naming*;
+never when it is *substance* — dose, route, formulation, or role in the
+trial. The data forces this: 55 distinct intervention names begin with
+"semaglutide" (dose and route arms of the same trials, where the difference
+IS the study), and 159 begin with "placebo" — merging those would build the
+densest node in the graph out of a thing that is by definition nothing, and
+route every multi-hop query through it. Merging never overwrites: both source
+strings stay, linked to the shared node, with the link recorded as inferred
+rather than reported (sec. 3). A merge that destroys the source text is the
+Procrustean cut — the problem is not the inference, it is that the evidence
+is gone and a researcher cannot disagree with it.
+
+## 2026-09-03 — Step 8 unit 2: extraction, and the edges a trial takes back
+
+The extraction ran against the live `dev` branch: 6,207 organizations,
+51,272 sites, 7,717 investigators, 14,468 intervention terms, and 191,864
+edges, all from records already on file. No CT.gov call — investigators and
+collaborators had been sitting unread in `raw_json` since ingestion, the
+third time §4's keep-the-raw-record rule has paid for itself.
+
+Nothing is merged, on purpose. 381 Madrid facility strings are 381 sites and
+68 semaglutide names are 68 terms. That unmerged extraction is the baseline
+any later merge gets checked against.
+
+**Reconciliation, and what it caught.** Counting source distinct values
+against graph rows was not a formality — it failed twice, each time for a
+different real reason.
+
+The first failure was staleness: the extraction ran, then a monitor run
+ingested 70 trials, and every entity was short. That is the snapshot gap
+`test_the_graph_is_not_behind_the_studies_it_describes` exists to name, and
+it went red on real drift with the right message before anyone mutated
+anything. Re-running the backfill closed it.
+
+The second failure was the interesting one, and it pointed the other way:
+the graph had **more** rows than the source. 7 sites and 15 `trial_sites`
+edges traced to no current record. The extraction is insert-only, so when a
+trial drops a site the edge outlives the record that justified it — Explore
+would have gone on saying a trial runs at a location it had removed. One
+6-hour run produced 15 of those.
+
+**Decision: stamp `withdrawn_at`, never delete.** Deleting fixes the false
+claim and destroys the finding. This is a watch-over-time product; "this
+trial quietly dropped three sites" is a result, not a row to tidy away, and
+§3 wants the evidence kept rather than silently reconciled. NULL means the
+connection is in the current record; a timestamp is the first run that could
+not find it. It is deliberately *not* the date the trial made the change —
+nothing on file says that, and writing the real amendment date there would
+invent precision the backfill does not have (§2).
+
+Consequences worth recording:
+
+- Edge inserts became `ON CONFLICT DO UPDATE SET withdrawn_at = NULL`, so a
+  re-listed site comes back. The action carries its own `WHERE
+  withdrawn_at IS NOT NULL`; without it every pass would dirty all 140,000
+  edges writing NULL over NULL.
+- The withdrawal UPDATEs are guarded by `withdrawn_at IS NULL`, so an edge
+  keeps the date it was *first* seen missing. Re-running does not walk the
+  stamp forward and destroy the only timing information it has.
+- `test_no_site_was_invented` had to be scoped to sites holding a live edge.
+  Unscoped it called those 7 dropped sites inventions, which is the wrong
+  word: they were reported once and later withdrawn, and that distinction is
+  the whole point.
+
+**The tests were proven able to fail.** Seven mutations — inventing a site
+with a live edge, un-withdrawing a dropped one, deleting a LEAD edge,
+deleting an investigator edge, future-dating a withdrawal, stripping a
+trial's edges, collapsing semaglutide to one term — each injected inside a
+transaction and rolled back, never committed. 7/7 turned the matching
+assertion red. Table counts were identical before and after.
+
+## 2026-09-03 — Two monitor bugs that could only exist on the schedule
+
+Both found by dispatching the workflow after fixing the upsert template,
+rather than waiting for the next 6-hour tick. Neither was reachable locally.
+
+**`KeyError: 'DATABASE_URL'`.** `run_monitor.py` opens its own connection to
+write the `monitor_runs` record and to store prose interpretations, but the
+workflow's "Run the Monitor job" step passed only `API_BASE_URL`. Locally
+this is invisible because `load_dotenv` reads `.env.local`; in the job the
+environment is the only source. So the watch record added on 2026-09-02 had
+never once been written by a real run — `monitor_runs` held nothing but the
+backfilled seed row, and every "successful" cron since recorded nothing.
+
+**`UPDATE ... ORDER BY ... LIMIT` is MySQL.** Postgres rejects it outright
+("syntax error at or near ORDER"), and `run_prose_interpretation`'s except
+clause swallowed it into a printed one-liner. `study_changes.prose_
+interpretation` had **zero rows**: step 7c's $0.168 bought interpretations
+that were computed and then dropped. Verified with `EXPLAIN`, which parses
+without executing.
+
+The write now goes by primary key, so `get_prose_amendments` carries `id`.
+Matching on `(nct_id, field_name)` and taking the newest was independently
+wrong: a trial that amends the same prose field twice inside one window has
+two rows, and the older interpretation would land on the newer one —
+attaching an inference to source text it was not drawn from (§3).
+
+**Still open: there is no `ANTHROPIC_API_KEY` secret on the repo.** Only
+`DATABASE_URL` and `DATABASE_URL_READONLY` exist, so step 7c cannot run on
+the schedule at all; it degrades through its except clause and the rest of
+the run proceeds. Step 7c has therefore never run unattended, and the
+claims elsewhere in the docs that it runs in the scheduled job describe the
+intent, not the behaviour. Adding the secret is the only thing that turns it
+on, and a key must never be written into a repo file (§2).
