@@ -20,15 +20,11 @@ one that matters most:
      the page (see WatchStatus.is_healthy), because a stale feed under a
      small warning still reads as current.
 
-**`last_checked_at` is a proxy and is labelled as one.** Nothing in this
-database records that a scheduled run happened — that is direction 3
-(`monitor_runs`), deliberately built after this. The best available
-evidence is `max(studies.last_matched_at)`, which
-POST /studies/reconcile-scope stamps on every in-scope trial at the end of
-every run. It was chosen over `max(study_changes.detected_at)` for exactly
-the reason state 1 exists: on a quiet week nothing is detected, so
-detected_at would report "last checked 2 days ago" and fire the alarm on
-the very screen this endpoint was written to get right.
+**`last_checked_at` reads from the `monitor_runs` table** (step 7b direction 3,
+2026-09-02). Every scheduled run records when it started and completed, so the
+watch knows a run happened even on a quiet day (no amendments). This table
+replaced the proxy `max(studies.last_matched_at)`, which couldn't distinguish
+"nothing has changed recently" from "nothing has been checked recently".
 """
 from typing import List, Optional
 
@@ -95,7 +91,6 @@ def watch_status(conn=Depends(get_readonly_db)):
         cur.execute(
             """
             SELECT count(*) FILTER (WHERE active_in_scope) AS trials_watched,
-                   max(last_matched_at) AS last_checked_at,
                    count(*) FILTER (WHERE active_in_scope AND has_results)
                        AS trials_with_results,
                    count(*) FILTER (WHERE active_in_scope AND has_results
@@ -105,6 +100,21 @@ def watch_status(conn=Depends(get_readonly_db)):
             """
         )
         studies = cur.fetchone()
+
+        # Get the most recent completed run for last_checked_at.
+        # The run record is authoritative — it exists even on quiet weeks.
+        cur.execute(
+            """
+            SELECT completed_at AS last_checked_at
+            FROM monitor_runs
+            WHERE status = 'completed'
+            ORDER BY completed_at DESC
+            LIMIT 1
+            """
+        )
+        run_result = cur.fetchone()
+        last_checked_at = run_result["last_checked_at"] if run_result else None
+        studies["last_checked_at"] = last_checked_at
 
         cur.execute(
             """

@@ -137,3 +137,18 @@ CREATE INDEX IF NOT EXISTS idx_study_changes_detected_at ON study_changes(detect
 -- and every one of those amendments was previously reported as "amended, but
 -- we can't see what". See docs/decisions.md, 2026-09-02.
 ALTER TABLE studies ADD COLUMN IF NOT EXISTS has_results BOOLEAN;
+
+-- Monitor run record (step 7b direction 3). Every scheduled fetch records
+-- when it started, when it completed, and what it found. This replaces the
+-- proxy `max(studies.last_matched_at)` so the watch knows a run happened
+-- even on a quiet day (no amendments). The proxy was read-only evidence
+-- that a check occurred; this table makes that evidence explicit and durable.
+CREATE TABLE IF NOT EXISTS monitor_runs (
+    id              SERIAL PRIMARY KEY,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at    TIMESTAMPTZ,
+    status          TEXT NOT NULL DEFAULT 'running',
+    trials_checked  INTEGER,
+    changes_detected INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_monitor_runs_completed_at ON monitor_runs(completed_at DESC);

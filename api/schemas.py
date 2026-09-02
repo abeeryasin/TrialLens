@@ -310,15 +310,8 @@ class WatchStatus(BaseModel):
 
     # ---- Is the watch alive? ----
     last_checked_at: Optional[datetime] = None
-    # PROXY, and it must be labelled as one wherever it is shown. There is
-    # no record of when a scheduled run happened (that is direction 3,
-    # `monitor_runs`). This is max(studies.last_matched_at), which
-    # POST /studies/reconcile-scope stamps on every in-scope trial at the
-    # end of every run — so it does report a check on a day when nothing
-    # changed, which max(detected_at) would not. What it cannot do is count
-    # runs or distinguish a run that failed after reconciling.
-
-    last_checked_source: str = "last_matched_at"
+    # Read from monitor_runs table (step 7b direction 3, 2026-09-02).
+    # Records the completion time of the most recent scheduled run.
     hours_since_check: Optional[float] = None
     check_interval_hours: int
     checks_missed: int = 0

@@ -2069,3 +2069,41 @@ checked if someone re-queries it on purpose.
 No number on the built page is hardcoded, which is the durable version of
 that claim — and the reason to build a designed screen rather than maintain
 a drawn one.
+
+## 2026-09-02 — Step 7b direction 3: the watch record, un-deferred by backfilling
+
+`monitor_runs` now exists and `/watch` reads `last_checked_at` from the
+newest completed run. `scripts/run_monitor.py` opens a row at the start of a
+run and closes it `completed` at the end, carrying trials checked and changes
+detected. `WatchStatus.last_checked_source` is deleted: it existed to label a
+proxy as a proxy, and there is no proxy left to label.
+
+**What actually unblocked this.** Direction 3 was deferred to step 10 on the
+reasoning that a new `monitor_runs` starts empty, an empty run table reads as
+"no check has ever run", and that fires the alarm on a watch that is fine —
+so the proxy had to survive until the table filled on its own. That reasoning
+was sound and its conclusion was still wrong. The proxy it replaces,
+`max(studies.last_matched_at)`, is not merely correlated with a run having
+happened: POST /studies/reconcile-scope stamps it on every in-scope trial at
+the end of every run, so it *is* a real completion time for a real run. That
+makes it backfillable. `scripts/backfill_monitor_runs.py` writes exactly one
+row from it, the cron takes over from the next run, and the alarm never fires
+falsely. The blocker was a gap of one row, not a gap of two weeks.
+
+`changes_detected` on that seeded row is NULL rather than 0. Nothing on file
+records how many changes that particular run found, and 0 would be a claim
+that it found none — inventing a fact about a run to avoid a null (sec. 2).
+
+**The test that has to survive this.** The real-data suite previously asserted
+that `max(last_matched_at)` was not behind `max(study_changes.detected_at)`,
+because if ingest ever stopped calling reconcile-scope after the diff, `/watch`
+would report a dead watch as healthy with no error anywhere. The same silent
+failure exists in the new shape — run_monitor.py could record changes and then
+never close its run row — so the test was rewritten against `monitor_runs`
+rather than deleted. A guard that moves when the mechanism moves is the point;
+deleting it because its subject was replaced would have retired the invariant
+along with the implementation.
+
+Verified live before claiming done: `/watch` over HTTP against the real
+database returns healthy, 4.95 hours since check, reading run #1. 278 tests
+pass, including the 12 that need the live database.

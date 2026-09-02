@@ -27,7 +27,6 @@ NOW = datetime(2026, 9, 2, 11, 36, 58, tzinfo=timezone.utc)
 def studies_row(**overrides):
     row = {
         "trials_watched": 11427,
-        "last_checked_at": NOW - timedelta(hours=5, minutes=33),
         "trials_with_results": 1050,
         "completed_with_results": 747,
     }
@@ -84,15 +83,24 @@ def field_row(**overrides):
     return row
 
 
-# Query order in api.watch.watch_status: now, studies, record, daily, recent,
-# then _latest_amendment's head and its fields.
+# Query order in api.watch.watch_status: now, studies, monitor_runs, record, daily,
+# recent, then _latest_amendment's head and its fields.
 def results(
     studies=None, record=None, daily=None, recent=None, head=None, fields=(),
-    enrollment=None,
+    enrollment=None, run="default",
 ):
+    # Use "default" as a sentinel so None can mean "no rows returned"
+    if run == "default":
+        run = [{"last_checked_at": NOW - timedelta(hours=5, minutes=33)}]
+    elif run is None:
+        run = []
+    else:
+        run = [run]
+    
     queued = [
         [{"now": NOW}],
         [studies if studies is not None else studies_row()],
+        run,
         [record if record is not None else record_row()],
         list(daily) if daily is not None else quiet_week(),
         [recent if recent is not None else recent_row()],
@@ -118,8 +126,8 @@ class TestIsTheWatchAlive:
         """A single skipped run is a hiccup — GitHub's scheduled workflows
         are explicitly best-effort. Alarming on one would train the reader
         to ignore the alarm, which is the only thing that makes it useless."""
-        late = studies_row(last_checked_at=NOW - timedelta(hours=7))
-        body = api(results(studies=late)).get("/watch").json()
+        late_run = {"last_checked_at": NOW - timedelta(hours=7)}
+        body = api(results(run=late_run)).get("/watch").json()
         assert body["is_healthy"] is True
         assert body["checks_missed"] == 1
 
@@ -127,38 +135,30 @@ class TestIsTheWatchAlive:
         """3 days 4 hours, the case drawn in design/Alarm.dc.html. is_healthy
         false means the alarm REPLACES the page — a stale feed under a small
         warning still reads as current."""
-        dead = studies_row(last_checked_at=NOW - timedelta(days=3, hours=4))
-        body = api(results(studies=dead)).get("/watch").json()
+        dead_run = {"last_checked_at": NOW - timedelta(days=3, hours=4)}
+        body = api(results(run=dead_run)).get("/watch").json()
         assert body["is_healthy"] is False
         assert body["checks_missed"] == 12  # 76h elapsed / 6h slots
 
     def test_the_alarm_starts_exactly_at_two_missed_intervals(self, api):
-        just_inside = studies_row(
-            last_checked_at=NOW - timedelta(hours=STALE_AFTER_HOURS, minutes=-1)
-        )
-        just_outside = studies_row(
-            last_checked_at=NOW - timedelta(hours=STALE_AFTER_HOURS, minutes=1)
-        )
-        assert api(results(studies=just_inside)).get("/watch").json()["is_healthy"] is True
-        assert api(results(studies=just_outside)).get("/watch").json()["is_healthy"] is False
+        just_inside_run = {"last_checked_at": NOW - timedelta(hours=STALE_AFTER_HOURS, minutes=-1)}
+        just_outside_run = {"last_checked_at": NOW - timedelta(hours=STALE_AFTER_HOURS, minutes=1)}
+        assert api(results(run=just_inside_run)).get("/watch").json()["is_healthy"] is True
+        assert api(results(run=just_outside_run)).get("/watch").json()["is_healthy"] is False
 
     def test_never_having_checked_is_not_healthy(self, api):
         """An empty database has no evidence a check ever ran. Reporting a
         healthy watch it cannot see is the exact failure this endpoint is
         written to avoid — and it is the state a fresh clone starts in."""
-        virgin = studies_row(last_checked_at=None, trials_watched=0)
-        body = api(results(studies=virgin)).get("/watch").json()
+        virgin_studies = studies_row(trials_watched=0)
+        virgin_run = None  # No completed runs
+        body = api(results(studies=virgin_studies, run=virgin_run)).get("/watch").json()
         assert body["is_healthy"] is False
         assert body["last_checked_at"] is None
         assert body["hours_since_check"] is None
         assert body["checks_missed"] == 0
 
-    def test_the_proxy_names_itself(self, api):
-        """last_checked_at is max(studies.last_matched_at), not a run log —
-        there is no run log yet (direction 3). The source travels with the
-        value so the UI cannot present a proxy as a record."""
-        body = api(results()).get("/watch").json()
-        assert body["last_checked_source"] == "last_matched_at"
+
 
 
 class TestTheQuietWeek:

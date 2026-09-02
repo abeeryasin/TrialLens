@@ -78,7 +78,7 @@ filter predicates. `f9ccb45` stays in history as the documented dead end —
 a commit saying "we built this, measured it, and it didn't earn its place"
 is evidence, not clutter.
 
-**Step 7b is done** (2026-09-02, two commits). Three time-based directions:
+**Step 7b is done** (2026-09-02). Three time-based directions:
 **Direction 1, amendment history** — `GET /studies/{nct_id}/amendments` groups
 a trial's changes into the amendments that caused them, `api/amendments.py`
 says what each did — dates that slipped, targets that became actuals, sites
@@ -89,14 +89,37 @@ where the watch leads and the capability grid sits below it. Three states,
 all tested through Streamlit's `AppTest` — the quiet week stated as a finding
 with its zero days drawn as zeros, a news week led by what changed the science
 rather than by a row count, and an alarm that *replaces* the page instead of
-sitting above it. `last_checked_at` is a labelled proxy (`max(studies.last_matched_at)`) because nothing yet records that a run happened. The footer states "212 trial updates · 498 individual field changes" — concrete enough that users needn't decode what the numbers mean.
+sitting above it. The footer states "212 trial updates · 498 individual field changes" — concrete enough that users needn't decode what the numbers mean.
 
-**Direction 3, the watch record** — a `monitor_runs` table, deferred to step 10.
-It would replace the proxy and add runs-completed/checks-missed, but it starts
-empty (an empty run table reads as "never checked" — the alarm), so the proxy
-has to survive until the table fills. Worth doing when deploying.
+**Direction 3, the watch record** — `monitor_runs` table (2026-09-02). Every
+scheduled run opens a row at the start and closes it `completed` at the end,
+with trials checked and changes detected. `/watch` reads `last_checked_at`
+from the newest completed run, and `last_checked_source` is gone — the value
+is a record now, not a proxy needing a label.
 
-**Also done this session:** enrollment_type switches now name the numbers,
+**The empty-table trap that deferred this was solved by backfilling, not by
+waiting.** A fresh `monitor_runs` reads as "never checked" and fires the
+alarm on a healthy watch — the exact reason the roadmap pushed this to step
+10. The way out: the proxy it replaces *is* evidence a run completed, so
+`scripts/backfill_monitor_runs.py` seeds one row from
+`max(studies.last_matched_at)` and the cron takes over from there. Its
+`changes_detected` is left NULL — nothing on file says how many changes that
+particular run found, and writing a number would invent one (§2). Verified
+live: `/watch` reports healthy, 4.95 hours since check, off run #1. 278
+tests pass.
+
+**Step 7b refinement (2026-09-02, committed):** enrollment counts now tracked
+through amendment history via `enrollment_context()` function. When an amendment
+changes enrollment_type, the description now includes both counts as they were
+at that moment, not today's value. Real case: NCT03402139 now reads "the target
+of 400 was replaced by a real count of 163" instead of the old generic sentence.
+Required walking the trial's history backwards to establish which count was true
+before each amendment. All 279 tests pass.
+
+**Next steps (decided 2026-09-02):**
+1. **Step 8** — Explore (knowledge graph)
+
+**Also done earlier this session:** enrollment_type switches now name the numbers,
 e.g. "the target of 400 was replaced by a real count of 163" instead of
 just "the recruitment target was replaced". This required walking a trial's
 history backwards to establish which count was true AT EACH AMENDMENT, not

@@ -36,6 +36,32 @@ PROSE_BUDGET_USD = 0.25  # Hard cap for this monitor run
 PROSE_MAX_CALLS = 50  # Never interpret more than this per run
 
 
+def create_run_record(conn):
+    """Create a monitor_runs record and return its id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO monitor_runs (status) VALUES ('running') RETURNING id"
+        )
+        run_id = cur.fetchone()[0]
+    conn.commit()
+    return run_id
+
+
+def update_run_record(conn, run_id, trials_checked, changes_detected, status="completed"):
+    """Update a monitor_runs record with results."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE monitor_runs
+            SET completed_at = now(), status = %s,
+                trials_checked = %s, changes_detected = %s
+            WHERE id = %s
+            """,
+            (status, trials_checked, changes_detected, run_id),
+        )
+    conn.commit()
+
+
 def run_prose_interpretation():
     """Step 7c: After ingestion, interpret prose amendments from last 6 hours.
 
@@ -91,17 +117,53 @@ def run_prose_interpretation():
         return 0.0
 
 
+def count_changes_detected(conn, start_time):
+    """Count study_changes entries created after start_time."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM study_changes WHERE detected_at >= %s",
+            (start_time,),
+        )
+        return cur.fetchone()[0]
+
+
 def main():
+    # Record this run
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    run_id = create_run_record(conn)
+    conn.close()
+
     conditions = json.loads(CONDITIONS_FILE.read_text())
-    print(f"Monitor run starting for {len(conditions)} tracked condition(s): {conditions}", flush=True)
+    print(f"Monitor run #{run_id} starting for {len(conditions)} tracked condition(s): {conditions}", flush=True)
+
+    total_trials_checked = 0
     for condition in conditions:
         print(f"\n--- {condition} ---", flush=True)
-        run_ingest(condition)
+        nct_ids = run_ingest(condition)
+        total_trials_checked += len(nct_ids)
+
+    # Count unique changes detected during this run
+    # We use a fresh connection to get accurate counts
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    with conn.cursor() as cur:
+        # Get the started_at time for this run
+        cur.execute("SELECT started_at FROM monitor_runs WHERE id = %s", (run_id,))
+        started_at = cur.fetchone()[0]
+
+    # Ensure we count all changes for this run by a small margin
+    changes_count = count_changes_detected(conn, started_at)
 
     total_spend = run_prose_interpretation()
-    print("\nMonitor run complete.", flush=True)
+
+    # Update the run record with final results
+    update_run_record(conn, run_id, total_trials_checked, changes_count)
+    conn.close()
+
+    print(f"\nMonitor run #{run_id} complete.", flush=True)
+    print(f"  Trials checked: {total_trials_checked}", flush=True)
+    print(f"  Changes detected: {changes_count}", flush=True)
     if total_spend > 0:
-        print(f"Total spend on step 7c: ${total_spend:.4f}", flush=True)
+        print(f"  Total spend on step 7c: ${total_spend:.4f}", flush=True)
 
 
 if __name__ == "__main__":

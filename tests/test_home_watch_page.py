@@ -45,7 +45,6 @@ def payload(**overrides):
         "trials_watched": 11427,
         "conditions": ["breast cancer", "obesity"],
         "last_checked_at": (NOW - timedelta(hours=2)).isoformat(),
-        "last_checked_source": "last_matched_at",
         "hours_since_check": 2.0,
         "check_interval_hours": 6,
         "checks_missed": 0,
@@ -344,12 +343,12 @@ class TestTheAlarm:
 
 
 class TestHonestyAboutItself:
-    def test_the_page_admits_last_check_is_inferred_not_recorded(self, render):
-        """There is no record of scheduled runs — that is direction 3. Until
-        it exists the page must not imply it has one."""
+    def test_the_page_says_where_last_check_comes_from(self, render):
+        """Direction 3 replaced the proxy with a real run record, so the page
+        now names its source rather than disclaiming one it didn't have."""
         page = render(payload())
-        assert "inferred from when trials were last confirmed in scope" in page
-        assert "TrialLens doesn't keep one yet" in page
+        assert "the most recent scheduled run finished" in page
+        assert "TrialLens doesn't keep one yet" not in page
 
     def test_a_late_check_is_reported_without_crying_wolf(self, render):
         """One skipped run is a hiccup — GitHub's scheduled workflows are

@@ -5,17 +5,18 @@ ignores SQL, so it proves the arithmetic and the response model and nothing
 about the queries. This file runs the real endpoint over HTTP against the
 real database, and then checks the one assumption the whole screen rests on.
 
-**The assumption: `max(studies.last_matched_at)` is honest evidence that a
-scheduled check ran.** There is no run log — that is direction 3. This proxy
-was chosen over `max(study_changes.detected_at)` because on a quiet week
-nothing is detected, so detected_at would report "last checked days ago" and
-fire the alarm on precisely the screen the watch was designed to get right.
-It holds only because POST /studies/reconcile-scope stamps last_matched_at
-on every in-scope trial at the end of every run, whether or not anything
-changed. If ingest ever stops calling reconcile-scope, or calls it before
-the diff instead of after, this endpoint reports a dead watch as healthy —
-**silently**, with no error anywhere. That is what test_the_proxy_is_not_
-behind_the_changes_it_should_explain exists to catch.
+**The assumption: `monitor_runs` records every scheduled check.** Direction 3
+replaced the old proxy (`max(studies.last_matched_at)`) with a real run log:
+scripts/run_monitor.py opens a row at the start of a run and closes it as
+'completed' at the end, so the watch has direct evidence a check happened
+even on a quiet week when nothing was detected.
+
+It holds only while run_monitor.py actually closes its rows. If it starts
+failing before the update — or stops writing the table at all — the newest
+completed run falls behind the changes the same runs are still recording,
+and this endpoint reports a dead watch on live data, **silently**, with no
+error anywhere. That is what test_the_run_record_is_not_behind_the_changes_
+it_should_explain exists to catch.
 
 Free — read-only, no model, no network beyond Neon. Skipped cleanly when
 DATABASE_URL_READONLY isn't set, so CI without credentials stays green;
@@ -72,14 +73,14 @@ def watch():
     return response.json()
 
 
-def test_the_proxy_is_not_behind_the_changes_it_should_explain(cur, watch):
-    """last_matched_at must be at least as recent as the newest detected
-    change. If it is older, the run that wrote that change did not reconcile
-    scope afterwards, the proxy is measuring something other than "a check
-    ran", and the alarm can no longer be trusted in either direction.
+def test_the_run_record_is_not_behind_the_changes_it_should_explain(cur, watch):
+    """The newest completed run must be at least as recent as the newest
+    detected change. If it is older, a run wrote changes and then never
+    closed its row — the log has stopped tracking the job it describes, and
+    the alarm can no longer be trusted in either direction.
 
-    Allows a small tolerance: within one run, the diff is written before
-    reconcile-scope, so last_matched_at is normally LATER — the failure
+    Allows a small tolerance: within one run the diff is written before the
+    run record is closed, so completed_at is normally LATER — the failure
     being caught is it being meaningfully earlier.
     """
     cur.execute("SELECT max(detected_at) AS mx FROM study_changes")
@@ -87,18 +88,23 @@ def test_the_proxy_is_not_behind_the_changes_it_should_explain(cur, watch):
     if newest_change is None:
         pytest.skip("no changes recorded yet")
 
-    cur.execute("SELECT max(last_matched_at) AS mx FROM studies")
-    newest_check = cur.fetchone()["mx"]
+    cur.execute(
+        "SELECT max(completed_at) AS mx FROM monitor_runs WHERE status = 'completed'"
+    )
+    newest_run = cur.fetchone()["mx"]
+    assert newest_run is not None, "no completed run on record"
 
-    assert newest_check >= newest_change - timedelta(minutes=5), (
-        f"last_matched_at ({newest_check}) is behind the newest recorded change "
-        f"({newest_change}) — reconcile-scope is no longer running after the "
-        "diff, so /watch's 'last checked' is not evidence a check ran"
+    assert newest_run >= newest_change - timedelta(minutes=5), (
+        f"the newest completed run ({newest_run}) is behind the newest recorded "
+        f"change ({newest_change}) — run_monitor.py is recording changes but no "
+        "longer closing its run record, so /watch's 'last checked' is stale"
     )
 
 
 def test_the_reported_check_time_is_the_one_in_the_table(cur, watch):
-    cur.execute("SELECT max(last_matched_at) AS mx FROM studies")
+    cur.execute(
+        "SELECT max(completed_at) AS mx FROM monitor_runs WHERE status = 'completed'"
+    )
     assert watch["last_checked_at"].startswith(
         cur.fetchone()["mx"].isoformat()[:19]
     )

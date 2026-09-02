@@ -435,14 +435,9 @@ st.caption(
     f"amended before {format_recording_since(watch['recording_since'])} cannot "
     "be shown here. Everything since has been recorded."
 )
-# The honest footnote on the figure above it. "Last check" is inferred from
-# when trials were last confirmed in scope, not from a log of runs — nothing
-# records that a scheduled job happened. That is step 7b direction 3
-# (`monitor_runs`), and until it exists this page must not imply otherwise.
 st.caption(
-    "“Last check” is inferred from when trials were last confirmed in scope, "
-    "not from a record of scheduled runs — TrialLens doesn't keep one yet, so "
-    "it can say when a check last happened but not how many have run."
+    "“Last check” is when the most recent scheduled run finished, read from "
+    "the run record TrialLens keeps of every check."
 )
 
 
