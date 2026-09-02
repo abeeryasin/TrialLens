@@ -78,31 +78,29 @@ filter predicates. `f9ccb45` stays in history as the documented dead end —
 a commit saying "we built this, measured it, and it didn't earn its place"
 is evidence, not clutter.
 
-**Step 7b is in progress, and it is not roadmap step 8 (Explore).** Three
-time-based directions agreed 2026-09-01. **Direction 1, amendment history,
-is done** (2026-09-02): `GET /studies/{nct_id}/amendments` groups a trial's
-changes into the amendments that caused them, `api/amendments.py` says what
-each did — dates that slipped, targets that became actuals, sites added,
-results posted — with no model, and Understand leads with it.
-**Direction 2, the watch, is done** (2026-09-02): `GET /watch` and a rebuilt
-`frontend/Home.py` where the watch leads and the capability grid sits below
-it. Three states, all tested through Streamlit's `AppTest` — the quiet week
-stated as a finding with its zero days drawn as zeros, a news week led by
-what changed the science rather than by a row count, and an alarm that
-**replaces** the page instead of sitting above it.
+**Step 7b is done** (2026-09-02, two commits). Three time-based directions:
+**Direction 1, amendment history** — `GET /studies/{nct_id}/amendments` groups
+a trial's changes into the amendments that caused them, `api/amendments.py`
+says what each did — dates that slipped, targets that became actuals, sites
+added, results posted — with no model. Understand leads with it.
 
-**`last_checked_at` is a labelled proxy, not a record.** It is
-`max(studies.last_matched_at)` — stamped by `reconcile-scope` at the end of
-every run — because nothing yet records that a run happened. Never use
-`max(study_changes.detected_at)` for this: on a quiet week nothing is
-detected, so it fires the alarm on the primary screen. The proxy cannot
-count runs, so the footer says "Last check", never "Checks run", and the
-page states in its own words that the figure is inferred.
+**Direction 2, the watch** — `GET /watch` and a rebuilt `frontend/Home.py`
+where the watch leads and the capability grid sits below it. Three states,
+all tested through Streamlit's `AppTest` — the quiet week stated as a finding
+with its zero days drawn as zeros, a news week led by what changed the science
+rather than by a row count, and an alarm that *replaces* the page instead of
+sitting above it. `last_checked_at` is a labelled proxy (`max(studies.last_matched_at)`) because nothing yet records that a run happened. The footer states "212 trial updates · 498 individual field changes" — concrete enough that users needn't decode what the numbers mean.
 
-**Next is direction 3, the watch record** (a `monitor_runs` table), which
-replaces that proxy and adds runs-completed / checks-missed. Note it starts
-empty: an empty run table reads as "never checked", which is the alarm — so
-the fallback to the proxy has to survive until the table fills.
+**Direction 3, the watch record** — a `monitor_runs` table, deferred to step 10.
+It would replace the proxy and add runs-completed/checks-missed, but it starts
+empty (an empty run table reads as "never checked" — the alarm), so the proxy
+has to survive until the table fills. Worth doing when deploying.
+
+**Also done this session:** enrollment_type switches now name the numbers,
+e.g. "the target of 400 was replaced by a real count of 163" instead of
+just "the recruitment target was replaced". This required walking a trial's
+history backwards to establish which count was true AT EACH AMENDMENT, not
+just today's value. 270 free tests pass.
 
 **`has_results` was found missing on 2026-09-02 and added.** `hasResults`
 sits at the TOP level of the CT.gov response, not inside `protocolSection`,

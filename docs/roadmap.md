@@ -33,41 +33,44 @@ time a step starts or finishes.**
 **Total estimate: ~64-83 active hours** (midpoint ~73.5), plus the
 unavoidable ~2-week review-queue running time noted above.
 
-**Where things stand (2026-08-30):** steps 1-6 are done and running for
-real — the 6-hour GitHub Actions cron has been firing reliably on its own
-(three clean runs on 2026-08-30 alone), and three of the five capabilities
-(Discover, Understand, Monitor) work end to end against real
-ClinicalTrials.gov data. Explore and Investigate aren't built yet, and
-Home says so rather than implying otherwise.
-**Next: step 7, the AI ranking/evidence layer** — the first step where an
-LLM enters the system at all, and where the evaluation harness gets built
-alongside the feature rather than bolted on afterward (CLAUDE.md §7).
+**Where things stand (2026-09-02):** steps 1-6 are done and running for
+real — the 6-hour GitHub Actions cron fires reliably on its own, and three
+of the five capabilities (Discover, Understand, Monitor) work end to end
+against real ClinicalTrials.gov data. Explore and Investigate aren't built
+yet. **Step 7b is done** — the watch leads Home.py now, amendment history
+shows in Understand, and enrollment numbers are named instead of gestured at.
+270 tests pass.
 
-One pattern worth carrying into step 7, learned repeatedly across steps
-4-6: the gaps that mattered most were found by *using* the thing, not by
-reading the code — the `/discover` under-reporting gap, the duplicate
-change rows, the leftover test data, and the enrollment ambiguity were all
-surfaced that way. Budget real time for using the ranking layer against
-real trials before trusting it.
+**Step 7 (the ranking layer) was built, measured, and removed** on 2026-09-01.
+Four of its five scored signals were filters wearing a score's costume, and
+the one real judgment scales with volume in a low-volume product (~17 changed
+trials a week). No clinician ever read a real ranked result — the synthetic
+harness scored 15/15 on ties resolved by fixture order, while published
+systems report 0.32–0.45. The deterministic scorers survive as future filter
+predicates; the removal commit stays in history as a documented dead end.
 
-**Update 2026-08-31 — that pattern held, with a variation.** Step 7's real
-bugs were not found by using the feature (nothing renders yet) but by
-querying the live database for what the code assumed. The prompt taught the
-model a trial status that does not exist, a phase format the column never
-stores, and left six of eight real statuses unmentioned. Five of eight
-signals were being routed through a paid model to answer questions plain
-code answers exactly. And a 15%-weighted signal was judging a field that
-was never placed in the prompt at all.
+**Step 7b three directions** (deferred from step 8 for timeline, 2026-09-01):
 
-The generalisable habit: before writing a query *or a prompt*, read the
-real schema and the real value distributions (CLAUDE.md §6). A prompt is a
-place where assumptions about data hide as convincingly as they do in SQL,
-and unlike SQL, a wrong assumption there produces plausible output rather
-than an error.
+1. **Amendment history** — DONE. `GET /studies/{nct_id}/amendments` groups
+   changes into amendments, `api/amendments.py` describes what each did —
+   dates, enrollment counts with numbers now shown, results posted.
 
-Still outstanding, and the thing the step cannot be called done without:
-**no clinician has read a single real ranked result.** The synthetic
-harness scored 15/15 on ordering, but five of those were ties resolved by
-fixture order, and published trial-matching systems report precision/recall
-around 0.32-0.45 — a perfect score means the harness measures an easier
-task than the real one.
+2. **The watch** — DONE. `GET /watch` + rebuilt Home.py. Three states (quiet /
+   news / stopped), all tested via AppTest. The quiet week stated as a
+   finding with zeros shown, not omitted. The alarm replaces the page, not
+   sits above it. `last_checked_at` is a labelled proxy until direction 3.
+
+3. **Watch record** (`monitor_runs` table) — DEFERRED to step 10. Would replace
+   the proxy and add run counts, but starts empty (reads as "never checked",
+   the alarm). The proxy has to survive until it fills. Worth doing when
+   deploying.
+
+**Next: step 8, Explore** (knowledge graph / relationships).
+
+**Also this session:** enrollment switches name both numbers now (not just
+"replaced by a real count"). This required walking a trial's history
+backwards — a count move establishes which count was true AT THAT AMENDMENT,
+not today's value (CLAUDE.md §2). The record footer shows "212 trial
+updates · 498 field changes" concretely. Conditions stay hardcoded in
+`config/` for now — moving to the database so users can add them through
+the UI is step 10 work (~2–3 hrs).
