@@ -136,7 +136,14 @@ class TestTheQuietWeek:
         # switches units, because "72 hours" is a number a reader has to
         # divide before it means anything.
         assert "Nothing has changed in 2 days." in page
-        assert "a quiet week is the watch working, not the watch broken" in page
+        assert "a quiet day is the watch working, not the watch broken" in page
+
+    def test_it_does_not_claim_most_weeks_are_quiet(self, render):
+        """That sentence shipped on 2026-09-02 and was false: of the six days
+        on record, the four weekdays carried 63-79 amendments each. It is
+        pinned out rather than merely deleted, because it is the kind of
+        plausible line that gets written again."""
+        assert "Most weeks look like this" not in render(payload())
 
     def test_a_shorter_silence_is_still_counted_in_hours(self, render):
         page = render(payload(hours_since_last_amendment=18.0))
@@ -152,8 +159,46 @@ class TestTheQuietWeek:
         """The zeros are evidence the watch ran and found nothing. Omitting
         them would delete the only proof a quiet day was watched at all."""
         page = render(payload())
-        assert "amendments per day" in page
+        assert "Amendments detected per day" in page
         assert page.count(">0<") == 7
+
+    def test_the_strip_says_what_the_numbers_count_before_showing_them(self, render):
+        """Read by someone who hadn't built it: a bare "79" above a date,
+        with the only explanation at the far right of the row, does not say
+        what 79 counts. The heading now sits above the tiles."""
+        page = render(payload())
+        heading = page.index("Amendments detected per day")
+        first_tile = page.index("border-radius:6px")
+        assert heading < first_tile
+
+    def test_it_says_these_are_detection_dates_not_posting_dates(self, render):
+        """They differ: one amendment CT.gov posted on 28 August wasn't
+        detected until the 31st. Labelling detection dates as posting dates
+        would attribute our cron's timing to the registry."""
+        assert "detected" in render(payload())
+
+    def test_weekends_are_marked_so_the_pattern_is_visible(self, render):
+        """The only two silent days on record were a Saturday and a Sunday.
+        Without the weekday, that pattern is invisible and the zeros look
+        arbitrary."""
+        page = render(payload())
+        for day in ("Sat", "Sun", "Mon"):
+            assert f">{day}<" in page
+
+    def test_the_weekend_claim_is_dropped_once_a_weekday_falls_silent(self, render):
+        """A written claim rots; this one recomputes. The moment a Tuesday
+        records zero amendments, the page must stop saying every silent day
+        was a weekend."""
+        days = [
+            {"day": "2026-08-27", "amendments": 0},   # Thursday
+            {"day": "2026-08-28", "amendments": 0},
+            {"day": "2026-08-29", "amendments": 0},
+            {"day": "2026-08-30", "amendments": 0},
+            {"day": "2026-08-31", "amendments": 0},
+            {"day": "2026-09-01", "amendments": 0},
+            {"day": "2026-09-02", "amendments": 0},
+        ]
+        assert "fallen on a weekend" not in render(payload(daily=days))
 
 
 class TestTheWeekWithNews:

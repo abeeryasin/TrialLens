@@ -86,7 +86,10 @@ def field_row(**overrides):
 
 # Query order in api.watch.watch_status: now, studies, record, daily, recent,
 # then _latest_amendment's head and its fields.
-def results(studies=None, record=None, daily=None, recent=None, head=None, fields=()):
+def results(
+    studies=None, record=None, daily=None, recent=None, head=None, fields=(),
+    enrollment=None,
+):
     queued = [
         [{"now": NOW}],
         [studies if studies is not None else studies_row()],
@@ -96,7 +99,10 @@ def results(studies=None, record=None, daily=None, recent=None, head=None, field
         [head] if head is not None else [],
     ]
     if head is not None:
+        # ...then the amendment's fields, then the enrollment count in force
+        # just after it (see _latest_amendment).
         queued.append(list(fields))
+        queued.append([{"count_after": enrollment}])
     return queued
 
 

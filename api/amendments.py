@@ -164,12 +164,40 @@ def describe_count_shift(old_value, new_value) -> Optional[str]:
     return f"{word} by {abs(delta):,}"
 
 
-def describe_enrollment_type(old_value, new_value) -> Optional[str]:
+def describe_enrollment_type(
+    old_value, new_value, count_before=None, count_after=None
+) -> Optional[str]:
     """ESTIMATED -> ACTUAL is a genuinely meaningful switch, and it reads as
     noise unless it's spelled out: the number stopped being a recruitment
     target and became a real headcount. See docs/decisions.md, 2026-08-30 —
-    6,577 of 11,482 records report a target rather than a count."""
+    6,577 of 11,482 records report a target rather than a count.
+
+    **The numbers are the story, and until 2026-09-02 this sentence had
+    none.** One real amendment (NCT03402139, 31 August) switched a target of
+    400 to an actual count of 163 — a trial that enrolled 59% fewer people
+    than it planned — and the page said only "the recruitment target was
+    replaced by a real enrolled count". The most consequential fact in the
+    amendment was the one clause that omitted it.
+
+    Both counts are optional and the sentence degrades honestly without
+    them, because the caller cannot always establish which number was true
+    at this amendment (see the callers in api/studies.py and api/watch.py).
+    A number that cannot be tied to THIS amendment is not stated at all
+    rather than borrowed from the trial's present (CLAUDE.md sec. 2).
+    """
     if old_value == "ESTIMATED" and new_value == "ACTUAL":
+        if count_before is not None and count_after is not None:
+            if count_before != count_after:
+                return (
+                    f"the target of {count_before:,} was replaced by a real "
+                    f"count of {count_after:,}"
+                )
+            # The count itself never moved — the sponsor confirmed the number
+            # they had projected. "Replaced by" would be wrong here: nothing
+            # was replaced except the number's status.
+            return f"the target of {count_after:,} was confirmed as the real enrolled count"
+        if count_after is not None:
+            return f"the real enrolled count is {count_after:,}"
         return "the recruitment target was replaced by a real enrolled count"
     if old_value == "ACTUAL" and new_value == "ESTIMATED":
         return "a real enrolled count was replaced by a target — unusual; worth a look"
@@ -284,14 +312,71 @@ _DATE_FIELDS = {"start_date", "primary_completion_date", "completion_date"}
 _LIST_FIELDS = {"locations": "site", "interventions": "intervention"}
 
 
-def describe_effect(field_name: str, old_value, new_value) -> Optional[str]:
+def _as_int(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def enrollment_context(changes, count_after):
+    """The two enrollment numbers belonging to ONE amendment.
+
+    `changes` are that amendment's own field changes (anything with
+    `.field_name` / `.old_value` / `.new_value`). `count_after` is the count
+    in force immediately AFTER this amendment, which only the caller can
+    know — it is the trial's current count for the newest amendment, and
+    something older for anything before it.
+
+    Returns `(context, count_before)`. The second value is the count in
+    force before this amendment, which is exactly what a caller walking
+    backwards through a trial's history needs for the next-older one.
+
+    Why this is not simply "read the trial's enrollment_count": that is the
+    count as of *today*, and attributing today's number to an amendment from
+    three weeks ago would state a fact about the trial that was not true
+    when it happened (CLAUDE.md sec. 2). Only two situations give an honest
+    answer — the amendment moved the count itself (the row says both
+    numbers), or nothing has moved it since (today's number was also that
+    day's). The caller establishes which.
+    """
+    for change in changes:
+        if getattr(change, "field_name", None) != "enrollment_count":
+            continue
+        before = _as_int(getattr(change, "old_value", None))
+        after = _as_int(getattr(change, "new_value", None))
+        if after is not None:
+            # The row is authoritative: it states both sides of this exact
+            # amendment, so it overrides whatever the caller passed in.
+            return (
+                {"enrollment_count_before": before, "enrollment_count_after": after},
+                before,
+            )
+
+    # The count did not move in this amendment, so whatever was true after
+    # it was also true before it.
+    return (
+        {"enrollment_count_before": count_after, "enrollment_count_after": count_after},
+        count_after,
+    )
+
+
+def describe_effect(field_name: str, old_value, new_value, context=None) -> Optional[str]:
     """The one entry point: a plain-language effect, or None.
 
     None is the common and correct answer — for prose fields it is the ONLY
     answer this module will give, because summarising what a rewritten
     eligibility criterion now means is a reading of clinical text, not
     arithmetic.
+
+    `context` carries facts about the amendment that are NOT in this row.
+    Only enrollment_type reads it today, and only for the two counts, which
+    live on a sibling row (or on no row at all, when the number did not
+    change). Optional everywhere: an endpoint that cannot establish the
+    context honestly passes nothing and gets the numberless sentence, which
+    is still true.
     """
+    context = context or {}
     if field_name in _DATE_FIELDS:
         return describe_date_shift(old_value, new_value)
     if field_name == "has_results":
@@ -301,7 +386,12 @@ def describe_effect(field_name: str, old_value, new_value) -> Optional[str]:
     if field_name == "enrollment_count":
         return describe_count_shift(old_value, new_value)
     if field_name == "enrollment_type":
-        return describe_enrollment_type(old_value, new_value)
+        return describe_enrollment_type(
+            old_value,
+            new_value,
+            count_before=context.get("enrollment_count_before"),
+            count_after=context.get("enrollment_count_after"),
+        )
     if field_name in _LIST_FIELDS:
         return describe_list_shift(old_value, new_value, _LIST_FIELDS[field_name])
     return None

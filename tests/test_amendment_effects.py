@@ -11,6 +11,7 @@ the failure mode that matters is a *confident* description of a change that
 did not happen that way.
 """
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -25,8 +26,12 @@ from api.amendments import (
     describe_results_posting,
     describe_list_shift,
     describe_status_change,
+    enrollment_context,
     field_aspect,
 )
+from api.schemas import AmendedField
+
+WHEN = datetime(2026, 8, 31, 18, 2, 40, tzinfo=timezone.utc)
 
 
 class TestAspectMapping:
@@ -147,6 +152,85 @@ class TestEnrollment:
 
     def test_the_reverse_is_flagged_as_unusual(self):
         assert "unusual" in describe_enrollment_type("ACTUAL", "ESTIMATED")
+
+    def test_the_numbers_are_named_when_the_count_moved(self):
+        """The real NCT03402139 amendment, 31 August: a trial that planned
+        400 participants and enrolled 163. Without the numbers the sentence
+        omits the only part a researcher would act on."""
+        result = describe_enrollment_type("ESTIMATED", "ACTUAL", 400, 163)
+        assert result == "the target of 400 was replaced by a real count of 163"
+
+    def test_a_count_that_did_not_move_is_confirmed_not_replaced(self):
+        """Nothing was replaced except the number's status. Saying "replaced
+        by" would imply the figure changed when it did not."""
+        result = describe_enrollment_type("ESTIMATED", "ACTUAL", 99, 99)
+        assert result == "the target of 99 was confirmed as the real enrolled count"
+
+    def test_large_numbers_are_grouped(self):
+        assert "1,195" in describe_enrollment_type("ESTIMATED", "ACTUAL", 1155, 1195)
+
+    def test_it_degrades_to_the_wordless_sentence_when_no_count_is_known(self):
+        """Six of the eight real switches carry no same-amendment count row.
+        The sentence has to stay true without one rather than inventing a
+        number or disappearing."""
+        result = describe_enrollment_type("ESTIMATED", "ACTUAL")
+        assert result == "the recruitment target was replaced by a real enrolled count"
+
+
+class TestEnrollmentContext:
+    """Which enrollment number belongs to WHICH amendment.
+
+    The tempting shortcut is to read `studies.enrollment_count` and put it
+    in the sentence. That is the count as of today, and against an
+    amendment from three weeks ago it states a fact about the trial that was
+    not true when it happened (CLAUDE.md sec. 2). These pin the unwinding.
+    """
+
+    def field(self, name, old, new):
+        return AmendedField(field_name=name, old_value=old, new_value=new, detected_at=WHEN)
+
+    def test_a_count_row_in_the_amendment_overrides_whatever_was_passed_in(self):
+        """The row states both sides of this exact amendment, so it is
+        authoritative — the caller's running value cannot be more correct."""
+        changes = [self.field("enrollment_count", "400", "163")]
+        context, before = enrollment_context(changes, count_after=9999)
+        assert context == {"enrollment_count_before": 400, "enrollment_count_after": 163}
+        assert before == 400
+
+    def test_without_a_count_row_the_number_is_unchanged_across_the_amendment(self):
+        changes = [self.field("overall_status", "RECRUITING", "COMPLETED")]
+        context, before = enrollment_context(changes, count_after=99)
+        assert context == {"enrollment_count_before": 99, "enrollment_count_after": 99}
+        assert before == 99
+
+    def test_the_returned_before_value_is_what_unwinds_the_history(self):
+        """Walking a trial's amendments newest-first, each one hands the
+        next-older one the count that preceded it. Two count moves in a row
+        must not leave the older amendment describing the newer number."""
+        newer = [self.field("enrollment_count", "500", "600")]
+        older = [self.field("enrollment_count", "120", "500")]
+
+        _, before_newer = enrollment_context(newer, count_after=600)
+        context_older, before_older = enrollment_context(older, count_after=before_newer)
+
+        assert before_newer == 500
+        assert context_older["enrollment_count_after"] == 500
+        assert context_older["enrollment_count_before"] == 120
+        assert before_older == 120
+
+    def test_an_unknown_count_stays_unknown_rather_than_becoming_zero(self):
+        changes = [self.field("overall_status", "RECRUITING", "COMPLETED")]
+        context, before = enrollment_context(changes, count_after=None)
+        assert context["enrollment_count_after"] is None
+        assert before is None
+
+    def test_an_unparseable_count_row_does_not_crash_the_amendment(self):
+        """CT.gov has sent stranger things. A bad value must degrade to the
+        numberless sentence, not a 500."""
+        changes = [self.field("enrollment_count", "lots", "more")]
+        context, before = enrollment_context(changes, count_after=42)
+        assert context["enrollment_count_after"] == 42
+        assert before == 42
 
 
 class TestListShift:

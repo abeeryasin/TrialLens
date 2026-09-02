@@ -21,13 +21,15 @@ RUN_2 = datetime(2026, 8, 31, 18, 2, 40, 817298, tzinfo=timezone.utc)
 # tests/conftest.py, shared with the other endpoint suites — see that file
 # for why the fake deliberately ignores the SQL it is given.
 
-# Query order in the route: exists-check, amendment join, orphans, recording_since.
-def results(*, exists=True, amendment_rows=(), orphans=(), since=RUN_1):
+# Query order in the route: exists-check, amendment join, orphans,
+# recording_since, the trial's current enrollment_count.
+def results(*, exists=True, amendment_rows=(), orphans=(), since=RUN_1, enrollment=None):
     return [
         [{"?column?": 1}] if exists else [],
         list(amendment_rows),
         list(orphans),
         [{"since": since}],
+        [{"enrollment_count": enrollment}],
     ]
 
 

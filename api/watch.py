@@ -40,6 +40,7 @@ from api.amendments import (
     ASPECT_SCIENTIFIC,
     FIELD_ASPECTS,
     describe_effect,
+    enrollment_context,
     field_aspect,
 )
 from api.database import get_readonly_db
@@ -286,10 +287,40 @@ def _latest_amendment(cur, tracking_fields) -> Optional[WatchAmendment]:
             detected_at=row["detected_at"],
             category=field_category(row["field_name"]),
             aspect=field_aspect(row["field_name"]),
-            effect=describe_effect(row["field_name"], row["old_value"], row["new_value"]),
         )
         for row in cur.fetchall()
     ]
+
+    # The enrollment count in force just after THIS amendment, so an
+    # enrollment_type switch can name the number instead of gesturing at it.
+    # The trial's current count is only that number if nothing has moved it
+    # since; if something has, the oldest later move's old_value is what was
+    # true here. Stating today's count against an older amendment would
+    # attribute a fact to a date on which it was not true (sec. 2).
+    cur.execute(
+        """
+        SELECT COALESCE(
+                 (SELECT c.old_value FROM study_changes c
+                   WHERE c.nct_id = %(nct)s
+                     AND c.field_name = 'enrollment_count'
+                     AND c.detected_at > %(at)s
+                   ORDER BY c.detected_at ASC LIMIT 1),
+                 (SELECT s.enrollment_count::text FROM studies s
+                   WHERE s.nct_id = %(nct)s)
+               ) AS count_after
+        """,
+        {"nct": head["nct_id"], "at": head["detected_at"]},
+    )
+    try:
+        count_after = int(cur.fetchone()["count_after"])
+    except (TypeError, ValueError):
+        count_after = None
+
+    context, _ = enrollment_context(changes, count_after)
+    for change in changes:
+        change.effect = describe_effect(
+            change.field_name, change.old_value, change.new_value, context
+        )
 
     present = {c.aspect for c in changes}
     aspects = [a for a in ASPECT_ORDER if a in present]

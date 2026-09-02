@@ -5,7 +5,12 @@ import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from api.amendments import ASPECT_ORDER, describe_effect, field_aspect
+from api.amendments import (
+    ASPECT_ORDER,
+    describe_effect,
+    enrollment_context,
+    field_aspect,
+)
 from api.database import get_db, get_readonly_db
 from api.tracking import TRACKING_FIELDS, field_category
 from api.schemas import (
@@ -368,6 +373,13 @@ def get_study_amendments(nct_id: str, conn=Depends(get_readonly_db)):
         cur.execute("SELECT min(detected_at) AS since FROM study_changes")
         recording_since = cur.fetchone()["since"]
 
+        # The trial's enrollment count as of NOW. Only honest for the newest
+        # amendment; the loop below walks it backwards through every
+        # enrollment_count change so an older amendment is described with
+        # the number that was true then, not today's.
+        cur.execute("SELECT enrollment_count FROM studies WHERE nct_id = %s", (nct_id,))
+        enrollment_now = cur.fetchone()["enrollment_count"]
+
     amendments: List[Amendment] = []
     for row in rows:
         key = row["detected_at"]
@@ -388,13 +400,25 @@ def get_study_amendments(nct_id: str, conn=Depends(get_readonly_db)):
                     detected_at=key,
                     category=field_category(row["field_name"]),
                     aspect=field_aspect(row["field_name"]),
-                    effect=describe_effect(
-                        row["field_name"], row["old_value"], row["new_value"]
-                    ),
                 )
             )
 
+    # Effects are computed here, not while the rows are being read, because
+    # one change's description can depend on a SIBLING row in the same
+    # amendment — an enrollment_type switch reads the enrollment_count that
+    # moved beside it — and mid-loop that sibling may not have arrived yet.
+    #
+    # `amendments` is newest-first, so walking it forwards walks the trial's
+    # history backwards, which is the direction the enrollment count has to
+    # be unwound in.
+    count_after = enrollment_now
     for amendment in amendments:
+        context, count_after = enrollment_context(amendment.changes, count_after)
+        for change in amendment.changes:
+            change.effect = describe_effect(
+                change.field_name, change.old_value, change.new_value, context
+            )
+
         amendment.content_is_visible = bool(amendment.changes)
         # Most consequential aspect first, so "Scientific" is the first thing
         # read when a primary outcome moved. Unclassified fields sort last
