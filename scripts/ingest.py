@@ -30,6 +30,7 @@ import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 import requests
 from dotenv import load_dotenv
@@ -125,12 +126,31 @@ def reconcile_scope(condition: str, current_nct_ids: set[str]):
     )
 
 
-def sync_group(condition: str, statuses: str, advanced_filter: str = None) -> set:
+class IngestResult(NamedTuple):
+    """What one ingest pass saw and wrote.
+
+    `changes` is the count POST /studies/batch itself reported, summed over
+    the batches this pass sent — the writer's own answer, not a number
+    re-derived afterwards from `detected_at` timestamps. That distinction
+    matters to scripts/run_monitor.py, which records it in monitor_runs: a
+    timestamp window also catches rows written by anything else running at
+    the same time (a manual ingest, a backfill), and would quietly report
+    them as this run's work.
+    """
+
+    nct_ids: set
+    changes: int
+
+
+def sync_group(
+    condition: str, statuses: str, advanced_filter: str = None
+) -> IngestResult:
     """Cheap-filter then expensive-diff for one status group. Returns every
-    nct_id the cheap filter matched (used for scope reconciliation)."""
+    nct_id the cheap filter matched (used for scope reconciliation) and the
+    number of field changes written."""
     remote_dates = cheap_fetch_dates(condition, statuses, advanced_filter)
     if not remote_dates:
-        return set()
+        return IngestResult(set(), 0)
 
     all_nct_ids = list(remote_dates.keys())
     known_dates = get_known_dates(all_nct_ids)
@@ -163,25 +183,26 @@ def sync_group(condition: str, statuses: str, advanced_filter: str = None) -> se
         f"  wrote {total_written} studies, {total_changed} field changes detected",
         flush=True,
     )
-    return set(all_nct_ids)
+    return IngestResult(set(all_nct_ids), total_changed)
 
 
-def run_ingest(condition: str) -> set:
+def run_ingest(condition: str) -> IngestResult:
     """Sync both status groups for one condition, then reconcile scope.
-    Returns the full set of nct_ids matched this run."""
+    Returns the full set of nct_ids matched this run and the total field
+    changes written across both groups."""
     recency_cutoff = (date.today() - timedelta(days=RECENCY_DAYS)).isoformat()
 
     print(f"Syncing active trials for: {condition}", flush=True)
-    active_ids = sync_group(condition, ACTIVE_STATUSES)
+    active = sync_group(condition, ACTIVE_STATUSES)
 
     print(f"Syncing closed trials updated since {recency_cutoff} for: {condition}", flush=True)
     advanced = f"AREA[LastUpdatePostDate]RANGE[{recency_cutoff},MAX]"
-    closed_ids = sync_group(condition, CLOSED_STATUSES, advanced)
+    closed = sync_group(condition, CLOSED_STATUSES, advanced)
 
-    seen_nct_ids = active_ids | closed_ids
+    seen_nct_ids = active.nct_ids | closed.nct_ids
     print(f"Done with condition: {condition} ({len(seen_nct_ids)} total matched)", flush=True)
     reconcile_scope(condition, seen_nct_ids)
-    return seen_nct_ids
+    return IngestResult(seen_nct_ids, active.changes + closed.changes)
 
 
 def main():

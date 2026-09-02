@@ -117,16 +117,6 @@ def run_prose_interpretation():
         return 0.0
 
 
-def count_changes_detected(conn, start_time):
-    """Count study_changes entries created after start_time."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT count(*) FROM study_changes WHERE detected_at >= %s",
-            (start_time,),
-        )
-        return cur.fetchone()[0]
-
-
 def main():
     # Record this run
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
@@ -136,32 +126,32 @@ def main():
     conditions = json.loads(CONDITIONS_FILE.read_text())
     print(f"Monitor run #{run_id} starting for {len(conditions)} tracked condition(s): {conditions}", flush=True)
 
+    # Both figures come from run_ingest itself — the count POST
+    # /studies/batch reported as it wrote. Counting study_changes rows by
+    # `detected_at >= started_at` afterwards would have been close but not
+    # true: it also sweeps in anything else writing in that window (a manual
+    # ingest, a backfill) and files it under this run's id.
     total_trials_checked = 0
+    total_changes = 0
     for condition in conditions:
         print(f"\n--- {condition} ---", flush=True)
-        nct_ids = run_ingest(condition)
-        total_trials_checked += len(nct_ids)
-
-    # Count unique changes detected during this run
-    # We use a fresh connection to get accurate counts
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    with conn.cursor() as cur:
-        # Get the started_at time for this run
-        cur.execute("SELECT started_at FROM monitor_runs WHERE id = %s", (run_id,))
-        started_at = cur.fetchone()[0]
-
-    # Ensure we count all changes for this run by a small margin
-    changes_count = count_changes_detected(conn, started_at)
+        result = run_ingest(condition)
+        total_trials_checked += len(result.nct_ids)
+        total_changes += result.changes
 
     total_spend = run_prose_interpretation()
 
-    # Update the run record with final results
-    update_run_record(conn, run_id, total_trials_checked, changes_count)
+    # Close the run record. Nothing marks it 'failed' on the way out: if this
+    # script dies earlier, the row simply stays 'running', /watch keeps
+    # reading the previous completed run, and the gap grows until the alarm
+    # fires — which is the honest outcome for a run that did not finish.
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    update_run_record(conn, run_id, total_trials_checked, total_changes)
     conn.close()
 
     print(f"\nMonitor run #{run_id} complete.", flush=True)
     print(f"  Trials checked: {total_trials_checked}", flush=True)
-    print(f"  Changes detected: {changes_count}", flush=True)
+    print(f"  Changes detected: {total_changes}", flush=True)
     if total_spend > 0:
         print(f"  Total spend on step 7c: ${total_spend:.4f}", flush=True)
 
