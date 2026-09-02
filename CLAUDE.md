@@ -129,12 +129,32 @@ rule of thumb; assuming 4.0 understates any estimate by ~53%. Re-measure
 before quoting. `.ranking_cache/` still replays recorded requests for $0.
 Never put a paid harness in CI.
 
-Three standing gotchas worth knowing before touching data: the Neon branch
-named `dev` is the real live database (`production` is an empty leftover;
-use `sandbox` to rehearse destructive changes); a `JOIN` against
-`study_conditions` needs `DISTINCT` before its output feeds a write; and
-the stored values rarely match what the API docs imply — phase is `PHASE2`
-not "Phase 2", 64% of trials have no usable phase, ages carry units other
-than years, and `CLOSED` is not a real status. Query the real
-distributions before writing a query **or a prompt** (§6). Full status and
-dated reasoning: `docs/roadmap.md`, `docs/decisions.md`.
+Standing gotchas, before touching data or git:
+
+- The Neon branch named **`dev` is the real live database** (`production`
+  is an empty leftover; use `sandbox` to rehearse destructive changes).
+- A `JOIN` against `study_conditions` needs **`DISTINCT`** before its
+  output feeds a write, and that table is **deleted and re-inserted
+  wholesale on every batch upsert** — never store anything durable on it.
+- **Never `SELECT *` against `studies`** — `raw_json` is 52% of the table
+  and no query reads it. Use `STUDY_DETAIL_COLUMNS`.
+- Stored values rarely match what the API docs imply — phase is `PHASE2`
+  not "Phase 2", 64% of trials have no usable phase, ages carry units
+  other than years, `CLOSED` is not a real status, and `hasResults` sits
+  a level above every other field. Query the real distributions before
+  writing a query **or a prompt** (§6).
+- **`git add -A` is not safe in this repo.** It has committed an installed
+  skill into the public tree and a 2.4 MB generated design canvas, both in
+  one session. Stage deliberately.
+
+**What does not travel with a clone**, all gitignored: `.env.local` (the
+database URLs — without it the 12 real-data tests skip cleanly rather than
+failing), `.ranking_cache/` (71 recorded responses; nothing reads them now
+that ranking is gone — keep or delete deliberately), `.claude/skills/`, and
+`design/triallens-the-watch.html` (rebuild it from `design/*.dc.html`).
+
+Full status and dated reasoning: `docs/roadmap.md`, `docs/decisions.md`.
+Where the project is going next, and its known gaps: `docs/roadmap.md` rows
+7b/7c and the Current Status above — deliberately not a separate handoff
+file, which went stale twice and was read only when someone remembered it
+existed.
