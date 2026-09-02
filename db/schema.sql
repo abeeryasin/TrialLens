@@ -117,6 +117,10 @@ CREATE TABLE IF NOT EXISTS study_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_study_changes_nct_id ON study_changes(nct_id);
 
+-- Prose interpretation (step 7c): stores AI interpretation of eligibility/summary/outcome changes
+-- JSON: {summary, why_matters} from interpret_prose_change()
+ALTER TABLE study_changes ADD COLUMN IF NOT EXISTS prose_interpretation JSONB;
+
 -- Supports the Monitor page's aggregate feed (GET /changes, step 6,
 -- 2026-08-29): that query orders by detected_at DESC across ALL trials,
 -- not filtered to one nct_id, so idx_study_changes_nct_id alone doesn't
