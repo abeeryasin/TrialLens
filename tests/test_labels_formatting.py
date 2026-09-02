@@ -17,7 +17,12 @@ Free — no database, no network, no Streamlit rendering.
 """
 import pytest
 
-from frontend.labels import format_posted_on_list, is_formatting_only
+from frontend.labels import (
+    format_posted_on,
+    format_posted_on_list,
+    format_recording_since,
+    is_formatting_only,
+)
 
 
 class TestTheFourClinicalCasesTheDocstringClaims:
@@ -99,6 +104,51 @@ class TestTheBiasIsDeliberate:
         """"6 Months" and "6 Years" differ by one word, and CT.gov genuinely
         stores ages in units other than years."""
         assert not is_formatting_only("Minimum age 6 Months", "Minimum age 6 Years")
+
+
+class TestPostedOn:
+    """format_posted_on — one CT.gov version stamp.
+
+    Pinned 2026-09-02 after the single-date and multi-date formatters were
+    found to disagree: this one padded the day and format_posted_on_list
+    stripped it, so "1 September 2026" and "01 September 2026" could appear
+    on the same page for the same date depending on how many were shown.
+    """
+
+    def test_the_day_carries_no_leading_zero(self):
+        assert format_posted_on("2026-09-01") == "1 September 2026"
+
+    def test_a_two_digit_day_is_unchanged(self):
+        assert format_posted_on("2026-08-31") == "31 August 2026"
+
+    def test_it_agrees_with_the_list_formatter_on_the_same_date(self):
+        """The bug this class exists for. Neither is more correct than the
+        other; disagreeing is what was wrong."""
+        for value in ("2026-09-01", "2026-08-08", "2026-08-31"):
+            assert format_posted_on(value) == format_posted_on_list([value])
+
+    def test_an_unparseable_value_comes_back_raw_not_as_a_crash(self):
+        assert format_posted_on("sometime in June") == "sometime in June"
+
+    def test_nothing_is_an_em_dash_not_an_empty_string(self):
+        assert format_posted_on(None) == "—"
+
+
+class TestRecordingSince:
+    """format_recording_since — "watching since X", from a timestamp."""
+
+    def test_it_drops_the_time_and_the_leading_zero(self):
+        assert format_recording_since("2026-09-01T18:03:16+00:00") == "1 September 2026"
+
+    def test_it_matches_how_the_same_day_reads_elsewhere(self):
+        assert format_recording_since("2026-08-28T12:55:52+00:00") == format_posted_on(
+            "2026-08-28"
+        )
+
+    def test_no_record_reads_as_a_phrase_not_a_blank(self):
+        """It is interpolated mid-sentence ("...amended before {X} cannot be
+        shown"), so an empty string would leave a broken sentence."""
+        assert format_recording_since(None) == "we began tracking"
 
 
 class TestPostedOnList:

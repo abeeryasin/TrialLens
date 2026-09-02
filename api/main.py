@@ -14,11 +14,13 @@ from fastapi import FastAPI
 from api.changes import router as changes_router
 from api.discover import router as discover_router
 from api.studies import router as studies_router
+from api.watch import router as watch_router
 
 app = FastAPI(title="TrialLens API")
 app.include_router(studies_router)
 app.include_router(discover_router)
 app.include_router(changes_router)
+app.include_router(watch_router)
 
 TRACKED_CONDITIONS_PATH = Path(__file__).resolve().parent.parent / "config" / "tracked_conditions.json"
 

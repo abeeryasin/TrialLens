@@ -1947,3 +1947,125 @@ record changed; we can't show what." Every clause is checkable.
 Also: the divider now renders only BETWEEN amendments. A rule after the
 last one closes a section that has already ended and reads as something
 missing below it.
+
+## 2026-09-02 — The watch leads the page, and "last checked" is a proxy that says so
+
+Step 7b direction 2, built from `design/Main.dc.html`. What `Home.py` had
+was a capability grid: five cards explaining what the app can do. That is a
+brochure. The thing TrialLens has that a fresh clone of this repo does not
+is **elapsed time** — 11,427 trials watched since 28 August, every
+amendment since recorded — so the page now leads with the watch and the
+grid sits below it.
+
+`GET /watch` is one endpoint rather than five reads, because the numbers
+only mean anything together: "watching 11,427 trials" is a different claim
+depending on whether the last check was 2 hours or 3 days ago.
+
+**The screen has three states and the least eventful one mattered most.**
+29 and 30 August had zero amendments across all 11,427 trials — real
+recorded data — and that rendered as an empty table, which reads as a
+broken app rather than a working watch. The quiet week is the screen a
+researcher sees most often, so it is stated as a finding, and the empty
+days are drawn as zeros rather than omitted: a zero is evidence the watch
+ran and found nothing, which is the opposite of missing data. The day strip
+is therefore built from `generate_series`, not `GROUP BY` — grouping alone
+has no rows for a quiet day and would silently delete the only proof it was
+watched.
+
+**The alarm replaces the page rather than sitting above it.** A stale feed
+under a small warning still reads as current, and that is the failure being
+designed out. Nothing but a test will ever catch a regression here — the
+alarm only appears after 12 hours of a dead cron, which is exactly when
+nobody is looking — so `tests/test_home_watch_page.py` renders all three
+states through Streamlit's `AppTest` and asserts the feed, the day strip
+and the last-amendment card are *absent* when the watch is stopped.
+
+### The proxy, and why it is not `detected_at`
+
+Direction 2's headline fact — "last checked 2 hours ago" — is a
+`monitor_runs` fact, and `monitor_runs` is direction 3, not built. The
+build order was kept anyway, with an explicitly labelled proxy:
+`max(studies.last_matched_at)`, which POST /studies/reconcile-scope stamps
+on every in-scope trial at the end of every run.
+
+The obvious alternative, `max(study_changes.detected_at)`, is **wrong in
+exactly the case this screen exists for**: on a quiet week nothing is
+detected, so it would report "last checked 2 days ago" and fire the alarm
+on the primary screen. A proxy that fails on the common case is not a
+proxy.
+
+What the proxy cannot do is count runs, which is why the record footer
+shows "Last check" and not the artboard's "Checks run: 21", and why the
+page says in its own words that the figure is *inferred from when trials
+were last confirmed in scope, not from a record of scheduled runs*. The
+load-bearing assumption — that `last_matched_at` is never behind the newest
+change it should explain — is asserted against the live database, because
+if ingest ever stops calling reconcile-scope the watch reports itself
+healthy while dead, with no error anywhere.
+
+### Building direction 3 first was considered and rejected
+
+`monitor_runs` starts empty, and the next cron was six hours out. A fresh
+run table means "no check has ever been recorded", which is the alarm —
+so building the record first would have shipped a screen that screams the
+watch has stopped while it is demonstrably running. Backfilling it from the
+8 distinct `last_matched_at` timestamps was rejected too: those are the
+last run each trial was matched in, not the 21 runs that happened, and
+presenting 8 of them as the run history would be inventing a record.
+
+### Counted by what it means, not by how many rows moved
+
+The news-week headline says "one trial published its results, three others
+changed something scientific, out of 63 amendments" — not "63 amendments".
+A row count is precisely what the removed ranking layer was good at and
+useless for. `WatchRecent` therefore carries both: the finding for the
+headline, the total for the honesty. `results_posted` is a *subset* of
+`scientific` (has_results is a scientific field), so the UI subtracts; a
+test on the live database asserts `results_posted ≤ scientific ≤
+amendments`, because if that containment broke the page would state a
+negative number of trials as fact.
+
+The amendment, not the changed row, is the unit. An amendment that moved
+four dates is one thing that happened, and counting its rows would announce
+it as four.
+
+### Aspect markers: dots, on both screens
+
+`🔬 ⚙️ 📝` became coloured dots, in `labels.py` so Home and Understand
+cannot disagree about what "Scientific" looks like. The emoji carried
+meanings that fought the label — a microscope is not what "Scientific"
+means here; the whole trial is science — and rendered at different sizes
+per platform. The colours are a hierarchy rather than a palette: Scientific
+is the only one with any hue, because it is the only group whose change can
+change what the trial *means*. Uncategorised is a hollow dot — it is the
+absence of a classification, and a filled dot would look like one.
+
+### The artboards claimed "every number is real". Four were not.
+
+Building the screen is what checked them, and the corrections are recorded
+in `design/README.md`: 751 → 747 and 1,056 → 1,050 (drifted overnight), the
+alarm's "13 checks missed" → 12 (76 elapsed hours over 6-hour slots is 12;
+the figure was written by hand), and NewsWeek's "3 changed something
+scientific, 59 other" → 14 and 49 (estimated before anyone queried it).
+
+**The worst one was not a number.** NewsWeek's lead card shows a trial
+publishing its results — `has_results` false → true — and **no such
+transition has ever been recorded.** The column was added and backfilled on
+2026-09-02, and backfilled values are deliberately not written to
+`study_changes` (see the entry above: doing so would log 1,056 "results
+posted" amendments dated today for trials that published months ago).
+NCT05599334 is a real watched trial that really does have results; what has
+not happened is TrialLens *watching* them appear. The card is now labelled
+on the artboard as a designed treatment for an unobserved state.
+
+That is the third instance in two days of the pattern this file already
+named twice — **when a true statement feels unsatisfying, the fix is a
+better true statement or silence, never a plausible one.** The first two
+were in page copy. This one was in a design file, which is worse in one
+specific way: **a drawn number has no test.** Copy that guesses gets caught
+by reading the rendered page; a figure inside an artboard is only ever
+checked if someone re-queries it on purpose.
+
+No number on the built page is hardcoded, which is the durable version of
+that claim — and the reason to build a designed screen rather than maintain
+a drawn one.

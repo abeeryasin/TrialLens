@@ -16,7 +16,6 @@ import streamlit as st
 
 from api_client import ApiError, get
 from labels import (
-    ASPECT_CAPTIONS,
     CATEGORY_TRACKING,
     ENROLLMENT_TYPE_CAPTIONS,
     FIELD_LABELS,
@@ -28,6 +27,7 @@ from labels import (
     format_recording_since,
     humanize_value,
     is_long_text,
+    render_aspect_caption,
     render_structured_diff,
     render_text_diff,
     summarize_text_change,
@@ -218,7 +218,7 @@ if not is_live:
                         c for c in amendment["changes"]
                         if (c.get("aspect") or "Uncategorised") == aspect
                     ]
-                    st.caption(ASPECT_CAPTIONS.get(aspect, aspect))
+                    render_aspect_caption(aspect)
                     for change in in_aspect:
                         render_change(change)
 

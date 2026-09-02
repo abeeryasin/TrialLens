@@ -243,6 +243,110 @@ class AmendmentHistory(BaseModel):
     # failure — a trial would look quieter than it was.
 
 
+class WatchDay(BaseModel):
+    """One day on the watch's 7-day record, including the empty ones.
+
+    A zero here is a finding, not missing data: "we checked and nothing was
+    amended" is a different statement from "we have no record of that day",
+    and the day rows are generated from a date series rather than from the
+    changes themselves specifically so a quiet day still appears.
+    """
+
+    day: date
+    amendments: int
+
+
+class WatchAmendment(BaseModel):
+    """The most recent amendment across every watched trial — the "last
+    thing that happened" card, so the screen is never blank.
+
+    Same shape as one Amendment from a trial's history, plus the trial it
+    belongs to, since this one spans all of them.
+    """
+
+    nct_id: str
+    brief_title: str
+    posted_on: date
+    previously_posted_on: Optional[date] = None
+    detected_at: datetime
+    changes: List[AmendedField] = []
+    aspects: List[str] = []
+    content_is_visible: bool = True
+
+
+class WatchRecent(BaseModel):
+    """The last 24 hours, counted by what it MEANS rather than by rows.
+
+    "63 amendments" is a row count, and a row count is exactly the kind of
+    number the removed ranking layer was good at and useless for. "One trial
+    published its results, three others changed something scientific" is the
+    same 63 rows read as a finding. Both are here: the headline needs the
+    finding, the honesty needs the total.
+    """
+
+    window_hours: int
+    amendments: int
+    trials: int
+    scientific: int
+    # Amendments touching at least one field api/amendments.py classifies as
+    # Scientific — what the trial studies, and in whom.
+    results_posted: int
+    # Amendments where has_results went false -> true. A SUBSET of
+    # scientific, not a separate bucket: the UI subtracts when it says
+    # "N others". The single most consequential amendment a trial carries,
+    # and one TrialLens could not see at all before 2026-09-02.
+
+
+class WatchStatus(BaseModel):
+    """Everything the front page states about the watch itself.
+
+    One endpoint rather than five, because these numbers are read together
+    and only make sense together — "11,427 watched" is a different claim
+    depending on whether the last check was 2 hours or 3 days ago.
+    """
+
+    trials_watched: int
+    conditions: List[str]
+
+    # ---- Is the watch alive? ----
+    last_checked_at: Optional[datetime] = None
+    # PROXY, and it must be labelled as one wherever it is shown. There is
+    # no record of when a scheduled run happened (that is direction 3,
+    # `monitor_runs`). This is max(studies.last_matched_at), which
+    # POST /studies/reconcile-scope stamps on every in-scope trial at the
+    # end of every run — so it does report a check on a day when nothing
+    # changed, which max(detected_at) would not. What it cannot do is count
+    # runs or distinguish a run that failed after reconciling.
+
+    last_checked_source: str = "last_matched_at"
+    hours_since_check: Optional[float] = None
+    check_interval_hours: int
+    checks_missed: int = 0
+    # Derived from elapsed time and the cron interval, not from a run log:
+    # how many scheduled checks should have happened since the last one we
+    # can see evidence of. 0 while healthy.
+
+    is_healthy: bool
+    # False means SHOW THE ALARM INSTEAD OF THE PAGE, not a banner above a
+    # normal-looking feed — a stale feed under a small warning still reads
+    # as current, which is the failure being designed out (design/README.md).
+
+    # ---- What has been happening ----
+    daily: List[WatchDay] = []
+    recent: WatchRecent
+    hours_since_last_amendment: Optional[float] = None
+    last_amendment: Optional[WatchAmendment] = None
+
+    # ---- Something to do on a quiet day ----
+    trials_with_results: int
+    completed_with_results: int
+
+    # ---- The record: what a fresh clone does not have ----
+    recording_since: Optional[datetime] = None
+    changes_recorded: int
+    amendments_seen: int
+
+
 class ChangeFeedEntry(StudyChange):
     """One row in the aggregate Monitor feed (GET /changes) — same shape as
     StudyChange plus which trial it belongs to, since the feed spans every

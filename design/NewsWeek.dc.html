@@ -41,20 +41,33 @@
 
   <div style="height: 1px; background: #e6eaf1; margin: 28px 0 32px;"></div>
 
-  <!-- The news week leads with what changed the SCIENCE, not with a count of rows -->
+  <!-- The news week leads with what changed the SCIENCE, not with a count of rows.
+       Corrected 2026-09-02 against the live database: 1 September recorded 63
+       amendments, 14 of them touching a scientific field — not the 3 first drawn
+       here, which was an estimate written before anyone queried it. -->
   <div style="font-size: 26px; font-weight: 700; letter-spacing: -0.01em; margin-bottom: 6px;">
-    One trial published its results.
+    14 trials changed something scientific.
   </div>
   <div style="font-size: 16px; color: #4a4c58; margin-bottom: 28px; max-width: 68ch; line-height: 1.55;">
-    Three others changed something scientific, out of 63 amendments in the last
-    24 hours. The remaining 59 moved dates, sites, enrolment figures or titles —
-    below, not hidden.
+    Out of 63 amendments across 63 trials in the last 24 hours. The remaining 49
+    moved dates, sites, enrolment figures or titles — below, not hidden.
   </div>
 
   <!-- The strongest amendment a trial can carry gets its own treatment.
        hasResults false -> true means the findings are out; TrialLens did not
        store this field until 2026-09-02, so every one of these used to render
-       as "amended, but we can't see what". -->
+       as "amended, but we can't see what".
+
+       THIS ONE CARD IS THE ARTBOARD'S ONLY UNOBSERVED STATE, and it is labelled
+       as such rather than quietly presented as history. No false -> true
+       transition has ever been recorded: the column was added and backfilled on
+       2026-09-02, and backfilled values are deliberately NOT written to
+       study_changes (writing them would log 1,056 "results were posted"
+       amendments dated today for trials that published months ago — a false
+       claim about when something happened). NCT05599334 is a real watched trial
+       that really does have results posted; what has not happened is TrialLens
+       WATCHING it happen. The treatment is designed for the first real one.
+       See docs/decisions.md, 2026-09-02. -->
   <div style="border: 1px solid #b8dcc4; background: rgba(33,195,84,0.07); border-radius: 8px; padding: 22px 24px; margin-bottom: 16px;">
     <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0f8a3c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -63,6 +76,7 @@
         <path d="M9 15h6"></path>
       </svg>
       <span style="font-size: 13px; font-weight: 600; color: #0f8a3c; text-transform: uppercase; letter-spacing: 0.06em;">Results posted</span>
+      <span style="font-size: 12px; color: #6c6e7b; font-style: italic;">designed treatment — no such transition observed yet</span>
     </div>
     <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 16px;">
       <div style="font-size: 17px; font-weight: 600;">NCT05599334</div>

@@ -14,7 +14,7 @@ NCT02954874 — Amended twice since TrialLens started watching on 28 August 2026
               doesn't store — the record changed, but not in anything we hold.
 
   Posted 31 August 2026
-    ⚙ Operational
+    ● Operational
     Completion date         2026-08-31 → 2027-08-27   pushed about 12 months later
     Enrollment              1,155      → 1,195        increased by 40
     Enrollment figure type  ESTIMATED  → ACTUAL       the target became a real count
@@ -35,8 +35,19 @@ localhost; nothing is hosted, and no clinical researcher has used it yet.
 | Trials tracked | 11,518 (11,427 currently in scope) |
 | Conditions monitored | breast cancer, obesity |
 | Changes recorded | 498, since 2026-08-28 |
-| Trials with results posted | 1,056 (751 of them completed) |
+| Trials with results posted | 1,050 (747 of them completed) |
 | Runs | every 6 hours on GitHub Actions, unattended |
+
+Those figures move. The app reads them live from `GET /watch` rather than
+holding a copy — three of the five above had already drifted a day after
+they were first written down.
+
+The front page leads with the watch itself, not a search box: *"Watching
+11,427 trials · checked every 6 hours · last checked 2 hours ago"*, the
+last week of amendments including the days with none, and the last thing
+that happened. Most weeks nothing does, and a quiet week is stated as a
+finding rather than left as an empty table. If the scheduled job stops, the
+alarm replaces the page instead of sitting above a stale feed.
 
 Three of five planned capabilities are built:
 
@@ -154,7 +165,7 @@ ClinicalTrials.gov v2 API
   Neon Postgres          raw record + normalized columns + fetch timestamp
          │               study_changes: every field-level change, kept
          ▼
-    Streamlit            Discover · Understand · Monitor
+    Streamlit            the watch · Discover · Understand · Monitor
 ```
 
 Each amendment is grouped by ClinicalTrials.gov's own version stamp, and
@@ -199,15 +210,17 @@ does not remove it from git history.
 PYTHONPATH=. .venv/bin/python -m pytest tests/ -q
 ```
 
-201 tests. The 12 that read the live database skip themselves when
+248 tests. The 22 that read the live database skip themselves when
 `DATABASE_URL_READONLY` is unset, so the suite runs green without
 credentials — that is what CI does.
 
 **Test coverage is uneven and this is the honest summary:** the amendment
-history, `/changes` and `/discover` endpoints have HTTP-level tests, the
-CT.gov parser is checked against real stored responses, and the real-data
-checks catch upstream drift. Everything in `scripts/` — including the
-scheduled job itself — and `ctgov_client.py`'s network paths still have
+history, `/watch`, `/changes` and `/discover` endpoints have HTTP-level
+tests, the front page's three states are rendered through Streamlit's
+`AppTest` (the alarm is otherwise unobservable — it needs a 12-hour-dead
+cron), the CT.gov parser is checked against real stored responses, and the
+real-data checks catch upstream drift. Everything in `scripts/` — including
+the scheduled job itself — and `ctgov_client.py`'s network paths still have
 none.
 
 ## Layout

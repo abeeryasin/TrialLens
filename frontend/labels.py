@@ -122,11 +122,51 @@ def format_detected_at(raw_value):
 # Each says what the group means rather than just naming it — "Scientific"
 # alone doesn't tell a reader why those rows are first.
 ASPECT_CAPTIONS = {
-    "Scientific": "🔬 **Scientific** — what the trial studies, and in whom",
-    "Operational": "⚙️ **Operational** — how it's running: status, numbers, dates, sites",
-    "Administrative": "📝 **Administrative** — how the record describes itself",
-    "Uncategorised": "**Uncategorised** — a field TrialLens hasn't classified yet",
+    "Scientific": "what the trial studies, and in whom",
+    "Operational": "how it's running: status, numbers, dates, sites",
+    "Administrative": "how the record describes itself",
+    "Uncategorised": "a field TrialLens hasn't classified yet",
 }
+
+# The marker beside each aspect. Small coloured dots rather than the 🔬 ⚙️ 📝
+# emoji used until 2026-09-02: the emoji carry meanings of their own that
+# fight the label (a microscope is not what "Scientific" means here — the
+# whole trial is science), they render at different sizes across platforms,
+# and design/*.dc.html drew dots. Adopted here rather than on one page so
+# Home and Understand cannot disagree about what "Scientific" looks like.
+#
+# The colours are a hierarchy, not a palette: Scientific is the only one
+# with any hue, because it is the only group whose change can change what
+# the trial MEANS. The rest recede. Uncategorised is hollow — it is the
+# absence of a classification, and a filled dot would look like one.
+ASPECT_DOTS = {
+    "Scientific": "background:#d14b8f",
+    "Operational": "background:#8b8fa3",
+    "Administrative": "background:#c3c7d4",
+    "Uncategorised": "background:transparent;border:1.5px solid #8b8fa3",
+}
+
+
+def render_aspect_caption(aspect):
+    """One aspect heading — a dot, the aspect, and what it covers.
+
+    HTML because Streamlit's markdown has no way to draw a coloured dot,
+    and an emoji stand-in is what this replaced.
+    """
+    dot = ASPECT_DOTS.get(aspect, ASPECT_DOTS["Uncategorised"])
+    meaning = ASPECT_CAPTIONS.get(aspect)
+    # quote=False: this is element text, not an attribute value, and escaping
+    # the apostrophe in "how it's running" would be correct-but-ugly HTML.
+    tail = f" — {html.escape(meaning, quote=False)}" if meaning else ""
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:8px;margin:10px 0 6px">'
+        f'<span style="width:8px;height:8px;border-radius:50%;{dot};'
+        f'flex:0 0 auto"></span>'
+        f'<span style="font-size:13px;color:#6c6e7b">'
+        f'<strong style="color:#4a4c58">{html.escape(str(aspect))}</strong>{tail}'
+        f"</span></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def format_posted_on(raw_value):
@@ -137,13 +177,19 @@ def format_posted_on(raw_value):
     timestamps — when the cron happened to look — and the two must not read
     alike, because confusing "the sponsor amended this" with "we noticed
     this" attributes our scheduling to the trial.
+
+    No leading zero on the day: "1 September 2026", not "01 September 2026".
+    format_posted_on_list below already stripped it, so until 2026-09-02 the
+    same date read two different ways on the same page depending on whether
+    one or several were being shown.
     """
     if not raw_value:
         return "—"
     try:
-        return date.fromisoformat(str(raw_value)).strftime("%d %B %Y")
+        parsed = date.fromisoformat(str(raw_value))
     except ValueError:
         return str(raw_value)
+    return f"{parsed.day} {parsed.strftime('%B %Y')}"
 
 
 def format_posted_on_list(raw_values):
@@ -193,7 +239,7 @@ def format_recording_since(raw_value):
         dt = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
     except ValueError:
         return str(raw_value)
-    return dt.strftime("%d %B %Y")
+    return f"{dt.day} {dt.strftime('%B %Y')}"  # no leading zero, as above
 
 
 # Above this many characters, showing both full versions side by side stops

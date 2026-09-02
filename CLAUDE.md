@@ -84,11 +84,25 @@ is done** (2026-09-02): `GET /studies/{nct_id}/amendments` groups a trial's
 changes into the amendments that caused them, `api/amendments.py` says what
 each did — dates that slipped, targets that became actuals, sites added,
 results posted — with no model, and Understand leads with it.
-**Direction 2, the watch, is designed but not built** — three artboards in
-`design/`, deliberately Streamlit-shaped so they can be. Build the quiet
-week into `frontend/Home.py` next, then **direction 3, the watch record**
-(a `monitor_runs` table; nothing records that a check happened, so the app
-cannot say "last checked 2 hours ago" or shout when the cron dies).
+**Direction 2, the watch, is done** (2026-09-02): `GET /watch` and a rebuilt
+`frontend/Home.py` where the watch leads and the capability grid sits below
+it. Three states, all tested through Streamlit's `AppTest` — the quiet week
+stated as a finding with its zero days drawn as zeros, a news week led by
+what changed the science rather than by a row count, and an alarm that
+**replaces** the page instead of sitting above it.
+
+**`last_checked_at` is a labelled proxy, not a record.** It is
+`max(studies.last_matched_at)` — stamped by `reconcile-scope` at the end of
+every run — because nothing yet records that a run happened. Never use
+`max(study_changes.detected_at)` for this: on a quiet week nothing is
+detected, so it fires the alarm on the primary screen. The proxy cannot
+count runs, so the footer says "Last check", never "Checks run", and the
+page states in its own words that the figure is inferred.
+
+**Next is direction 3, the watch record** (a `monitor_runs` table), which
+replaces that proxy and adds runs-completed / checks-missed. Note it starts
+empty: an empty run table reads as "never checked", which is the alarm — so
+the fallback to the proxy has to survive until the table fills.
 
 **`has_results` was found missing on 2026-09-02 and added.** `hasResults`
 sits at the TOP level of the CT.gov response, not inside `protocolSection`,
@@ -100,9 +114,14 @@ itself. Roughly 40% of amendments still show nothing: `referencesModule`
 (4,443 trials), `oversightModule` and central contacts remain unread.
 
 **There is a README, and CI actually runs the tests** (both new 2026-09-02).
-`tests.yml` runs the suite on every push without secrets — 189 pass, 12
-skip; the 12 data-drift tests run in `monitor.yml` instead, on the data's
-schedule. Before this, nothing ever ran the suite automatically.
+`tests.yml` runs the suite on every push without secrets — 226 pass, 22
+skip; the 22 data-drift/real-data tests run in `monitor.yml` instead, on
+the data's schedule. Before this, nothing ever ran the suite automatically.
+Streamlit pages are testable: `streamlit.testing.v1.AppTest` renders a page
+and returns its element tree, which is the only way the alarm state is ever
+seen (it needs a 12-hour-dead cron). `st.metric` carries its heading on
+`.label` and its figure on `.value` — read both, or half the footer is
+invisible to every assertion.
 
 **One AI call is planned and scoped, not built** (step 7c): interpreting
 the *prose* half of an amendment, in the scheduled job, never in the
