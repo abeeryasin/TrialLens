@@ -223,6 +223,29 @@ else:
             if quiet_for
             else "Nothing has changed yet."
         )
+        # "Most weeks look like this" was here until 2026-09-02 and was not
+        # true: of the six days on record, the four weekdays carried 63-79
+        # amendments each and only the Saturday and Sunday were silent.
+        #
+        # The replacement is computed rather than written, so it cannot rot
+        # the way that sentence did. It states the weekend pattern only
+        # while the data still shows it, and stops on the first quiet
+        # weekday. Today is excluded from the test because it is not a
+        # finished day — it has zero amendments most mornings.
+        today = date.today()
+        finished = [
+            d for d in watch["daily"] if date.fromisoformat(d["day"]) < today
+        ]
+        silent = [d for d in finished if d["amendments"] == 0]
+        silent_on_a_weekday = [
+            d for d in silent if date.fromisoformat(d["day"]).weekday() < 5
+        ]
+        rhythm = (
+            " Every silent day on record here has fallen on a weekend —"
+            " ClinicalTrials.gov posts updates on business days."
+            if silent and not silent_on_a_weekday
+            else ""
+        )
         st.markdown(
             f'<div style="background:{SURFACE};border-radius:10px;padding:24px 28px">'
             f'<div style="font-size:26px;font-weight:700;letter-spacing:-0.01em;'
@@ -230,8 +253,8 @@ else:
             f'<div style="font-size:16px;color:{BODY};margin-top:10px;'
             f'max-width:68ch;line-height:1.55">All '
             f'{watch["trials_watched"]:,} trials were checked and none of them '
-            f"was amended. Most weeks look like this — a quiet week is the "
-            f"watch working, not the watch broken.</div></div>",
+            f"was amended — a quiet day is the watch working, not the watch "
+            f"broken.{rhythm}</div></div>",
             unsafe_allow_html=True,
         )
     else:
@@ -273,35 +296,51 @@ else:
     # -----------------------------------------------------------------------
     # The 7-day record. The zeros are the point: they are evidence the watch
     # ran and found nothing, not evidence of a missing day.
+    #
+    # The heading goes ABOVE the row, not as a trailing note beside it. Read
+    # 2026-09-02 by someone who had not built it: a bare "79" over a date,
+    # with the only explanation at the far right of the row, does not say
+    # what 79 counts.
+    #
+    # The weekday is shown because the pattern is real and otherwise
+    # invisible: the only two silent days on record so far, 29 and 30
+    # August, were a Saturday and a Sunday. ClinicalTrials.gov posts on
+    # business days.
     # -----------------------------------------------------------------------
     st.write("")
+    eyebrow(f"Amendments detected per day · last {len(watch['daily'])} days")
     tiles = []
     for entry in watch["daily"]:
         n = entry["amendments"]
         # "1 Sep", not format_posted_on's "01 September 2026" — seven of
         # these sit side by side, and the year is the same on all of them.
         parsed = date.fromisoformat(entry["day"])
-        label = f"{parsed.day} {parsed.strftime('%b')}"
+        weekend = parsed.weekday() >= 5
         fill = (
             f"background:{FILLED_DAY};color:{INK};font-weight:600"
             if n
             else f"background:#ffffff;border:1px solid {RULE};color:#a3a8b8"
         )
         tiles.append(
-            f'<div style="display:flex;flex-direction:column;gap:6px;'
+            f'<div style="display:flex;flex-direction:column;gap:5px;'
             f'align-items:center">'
-            f'<div style="width:44px;height:44px;border-radius:6px;{fill};'
+            f'<div style="width:48px;height:48px;border-radius:6px;{fill};'
             f'display:flex;align-items:center;justify-content:center;'
-            f'font-size:15px">{n}</div>'
+            f'font-size:16px">{n}</div>'
+            f'<div style="font-size:12px;color:{FAINT if weekend else MUTED};'
+            f'white-space:nowrap">{parsed.strftime("%a")}</div>'
             f'<div style="font-size:12px;color:{MUTED};white-space:nowrap">'
-            f"{label}</div></div>"
+            f'{parsed.day} {parsed.strftime("%b")}</div></div>'
         )
     st.markdown(
-        f'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
-        + "".join(tiles)
-        + f'<span style="font-size:13px;color:{MUTED};margin-left:8px">'
-        f"amendments per day</span></div>",
+        '<div style="display:flex;gap:10px;align-items:flex-start;'
+        'flex-wrap:wrap">' + "".join(tiles) + "</div>",
         unsafe_allow_html=True,
+    )
+    st.caption(
+        "Counted on the day TrialLens **detected** the amendment, which is "
+        "usually but not always the day ClinicalTrials.gov posted it — one "
+        "amendment posted on 28 August wasn't seen until the 31st."
     )
 
     # -----------------------------------------------------------------------
@@ -390,7 +429,9 @@ checked.metric(
 )
 
 st.caption(
-    "ClinicalTrials.gov publishes only a trial's current version, so anything "
+    f"**{watch['amendments_seen']:,} trial updates** · "
+    f"{watch['changes_recorded']:,} individual field changes. "
+    f"ClinicalTrials.gov publishes only a trial's current version, so anything "
     f"amended before {format_recording_since(watch['recording_since'])} cannot "
     "be shown here. Everything since has been recorded."
 )
