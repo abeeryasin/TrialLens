@@ -90,6 +90,23 @@ INSERT_CHANGES = """
     INSERT INTO study_changes (nct_id, field_name, old_value, new_value) VALUES %s
 """
 
+# UPSERT_STUDIES ends with three columns it fills from SQL rather than from
+# the parameter tuple, so a row's placeholder list is always this much shorter
+# than the column list.
+UPSERT_SQL_LITERAL_COLUMNS = ("fetched_at", "active_in_scope", "last_matched_at")
+
+
+def values_template(row_width: int) -> str:
+    """One `execute_values` template row: a placeholder per value, then the
+    literals for the three columns above.
+
+    Exists as a function so the count comes from the data instead of being
+    typed out. The hand-written version drifted the moment a column was added
+    (see the comment at its call site), and the failure surfaced only on the
+    live cron, on the first run that had anything to write.
+    """
+    return "(" + ",".join(["%s"] * row_width) + ",now(),true,now())"
+
 
 @router.get("", response_model=StudyList)
 def list_studies(
@@ -229,7 +246,13 @@ def upsert_studies(records: List[StudyUpsert], conn=Depends(get_db)):
     ]
 
     with conn.cursor() as cur:
-        template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),true,now())"
+        # Derived from the rows, never hand-counted. This was a literal string
+        # of 23 %s while study_rows carried 24 values: `has_results` was added
+        # to both the tuple and UPSERT_STUDIES' column list on 2026-09-02 and
+        # this line was not extended, which broke every ingest that actually
+        # had a record to write. Quiet runs kept passing because write_batch
+        # returns before reaching here when nothing changed.
+        template = values_template(len(study_rows[0]))
         psycopg2.extras.execute_values(cur, UPSERT_STUDIES, study_rows, template=template)
 
         if change_rows:
