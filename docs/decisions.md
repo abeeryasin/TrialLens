@@ -2289,3 +2289,85 @@ the run proceeds. Step 7c has therefore never run unattended, and the
 claims elsewhere in the docs that it runs in the scheduled job describe the
 intent, not the behaviour. Adding the secret is the only thing that turns it
 on, and a key must never be written into a repo file (§2).
+
+## 2026-09-03 — Site enrichment: the fields the parser dropped, and the evidence that asked for them
+
+Prompted by a question that should have come earlier: *do researchers care
+about collaborations?* The full evidence review is in
+`docs/plan_explore_nodes.md`; the short version is that the collaborator
+edge is the weakest node in the graph and sites are the strongest, so sites
+got the work.
+
+**Collaborator is weak by definition, not by accident.** CT.gov defines a
+collaborator as any organization "providing support," where "support may
+include **funding**, design, implementation, data analysis or reporting" —
+one field for cheque-writers and co-designers, with no sub-field separating
+them. The stored data matches: NCI 480, NIDDK 264, NIH 91, NHLBI 86.
+Coverage is 37.4% and 63% of those trials have exactly one collaborator.
+Registration guidance also states collaborators "should not include
+individuals... not PIs", so the field cannot answer the people-shaped
+reading of "who else works in this space" at all. Kept and extracted, but
+demoted from a network to traverse to an attribute to filter on.
+
+**Sites reach 93.8% and answer a documented question.** The oncology
+literature describes the workflow as: search, find a candidate trial, then
+*phone the site to ask whether it is still open*. A separate study of 8,893
+cancer patients found 55.6% had no trial available at their treating
+facility. Both are location questions, and both were answerable from data
+already on disk.
+
+**The `has_results` pattern, third recurrence.** `locations` had been
+normalized down to facility/city/country and everything else discarded, so
+across 142,777 stored locations these were sitting unread in `raw_json`:
+geoPoint 140,285 (98.3%), zip 133,069, state 99,609, per-location status
+41,027, contacts 25,197. Backfilled with no network call (§4). Result:
+49,606 of 51,272 sites carry coordinates (96.8%), and 40,011 live edges
+carry a recruitment status — RECRUITING 31,442, NOT_YET_RECRUITING 4,481,
+ACTIVE_NOT_RECRUITING 2,044, SUSPENDED 903, WITHDRAWN 677, COMPLETED 385,
+TERMINATED 69, ENROLLING_BY_INVITATION 10.
+
+**Status is an edge property; place is a site property.** 2,616 site
+identities report more than one status across the trials using them — of
+course they do, a hospital recruiting for one trial and closed for another
+is one place in two states. So `recruitment_status` lives on `trial_sites`,
+for the same reason organization role lives on its edge. `state`, `zip`,
+`lat`, `lon` describe the place and live on `sites`.
+
+**Where the registry contradicts itself, store nothing.** 109 site
+identities are reported at more than one geoPoint, and the disagreement is
+real rather than rounding: 103 are 5km or further apart, the largest is 52
+degrees — the same facility string placed on different continents — and
+rounding to 4 decimal places removes none of them. zip disagrees on 3,344
+identities, state on 484, and 172 (trial, site) pairs state two statuses at
+once. All are left NULL and counted in the backfill's output, the same
+"we can't tell" the tracking drop reasons use instead of a guess (§2). A
+guessed coordinate on a "trials near me" map sends someone to the wrong
+country.
+
+**NULL means "not stated", never "not recruiting."** Only 28.6% of live
+edges carry a status, because CT.gov mostly supplies it for actively
+recruiting studies. Anything rendering this column has to preserve that
+distinction or it repeats the step-4 under-reporting bug.
+
+**Naming trap, recorded because it will bite.** One of CT.gov's per-site
+status values is literally `WITHDRAWN`, and `trial_sites` also has our own
+`withdrawn_at`. They are unrelated: `recruitment_status = 'WITHDRAWN'` means
+the site withdrew from the trial before enrolling anyone; `withdrawn_at`
+means the trial's record stopped listing that location at all. A site can be
+live (`withdrawn_at IS NULL`) while reading `WITHDRAWN`.
+
+**Proven able to fail.** Seven more mutations, injected in a transaction and
+rolled back: filling a coordinate on a disputed site, swapping lat and lon
+across every US site, putting a site off the planet, keeping a longitude
+without its latitude, asserting RECRUITING where no record says so,
+inventing a status value, and leaving the columns unpopulated. 7/7 red,
+14/14 across both harnesses. The swap case is the one a range check misses —
+most latitudes are also legal longitudes — and it moves US orientation from
+100.0% to 0.0%.
+
+**One test OOM-killed the backend before it worked.** The obvious form of
+the coordinate check is a correlated `EXISTS` per site, which re-expands all
+142,777 location objects for each of 51,272 sites; pytest died with exit 137
+and no readable error. Rewritten as a CTE joined once, the whole file runs
+in 15 seconds. Worth remembering: against `jsonb_array_elements`, a
+correlated subquery is not a slow query, it is a dead one.

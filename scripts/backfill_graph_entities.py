@@ -45,6 +45,23 @@ OFFICIALS = "raw_json->'protocolSection'->'contactsLocationsModule'->'overallOff
 COLLABORATORS = "raw_json->'protocolSection'->'sponsorCollaboratorsModule'->'collaborators'"
 LEAD_CLASS = "raw_json->'protocolSection'->'sponsorCollaboratorsModule'->'leadSponsor'->>'class'"
 
+# The raw locations array, NOT the normalized `locations` column. The parser
+# reduced that column to facility/city/country and dropped geoPoint, zip,
+# state, status and contacts, so the enrichment below has to read the record
+# it came from. Entity and edge identity still comes from the column, which
+# carries the same three fields — this only adds attributes to rows that
+# already exist.
+RAW_LOCATIONS = "raw_json->'protocolSection'->'contactsLocationsModule'->'locations'"
+
+# Site identity, spelled once. Every join below matches on the same coalesced
+# triple the idx_sites_identity index uses; writing it out per query is how
+# the two drift apart.
+SITE_MATCH = """
+       coalesce(si.facility,'') = coalesce(loc->>'facility','')
+   AND coalesce(si.city,'')     = coalesce(loc->>'city','')
+   AND coalesce(si.country,'')  = coalesce(loc->>'country','')
+"""
+
 # Order matters: an entity table must be filled before the edge table that
 # joins against it, or the join finds nothing and the edge is silently
 # dropped. Each step is (label, SQL) and every write is ON CONFLICT DO
@@ -207,6 +224,73 @@ WITHDRAWALS = [
     """),
 ]
 
+# Attributes read from raw_json onto rows the steps above already created.
+# These run last: they UPDATE sites and edges, so the rows have to exist.
+#
+# Each carries `IS DISTINCT FROM` in its WHERE so a re-run rewrites only what
+# actually changed, which keeps the printed counts meaningful instead of
+# reporting all 51,272 sites touched every time.
+ENRICHMENTS = [
+    ("sites: state, zip, coordinates (only where records agree)", f"""
+        WITH agreed AS (
+            SELECT loc->>'facility' f, loc->>'city' c, loc->>'country' k,
+                   CASE WHEN count(DISTINCT loc->>'state') = 1
+                        THEN min(loc->>'state') END st,
+                   CASE WHEN count(DISTINCT loc->>'zip') = 1
+                        THEN min(loc->>'zip') END zp,
+                   CASE WHEN count(DISTINCT ((loc->'geoPoint'->>'lat'),
+                                             (loc->'geoPoint'->>'lon'))) = 1
+                        THEN min((loc->'geoPoint'->>'lat')::float8) END la,
+                   CASE WHEN count(DISTINCT ((loc->'geoPoint'->>'lat'),
+                                             (loc->'geoPoint'->>'lon'))) = 1
+                        THEN min((loc->'geoPoint'->>'lon')::float8) END lo
+            FROM studies, jsonb_array_elements({RAW_LOCATIONS}) loc
+            WHERE {RAW_LOCATIONS} IS NOT NULL
+            GROUP BY 1, 2, 3)
+        UPDATE sites si
+        SET state = a.st, zip = a.zp, lat = a.la, lon = a.lo
+        FROM agreed a
+        WHERE coalesce(si.facility,'') = coalesce(a.f,'')
+          AND coalesce(si.city,'')     = coalesce(a.c,'')
+          AND coalesce(si.country,'')  = coalesce(a.k,'')
+          AND (si.state IS DISTINCT FROM a.st OR si.zip IS DISTINCT FROM a.zp
+            OR si.lat IS DISTINCT FROM a.la OR si.lon IS DISTINCT FROM a.lo)
+    """),
+    # A CASE returning NULL on disagreement, not a pick. 172 (trial, site)
+    # pairs state two statuses at once — a trial listing one facility twice —
+    # and "we can't tell" is the only honest value for those.
+    ("trial_sites: recruitment status per edge", f"""
+        WITH stated AS (
+            SELECT s.nct_id nct, loc->>'facility' f, loc->>'city' c,
+                   loc->>'country' k,
+                   CASE WHEN count(DISTINCT loc->>'status') = 1
+                        THEN min(loc->>'status') END st
+            FROM studies s, jsonb_array_elements(s.{RAW_LOCATIONS}) loc
+            WHERE s.{RAW_LOCATIONS} IS NOT NULL AND loc->>'status' IS NOT NULL
+            GROUP BY 1, 2, 3, 4)
+        UPDATE trial_sites ts
+        SET recruitment_status = stated.st
+        FROM stated, sites si
+        WHERE ts.nct_id = stated.nct AND ts.site_id = si.id
+          AND coalesce(si.facility,'') = coalesce(stated.f,'')
+          AND coalesce(si.city,'')     = coalesce(stated.c,'')
+          AND coalesce(si.country,'')  = coalesce(stated.k,'')
+          AND ts.recruitment_status IS DISTINCT FROM stated.st
+    """),
+    # The mirror of the withdrawal pass. If a record stops stating a status,
+    # the stored one is stale, and leaving it would keep asserting a
+    # recruiting state the registry no longer claims.
+    ("trial_sites: clear statuses the record no longer states", f"""
+        UPDATE trial_sites ts SET recruitment_status = NULL
+        FROM sites si
+        WHERE ts.site_id = si.id AND ts.recruitment_status IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM studies s, jsonb_array_elements(s.{RAW_LOCATIONS}) loc
+            WHERE s.nct_id = ts.nct_id AND s.{RAW_LOCATIONS} IS NOT NULL
+              AND {SITE_MATCH} AND loc->>'status' IS NOT NULL)
+    """),
+]
+
 # Values the extraction cannot represent, counted rather than passed over in
 # silence. A row dropped without a number beside it is indistinguishable from
 # one that was never there (CLAUDE.md sec. 2).
@@ -225,6 +309,28 @@ SKIPPED = [
     ("officials with no role (edge not written)", f"""
         SELECT count(*) FROM studies, jsonb_array_elements({OFFICIALS}) off
         WHERE {OFFICIALS} IS NOT NULL AND off->>'role' IS NULL"""),
+    # Left NULL because the registry contradicts itself, not because the value
+    # is absent. Counted so "no coordinates" never silently means "we picked
+    # one and hoped" (CLAUDE.md sec. 2).
+    ("sites whose records disagree on coordinates (left NULL)", f"""
+        SELECT count(*) FROM (
+          SELECT 1 FROM studies, jsonb_array_elements({RAW_LOCATIONS}) loc
+          WHERE {RAW_LOCATIONS} IS NOT NULL AND loc->'geoPoint' IS NOT NULL
+          GROUP BY loc->>'facility', loc->>'city', loc->>'country'
+          HAVING count(DISTINCT ((loc->'geoPoint'->>'lat'),
+                                 (loc->'geoPoint'->>'lon'))) > 1) x"""),
+    ("sites whose records disagree on zip (left NULL)", f"""
+        SELECT count(*) FROM (
+          SELECT 1 FROM studies, jsonb_array_elements({RAW_LOCATIONS}) loc
+          WHERE {RAW_LOCATIONS} IS NOT NULL AND loc->>'zip' IS NOT NULL
+          GROUP BY loc->>'facility', loc->>'city', loc->>'country'
+          HAVING count(DISTINCT loc->>'zip') > 1) x"""),
+    ("trial/site pairs stating two statuses at once (left NULL)", f"""
+        SELECT count(*) FROM (
+          SELECT 1 FROM studies s, jsonb_array_elements(s.{RAW_LOCATIONS}) loc
+          WHERE s.{RAW_LOCATIONS} IS NOT NULL AND loc->>'status' IS NOT NULL
+          GROUP BY s.nct_id, loc->>'facility', loc->>'city', loc->>'country'
+          HAVING count(DISTINCT loc->>'status') > 1) x"""),
 ]
 
 COUNTS = [
@@ -253,6 +359,13 @@ def main():
                 print(f"  {label}: {cur.rowcount:,} newly stamped", flush=True)
             conn.commit()
 
+        print("\nEnriched from raw_json (no network call):", flush=True)
+        for label, sql in ENRICHMENTS:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                print(f"  {label}: {cur.rowcount:,} row(s) changed", flush=True)
+            conn.commit()
+
         print("\nSkipped, and why:", flush=True)
         with conn.cursor() as cur:
             for label, sql in SKIPPED:
@@ -273,6 +386,32 @@ def main():
                 else:
                     cur.execute(f"SELECT count(*) FROM {table}")
                     print(f"  {table}: {cur.fetchone()[0]:,}", flush=True)
+
+            # Coverage, not just totals: a column that exists and a column
+            # that is populated look identical from a row count.
+            print("\nSite enrichment coverage:", flush=True)
+            cur.execute("""
+                SELECT count(*), count(lat), count(state), count(zip) FROM sites
+            """)
+            total, geo, state, zipc = cur.fetchone()
+            for label, n in (("coordinates", geo), ("state", state), ("zip", zipc)):
+                print(f"  sites with {label}: {n:,} of {total:,} "
+                      f"({100.0 * n / total:.1f}%)", flush=True)
+            cur.execute("""
+                SELECT count(*) FILTER (WHERE withdrawn_at IS NULL),
+                       count(recruitment_status) FILTER (WHERE withdrawn_at IS NULL)
+                FROM trial_sites
+            """)
+            live, with_status = cur.fetchone()
+            print(f"  live edges stating a recruitment status: {with_status:,} "
+                  f"of {live:,} ({100.0 * with_status / live:.1f}%)", flush=True)
+            cur.execute("""
+                SELECT recruitment_status, count(*) FROM trial_sites
+                WHERE recruitment_status IS NOT NULL AND withdrawn_at IS NULL
+                GROUP BY 1 ORDER BY 2 DESC
+            """)
+            for status, n in cur.fetchall():
+                print(f"    {status}: {n:,}", flush=True)
     finally:
         conn.close()
 

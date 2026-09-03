@@ -291,3 +291,63 @@ ALTER TABLE trial_organizations ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPT
 ALTER TABLE trial_sites         ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
 ALTER TABLE trial_investigators ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
 ALTER TABLE trial_interventions ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+
+-- ---------------------------------------------------------------------------
+-- Site enrichment (2026-09-03) — the fields the parser dropped.
+--
+-- `locations` was normalized down to facility/city/country and everything
+-- else discarded, so these have sat unread in raw_json since ingestion. The
+-- third time that has happened after `has_results` and the overallOfficials
+-- the graph extraction found. Measured across 142,777 stored locations:
+-- geoPoint on 140,285 (98.3%), zip on 133,069, state on 99,609, and a
+-- per-location `status` on 41,027.
+--
+-- Why these and not more of the graph: the evidence review on 2026-09-03
+-- (docs/plan_explore_nodes.md) put sites first among Explore's node types.
+-- Sites reach 93.8% of trials against the collaborator edge's 37.4%, and the
+-- documented clinician workflow is "search, find a candidate trial, then
+-- phone the site to ask whether it is still open." `recruitment_status`
+-- answers that question from data already on file.
+--
+-- NO NETWORK CALL. Backfilled from stored raw_json (CLAUDE.md sec. 4).
+-- ---------------------------------------------------------------------------
+
+-- Place attributes, so they live on the site rather than the edge.
+--
+-- Populated ONLY where every record reporting this site agrees. The registry
+-- genuinely disagrees with itself: 109 site identities carry more than one
+-- geoPoint, and the disagreement is not rounding — 103 of them are 5km or
+-- more apart and the largest is 52 degrees, the same facility string placed
+-- on different continents. Rounding to 4 decimal places removes none of
+-- them. Picking a winner would put a trial in the wrong country on a
+-- "near me" map, so a disputed value is left NULL and counted, the same
+-- "we can't tell" the tracking drop reasons use rather than a guess
+-- (CLAUDE.md sec. 2). 49,650 of 51,272 sites get coordinates; zip disagrees
+-- on 3,344 identities and state on 484.
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS state TEXT;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS zip   TEXT;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS lat   DOUBLE PRECISION;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS lon   DOUBLE PRECISION;
+
+-- Recruitment status is a property of the EDGE, not the site, and the data
+-- settles it: 2,616 site identities report more than one status across the
+-- trials that use them. Of course they do — a hospital recruiting for one
+-- trial and closed for another is one place in two states. Stored on
+-- trial_sites for the same reason organization role is stored on its edge.
+--
+-- NULL means the registry gave no per-location status, which is the common
+-- case: only 40,183 of 140,037 edges carry one, because CT.gov mostly
+-- supplies it for actively recruiting studies. NULL is "not stated", never
+-- "not recruiting" — anything reading this column must keep that distinction
+-- or it will report closed sites that were merely silent.
+--
+-- 172 (trial, site) pairs report two different statuses at once, a trial
+-- listing the same facility twice; those are left NULL and counted too.
+--
+-- NAMING TRAP: one of the values CT.gov uses here is literally 'WITHDRAWN',
+-- and this table also has a `withdrawn_at` column. They are unrelated.
+-- recruitment_status = 'WITHDRAWN' is the registry saying the site withdrew
+-- from the trial before enrolling anyone. `withdrawn_at` is OURS, and means
+-- the trial's record stopped listing this location at all. A site can be
+-- live (withdrawn_at IS NULL) while its recruitment_status reads 'WITHDRAWN'.
+ALTER TABLE trial_sites ADD COLUMN IF NOT EXISTS recruitment_status TEXT;

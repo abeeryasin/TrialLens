@@ -52,6 +52,10 @@ pytestmark = pytest.mark.skipif(
 
 OFFICIALS = "raw_json->'protocolSection'->'contactsLocationsModule'->'overallOfficials'"
 COLLABORATORS = "raw_json->'protocolSection'->'sponsorCollaboratorsModule'->'collaborators'"
+# The raw array, not the normalized `locations` column — the parser kept only
+# facility/city/country and dropped geoPoint, zip, state and status, so the
+# enrichment checks have to read the record those came from.
+RAW_LOCATIONS = "raw_json->'protocolSection'->'contactsLocationsModule'->'locations'"
 
 
 @pytest.fixture(scope="module")
@@ -300,3 +304,152 @@ def test_the_graph_is_not_behind_the_studies_it_describes(cur):
         "and if this keeps recurring the backfill needs to become part of the "
         "monitor run rather than a manual step"
     )
+
+
+# ---------------------------------------------------------------------------
+# Site enrichment (2026-09-03): state, zip, coordinates and per-edge
+# recruitment status, all backfilled from raw_json. These are the fields the
+# evidence review put first — sites reach 93.8% of trials and answer the
+# "is it still open here?" question clinicians currently phone sites about.
+# ---------------------------------------------------------------------------
+
+
+def test_the_enrichment_actually_ran(cur):
+    """The #45 guard again, one layer down. Every assertion below is about
+    values being correct; all of them pass vacuously against a column that
+    was added and never populated."""
+    with_geo = scalar(cur, "SELECT count(*) FROM sites WHERE lat IS NOT NULL")
+    assert with_geo > 0, (
+        "no site has coordinates — the enrichment step in "
+        "scripts/backfill_graph_entities.py has not run against this database"
+    )
+    with_status = scalar(
+        cur, "SELECT count(*) FROM trial_sites WHERE recruitment_status IS NOT NULL"
+    )
+    assert with_status > 0, "no edge carries a recruitment status"
+
+
+def test_coordinates_are_on_the_planet(cur):
+    """Catches the parse failure that a NOT NULL check cannot: a lat/lon
+    swap, or a string that cast to something absurd. A site at lat 120 is not
+    a slightly-wrong site, it is a broken one."""
+    off_globe = scalar(cur, """
+        SELECT count(*) FROM sites
+        WHERE (lat IS NOT NULL AND (lat < -90 OR lat > 90))
+           OR (lon IS NOT NULL AND (lon < -180 OR lon > 180))
+    """)
+    assert off_globe == 0, f"{off_globe} sites have impossible coordinates"
+
+    half_a_point = scalar(cur, """
+        SELECT count(*) FROM sites
+        WHERE (lat IS NULL) <> (lon IS NULL)
+    """)
+    assert half_a_point == 0, (
+        f"{half_a_point} sites have one coordinate but not the other — a point "
+        "with half its pair is not a location"
+    )
+
+
+def test_latitude_and_longitude_were_not_swapped(cur):
+    """A swap survives the range check, because most latitudes are also legal
+    longitudes. Continental US sites are the cheap discriminator: they sit
+    around lat 24..50, lon -125..-66. Swapped, every one of them lands at a
+    longitude no US site has.
+    """
+    us_sane = scalar(cur, """
+        SELECT count(*) FROM sites
+        WHERE country = 'United States' AND lat IS NOT NULL
+          AND lat BETWEEN 18 AND 72 AND lon BETWEEN -180 AND -65
+    """)
+    us_total = scalar(cur, """
+        SELECT count(*) FROM sites
+        WHERE country = 'United States' AND lat IS NOT NULL
+    """)
+    assert us_total > 0, "no US site has coordinates — cannot check orientation"
+    assert us_sane / us_total > 0.95, (
+        f"only {us_sane} of {us_total} US sites fall in US bounds — lat and lon "
+        "look transposed"
+    )
+
+
+def test_no_coordinate_was_invented_where_the_records_disagree(cur):
+    """The rule the schema promises, checked rather than trusted.
+
+    109 site identities are reported at more than one geoPoint, and the
+    disagreement is real — 103 are 5km or further apart. Those must hold NULL.
+    A stored value there would be a guess presented as a location, and on a
+    "trials near me" map a guess sends someone to the wrong country.
+    """
+    # Built as a CTE joined once, never a correlated subquery. The obvious
+    # per-site EXISTS re-expands all 142,777 location objects for each of the
+    # 51,272 sites and the backend is OOM-killed (exit 137) rather than
+    # failing with anything readable.
+    guessed = scalar(cur, f"""
+        WITH disputed AS (
+            SELECT loc->>'facility' f, loc->>'city' c, loc->>'country' k
+            FROM studies, jsonb_array_elements({RAW_LOCATIONS}) loc
+            WHERE {RAW_LOCATIONS} IS NOT NULL AND loc->'geoPoint' IS NOT NULL
+            GROUP BY 1, 2, 3
+            HAVING count(DISTINCT ((loc->'geoPoint'->>'lat'),
+                                   (loc->'geoPoint'->>'lon'))) > 1)
+        SELECT count(*) FROM sites si JOIN disputed d
+          ON coalesce(si.facility,'') = coalesce(d.f,'')
+         AND coalesce(si.city,'')     = coalesce(d.c,'')
+         AND coalesce(si.country,'')  = coalesce(d.k,'')
+        WHERE si.lat IS NOT NULL
+    """)
+    assert guessed == 0, (
+        f"{guessed} sites hold coordinates their own records disagree about"
+    )
+
+
+def test_every_recruitment_status_is_one_the_record_states(cur):
+    """The inventing direction, for the field a clinician would act on.
+
+    A wrong RECRUITING here is worse than a missing one: it says a trial is
+    open at a site when the registry never said so (CLAUDE.md sec. 2).
+    """
+    # Same shape as the coordinate check: expand the JSON once into a CTE,
+    # then anti-join. Correlating it per edge expands 142,777 objects for each
+    # of 140,022 edges.
+    invented = scalar(cur, f"""
+        WITH stated AS (
+            SELECT DISTINCT s.nct_id nct, loc->>'facility' f, loc->>'city' c,
+                   loc->>'country' k, loc->>'status' st
+            FROM studies s, jsonb_array_elements(s.{RAW_LOCATIONS}) loc
+            WHERE s.{RAW_LOCATIONS} IS NOT NULL AND loc->>'status' IS NOT NULL)
+        SELECT count(*) FROM trial_sites ts
+        JOIN sites si ON si.id = ts.site_id
+        WHERE ts.recruitment_status IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM stated
+            WHERE stated.nct = ts.nct_id
+              AND coalesce(stated.f,'') = coalesce(si.facility,'')
+              AND coalesce(stated.c,'') = coalesce(si.city,'')
+              AND coalesce(stated.k,'') = coalesce(si.country,'')
+              AND stated.st = ts.recruitment_status)
+    """)
+    assert invented == 0, (
+        f"{invented} edges claim a recruitment status no stored record states"
+    )
+
+
+def test_recruitment_status_vocabulary_is_still_what_we_expect(cur):
+    """Data drift, which is why this file runs in monitor.yml on the data's
+    schedule. A new CT.gov status value is not a code bug — it is the registry
+    changing under us, and anything rendering these needs to know.
+
+    ENROLLING_BY_INVITATION was already a surprise: it appears 10 times and
+    was absent from the first sample taken while designing the column.
+    """
+    known = {
+        "RECRUITING", "NOT_YET_RECRUITING", "ACTIVE_NOT_RECRUITING",
+        "SUSPENDED", "WITHDRAWN", "COMPLETED", "TERMINATED",
+        "ENROLLING_BY_INVITATION", "AVAILABLE", "NO_LONGER_AVAILABLE",
+        "TEMPORARILY_NOT_AVAILABLE", "APPROVED_FOR_MARKETING",
+    }
+    cur.execute("""
+        SELECT DISTINCT recruitment_status FROM trial_sites
+        WHERE recruitment_status IS NOT NULL
+    """)
+    seen = {r[0] for r in cur.fetchall()}
+    assert seen <= known, f"unknown per-site status value(s): {sorted(seen - known)}"
