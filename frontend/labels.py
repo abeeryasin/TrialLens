@@ -362,3 +362,65 @@ def render_structured_diff(old_value, new_value):
             col.write(raw_value)
         else:
             col.json(parsed)
+
+
+# Per-site recruitment status (step 8 unit 2b, 2026-09-03).
+#
+# Only 28.6% of live trial_sites edges carry one, because CT.gov mostly
+# supplies per-location status for actively recruiting studies. So the
+# common case is NULL, and NULL means "the registry did not say" — never
+# "not recruiting". Rendering absence as closure would tell a researcher a
+# site is shut when nothing on file says so (CLAUDE.md sec. 2), and it is
+# the same mistake as the step-4 gap where a few incidental local rows were
+# presented as the complete picture.
+#
+# These are captions, not colours, for the same reason the drop reasons are
+# sentences: a grey dot is a conclusion with its evidence removed.
+SITE_STATUS_LABELS = {
+    "RECRUITING": "Recruiting at this site",
+    "NOT_YET_RECRUITING": "Not yet recruiting at this site",
+    "ENROLLING_BY_INVITATION": "Enrolling by invitation only",
+    "ACTIVE_NOT_RECRUITING": "Active here, but not recruiting",
+    "SUSPENDED": "Suspended at this site",
+    # CT.gov's WITHDRAWN, which is NOT our trial_sites.withdrawn_at. This one
+    # means the site withdrew before enrolling anyone; withdrawn_at means the
+    # record stopped listing the location at all. See db/schema.sql.
+    "WITHDRAWN": "Withdrawn before enrolling anyone",
+    "COMPLETED": "Completed at this site",
+    "TERMINATED": "Terminated at this site",
+    "AVAILABLE": "Available at this site",
+    "NO_LONGER_AVAILABLE": "No longer available at this site",
+    "TEMPORARILY_NOT_AVAILABLE": "Temporarily unavailable at this site",
+    "APPROVED_FOR_MARKETING": "Approved for marketing",
+}
+
+SITE_STATUS_NOT_STATED = "Site status not reported"
+
+SITE_STATUS_NOT_STATED_CAPTION = (
+    "ClinicalTrials.gov does not publish a per-site status for this trial. "
+    "That is not the same as the site being closed — check with the site."
+)
+
+
+def format_site_status(raw_value):
+    """Render a per-site recruitment status, or say plainly that there isn't
+    one.
+
+    Never returns a closed-sounding phrase for a missing value. An unknown
+    code is passed through rather than swallowed, so a new CT.gov vocabulary
+    value shows up as itself instead of silently becoming "not reported" —
+    the real-data test guards the vocabulary, and this keeps the UI honest
+    in the window before anyone notices it failed.
+    """
+    if raw_value is None or str(raw_value).strip() == "":
+        return SITE_STATUS_NOT_STATED
+    return SITE_STATUS_LABELS.get(str(raw_value), str(raw_value))
+
+
+def site_status_is_stated(raw_value):
+    """True only when the registry actually reported a status.
+
+    Exists so callers filter on this rather than on `== "RECRUITING"`, which
+    silently buckets every unreported site with the closed ones.
+    """
+    return raw_value is not None and str(raw_value).strip() != ""

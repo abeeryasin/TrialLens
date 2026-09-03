@@ -91,12 +91,26 @@ def test_no_organization_was_invented(cur):
     """Every organization name must appear in a stored record as either a
     lead sponsor or a collaborator. A name here that is in neither means the
     extraction fabricated a node."""
+    # Expanded once into a CTE, not correlated per organization.
+    #
+    # The correlated form is the same shape that OOM-killed the coordinate
+    # check: the subquery matches on `col->>'name'`, a JSON-derived value with
+    # no index, so Postgres re-expands every collaborator array once per
+    # organization. It survived only because 6,207 organizations is small
+    # next to 51,272 sites — and it was still the slowest test in the file at
+    # 9.3s against 1.0s for its neighbours. Correlating on `s.nct_id` is
+    # fine, because that hits the studies primary key; correlating on a value
+    # dug out of JSON is what turns linear into quadratic.
     invented = scalar(cur, f"""
+        WITH named AS (
+            SELECT DISTINCT lead_sponsor AS name FROM studies
+            WHERE lead_sponsor IS NOT NULL
+            UNION
+            SELECT DISTINCT col->>'name' FROM studies,
+                 jsonb_array_elements({COLLABORATORS}) col
+            WHERE {COLLABORATORS} IS NOT NULL AND col->>'name' IS NOT NULL)
         SELECT count(*) FROM organizations o
-        WHERE NOT EXISTS (SELECT 1 FROM studies s WHERE s.lead_sponsor = o.name)
-          AND NOT EXISTS (
-            SELECT 1 FROM studies s, jsonb_array_elements(s.{COLLABORATORS}) col
-            WHERE s.{COLLABORATORS} IS NOT NULL AND col->>'name' = o.name)
+        WHERE NOT EXISTS (SELECT 1 FROM named n WHERE n.name = o.name)
     """)
     assert invented == 0, f"{invented} organizations trace to no stored record"
 

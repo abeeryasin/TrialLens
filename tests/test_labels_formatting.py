@@ -17,6 +17,7 @@ Free — no database, no network, no Streamlit rendering.
 """
 import pytest
 
+from frontend import labels
 from frontend.labels import (
     format_posted_on,
     format_posted_on_list,
@@ -196,3 +197,72 @@ class TestPostedOnList:
     def test_it_accepts_a_generator(self):
         """The page passes a genexp, which a naive len() would exhaust."""
         assert format_posted_on_list(d for d in ["2026-08-28"]) == "28 August 2026"
+
+
+# ---------------------------------------------------------------------------
+# Per-site recruitment status (step 8 unit 2b, 2026-09-03).
+#
+# The column is NULL on 71.4% of live edges. These tests exist because the
+# tempting shortcut -- `status == "RECRUITING"` for open, everything else for
+# closed -- would report ~100,000 sites as closed that the registry simply
+# never described.
+# ---------------------------------------------------------------------------
+
+CLOSED_SOUNDING = (
+    "closed", "not recruiting", "no longer", "terminated", "suspended",
+    "withdrawn", "completed", "unavailable",
+)
+
+
+def test_a_missing_status_never_reads_as_closed():
+    """The whole point of the column's NULL semantics, enforced in the one
+    place a user would see it. Absence must not render as closure."""
+    for missing in (None, "", "   "):
+        rendered = labels.format_site_status(missing).lower()
+        for word in CLOSED_SOUNDING:
+            assert word not in rendered, (
+                f"a missing status rendered as {rendered!r}, which reads as "
+                f"closed because of {word!r} — the registry said nothing here"
+            )
+
+
+def test_a_missing_status_says_so_explicitly():
+    assert labels.format_site_status(None) == labels.SITE_STATUS_NOT_STATED
+    assert "not reported" in labels.format_site_status(None).lower()
+    # And the caption has to point somewhere actionable rather than guessing.
+    assert "check with the site" in labels.SITE_STATUS_NOT_STATED_CAPTION.lower()
+
+
+def test_known_statuses_render_as_sentences():
+    assert labels.format_site_status("RECRUITING") == "Recruiting at this site"
+    assert labels.format_site_status("ACTIVE_NOT_RECRUITING") == (
+        "Active here, but not recruiting"
+    )
+
+
+def test_ctgov_withdrawn_is_not_described_as_delisting():
+    """The naming trap, held in the UI layer too.
+
+    CT.gov's WITHDRAWN means the site withdrew before enrolling anyone. Our
+    trial_sites.withdrawn_at means the record stopped listing the location.
+    If this label ever starts saying the site was removed from the trial, the
+    two have been conflated where a user can see it.
+    """
+    rendered = labels.format_site_status("WITHDRAWN").lower()
+    assert "before enrolling" in rendered
+    assert "no longer listed" not in rendered and "removed" not in rendered
+
+
+def test_an_unknown_status_is_shown_rather_than_swallowed():
+    """A new CT.gov vocabulary value must not silently become "not reported".
+    ENROLLING_BY_INVITATION was already a surprise once."""
+    assert labels.format_site_status("SOME_NEW_CODE") == "SOME_NEW_CODE"
+    assert labels.format_site_status("SOME_NEW_CODE") != labels.SITE_STATUS_NOT_STATED
+
+
+def test_site_status_is_stated_separates_absence_from_value():
+    assert labels.site_status_is_stated("RECRUITING") is True
+    assert labels.site_status_is_stated("WITHDRAWN") is True
+    assert labels.site_status_is_stated(None) is False
+    assert labels.site_status_is_stated("") is False
+    assert labels.site_status_is_stated("   ") is False

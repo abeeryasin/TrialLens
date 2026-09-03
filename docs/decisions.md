@@ -2371,3 +2371,43 @@ the coordinate check is a correlated `EXISTS` per site, which re-expands all
 and no readable error. Rewritten as a CTE joined once, the whole file runs
 in 15 seconds. Worth remembering: against `jsonb_array_elements`, a
 correlated subquery is not a slow query, it is a dead one.
+
+## 2026-09-03 — Follow-ups on unit 2b: the OOM had a survivor, and NULL got a guard
+
+Three loose ends from the enrichment, closed rather than noted.
+
+**The correlated-subquery problem was not a one-off.** After the coordinate
+check was rewritten, `test_no_organization_was_invented` was still the
+slowest test in the file at 9.32s against ~1.0s for its neighbours — the
+same shape, matching on `col->>'name'` and re-expanding every collaborator
+array once per organization. It survived only because 6,207 organizations is
+small next to 51,272 sites; it would have degraded quietly as the graph grew.
+Rewritten as a CTE the file went from 26.7s to 15.3s, and the assertion still
+turns red when an organization is invented (verified, rolled back).
+
+The precise rule, which "avoid correlated subqueries" gets wrong:
+**correlating on `s.nct_id` is fine** — that hits the studies primary key and
+expands one trial's array. **Correlating on a value dug out of the JSON is
+what turns linear into quadratic**, because there is no index to reach for.
+Every withdrawal UPDATE in the backfill correlates on nct_id and runs in
+seconds; the two that correlated on facility/city/country and `col->>'name'`
+were the pathological ones.
+
+**NULL got a guard before it got a consumer.** `recruitment_status` is NULL
+on 71.4% of live edges, and the tempting shortcut — `status == 'RECRUITING'`
+for open, everything else closed — would report roughly 100,000 sites as
+shut that the registry never described. `frontend/labels.py` now holds
+`format_site_status()` and `site_status_is_stated()`, added while nothing
+consumes the column yet, which is the cheapest moment to make the wrong
+thing hard to write. Six free tests cover it, including one asserting that a
+missing value never renders with any closed-sounding word; the shortcut
+implementation turns it red.
+
+`site_status_is_stated` rejects whitespace rather than using `bool()`, which
+would call `"   "` a stated status.
+
+**The UI consequences are now requirements, not discoveries.** Written into
+`docs/plan_explore_nodes.md` §4b: 1,666 sites cannot be placed on a map and
+the page must say so rather than silently shrinking the result set; status
+filters must offer "not reported" as its own option; site status renders as
+sentences, not colour, because grey would mean both "closed" and "unknown".

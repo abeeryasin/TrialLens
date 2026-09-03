@@ -108,6 +108,35 @@ sites now carry coordinates; 40,011 live edges carry a recruitment status,
 **Not built:** nothing was removed. The collaborator edges stay extracted and
 correct; they simply should not be what Explore leads with.
 
+## 4b. What unit 3 and the Explore page must handle
+
+Consequences of the decisions above, written down now so they are
+requirements rather than bugs discovered later.
+
+**1,666 sites have no coordinates** (51,272 total, 49,606 mapped). 109 of
+those are NULL because the registry contradicts itself; the rest never
+reported a geoPoint. A distance filter or map silently drops all of them.
+The page must say how many sites it could not place, the same way the watch
+states a quiet week rather than showing an empty list. "3 sites near you"
+computed from a set that excluded 1,666 unplaceable ones is the step-4
+under-reporting bug in a new costume.
+
+**Never filter on `recruitment_status = 'RECRUITING'` alone.** That buckets
+the 71.4% of live edges with no stated status in with the closed ones.
+`frontend/labels.site_status_is_stated()` exists to make the three-way
+distinction — stated-and-open, stated-and-closed, not stated — the easy
+thing to write. Filters should offer "recruiting", "not recruiting" and
+"not reported" as separate options, not a checkbox.
+
+**Do not colour-code site status.** A green/grey dot is a conclusion with
+its evidence deleted, and grey would be doing double duty for "closed" and
+"unknown". `SITE_STATUS_LABELS` renders sentences for the same reason the
+tracking drop reasons do (§3).
+
+**Withdrawn edges are a feature of the page, not noise.** `withdrawn_at`
+exists so "this trial dropped three sites since June" is answerable. Default
+to live edges, but do not make the withdrawn ones unreachable.
+
 ## 5. What would overturn this
 
 Stated so the decision can be reopened honestly, per the standing rule:
