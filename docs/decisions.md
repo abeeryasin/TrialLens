@@ -2450,3 +2450,41 @@ the rename rather than assumed.
 
 **The general rule:** check the source vocabulary before naming a column.
 CT.gov already used the best word for a different fact.
+
+## 2026-09-03 — The graph sync went live, and the first run exposed an inconsistency I had left
+
+`monitor.yml` now runs `scripts/backfill_graph_entities.py` after the ingest,
+closing the staleness the freshness test had been asking about. Run #7 proved
+it end to end: the same job ingested new trials and wrote 8 organizations, 17
+lead edges, 45 sites and 107 site edges without anyone touching it.
+
+**And then the drift checks failed** — not from the sync, but from a gap in
+the tests that only a real rebuild could surface. When delisting was
+introduced, `test_no_site_was_invented` was scoped to live edges and the
+organization and intervention versions were not. The first rebuild that
+delisted anything therefore reported inventions that were nothing of the
+kind: `Debra Weese-Mayer` (a trial changed its lead sponsor), plus
+`Time Restricted Eating` (OTHER) and `FLX475` (DRUG), arms a trial dropped.
+All three had `live_edge=False, delisted_edge=True` — the machinery had
+worked exactly as designed and the assertions had not been updated with it.
+
+The lesson is about how the earlier fix was made: the sites test was scoped
+because it was the one that happened to be red that day, rather than because
+delisting had changed what "invented" means for **every** entity. A concept
+introduced in one place and applied in one place is a latent failure
+everywhere else it belongs.
+
+Auditing for that also found a fourth case: **investigators had no invention
+test at all.** They were covered only in the losing direction (every stored
+official reached the graph), so a bad JSON path or a botched affiliation join
+could have put people into Explore who appear in no trial, with the suite
+green. Added, scoped like its neighbours.
+
+All four entity types now assert the same invariant the same way. Each was
+mutation-checked by inserting a fabricated entity *with a live edge* — the
+case scoping could have blinded — and all three changed tests went red,
+rolled back, no leaks.
+
+**A red CI run was the cheapest possible outcome here.** Dispatching the
+workflow rather than trusting a local green is what surfaced it, for the
+third time on this project.

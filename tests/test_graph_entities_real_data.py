@@ -88,9 +88,19 @@ def test_the_graph_has_actually_been_populated(cur):
 
 
 def test_no_organization_was_invented(cur):
-    """Every organization name must appear in a stored record as either a
-    lead sponsor or a collaborator. A name here that is in neither means the
-    extraction fabricated a node."""
+    """Every organization holding a LIVE edge must appear in a stored record
+    as a lead sponsor or a collaborator. A name in neither means the
+    extraction fabricated a node.
+
+    Scoped to live edges for the same reason test_no_site_was_invented is,
+    and this was found the hard way: on 2026-09-03 the sites test had been
+    scoped when delisting was introduced and this one had not. The first
+    cron run that rebuilt the graph turned it red on 'Debra Weese-Mayer' —
+    a trial had changed its lead sponsor, the delisting pass correctly
+    stamped the old edge, and this test called the result an invention. It
+    was a delisting, which is the opposite: something the registry really
+    did say and later stopped saying.
+    """
     # Expanded once into a CTE, not correlated per organization.
     #
     # The correlated form is the same shape that OOM-killed the coordinate
@@ -110,7 +120,10 @@ def test_no_organization_was_invented(cur):
                  jsonb_array_elements({COLLABORATORS}) col
             WHERE {COLLABORATORS} IS NOT NULL AND col->>'name' IS NOT NULL)
         SELECT count(*) FROM organizations o
-        WHERE NOT EXISTS (SELECT 1 FROM named n WHERE n.name = o.name)
+        WHERE EXISTS (
+            SELECT 1 FROM trial_organizations t
+            WHERE t.org_id = o.id AND t.delisted_at IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM named n WHERE n.name = o.name)
     """)
     assert invented == 0, f"{invented} organizations trace to no stored record"
 
@@ -140,13 +153,50 @@ def test_no_site_was_invented(cur):
 
 
 def test_no_intervention_term_was_invented(cur):
+    """Live-edged terms only — see test_no_organization_was_invented. The
+    same cron run turned this red on 'Time Restricted Eating' (OTHER) and
+    'FLX475' (DRUG), both arms a trial had dropped and the delisting pass had
+    correctly stamped."""
     invented = scalar(cur, """
-        SELECT count(*) FROM intervention_terms t WHERE NOT EXISTS (
+        SELECT count(*) FROM intervention_terms t
+        WHERE EXISTS (
+            SELECT 1 FROM trial_interventions ti
+            WHERE ti.term_id = t.id AND ti.delisted_at IS NULL)
+          AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.interventions) iv
             WHERE s.interventions IS NOT NULL
               AND iv->>'name' = t.name AND iv->>'type' = t.type)
     """)
-    assert invented == 0, f"{invented} terms trace to no stored intervention"
+    assert invented == 0, f"{invented} live-edged terms trace to no stored intervention"
+
+
+def test_no_investigator_was_invented(cur):
+    """The fourth entity type, which had no invention test at all until
+    2026-09-03.
+
+    Organizations, sites and terms each had one; investigators were covered
+    only in the losing direction (every stored official reached the graph).
+    Nothing checked that a person in the graph traces back to a record — so
+    a bad JSON path or a botched affiliation join could have put people in
+    Explore who appear in no trial, and the suite would have stayed green.
+    Live-edged only, like its three neighbours.
+    """
+    invented = scalar(cur, f"""
+        WITH stated AS (
+            SELECT DISTINCT off->>'name' AS name,
+                   coalesce(off->>'affiliation','') AS aff
+            FROM studies s, jsonb_array_elements(s.{OFFICIALS}) off
+            WHERE s.{OFFICIALS} IS NOT NULL AND off->>'name' IS NOT NULL)
+        SELECT count(*) FROM investigators i
+        WHERE EXISTS (
+            SELECT 1 FROM trial_investigators ti
+            WHERE ti.investigator_id = i.id AND ti.delisted_at IS NULL)
+          AND NOT EXISTS (
+            SELECT 1 FROM stated
+            WHERE stated.name = i.name
+              AND stated.aff = coalesce(i.affiliation,''))
+    """)
+    assert invented == 0, f"{invented} live-edged investigators trace to no record"
 
 
 def test_every_lead_sponsor_on_file_reached_the_graph(cur):
