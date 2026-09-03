@@ -92,6 +92,18 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python scripts/backfill_graph_entities.py
 
+      # Immediately after the backfill, never before it: the merge points
+      # near-duplicate rows at a canonical one, and the rows it has to
+      # consider are the ones the backfill just inserted. Skipping it lets
+      # duplicates accumulate silently — a new spelling of a hospital
+      # becomes a new site, and Explore quietly stops seeing two trials as
+      # sharing it. Idempotent, so a run with nothing new changes nothing.
+      - name: Merge near-duplicate entities
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/merge_entities.py
+
       # Data-drift checks, run here rather than in tests.yml on purpose.
       # These assert things about what ClinicalTrials.gov actually sends —
       # that every intervention type is one we know, that every stored age

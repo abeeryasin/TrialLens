@@ -394,7 +394,12 @@ def test_site_limit_is_passed_through_to_the_query(api):
         keep=holder,
     ).get("/explore/NCT06760819?site_limit=5")
 
-    listed_query = [
-        (sql, params) for sql, params in holder[0].cursor_obj.executed if "ORDER BY" in sql and "LIMIT" in sql
+    # Parameters are passed by name since the canonical-site rewrite, so the
+    # site list query is the one carrying limit=5 — asserted on the value,
+    # not on a positional slot that a query edit could reshuffle silently.
+    limits = [
+        params.get("limit")
+        for _, params in holder[0].cursor_obj.executed
+        if isinstance(params, dict)
     ]
-    assert any(params and params[-1] == 5 for _, params in listed_query)
+    assert 5 in limits, f"site_limit never reached a query; saw limits {limits}"

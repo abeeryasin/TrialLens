@@ -135,93 +135,148 @@ def explore_trial(
     )
 
 
+# One row per CANONICAL site this trial runs at, which is the unit every
+# rollup below counts. Written once and prefixed onto each query rather than
+# repeated, so the four zoom levels cannot disagree about what a site is.
+#
+# Step 8 unit 3 (2026-09-04) made this necessary. Before the merge, 11
+# spellings of one Guangzhou hospital were 11 sites, and 54 (trial, site)
+# pairs listed the same hospital twice inside a single trial — visible on
+# the page as a duplicated row and an inflated count.
+#
+# `s` is the row the edge points at; `c` is the row that represents it.
+# Display comes from `c`, so the trial shows the spelling the registry uses
+# most, and counting is DISTINCT on `c.id`.
+#
+# STATUS IS ONLY KEPT WHEN THE COLLAPSED EDGES AGREE. Two rows for one
+# hospital can carry different recruitment statuses (172 such pairs existed
+# before any merging), and picking one would invent a fact. Disagreement
+# resolves to NULL — "not stated" — which is the same answer the site
+# enrichment gives a disputed geoPoint, and which the page already renders
+# honestly.
+_CANONICAL_SITES = """
+    WITH live AS (
+        SELECT c.id AS site_id,
+               min(c.facility) AS facility,
+               min(c.city)     AS city,
+               min(c.country)  AS country,
+               bool_and(c.lat IS NOT NULL AND c.lon IS NOT NULL) AS placeable,
+               CASE WHEN count(DISTINCT nullif(trim(ts.recruitment_status), '')) = 1
+                     AND count(*) FILTER (
+                             WHERE nullif(trim(ts.recruitment_status), '') IS NULL) = 0
+                    THEN max(nullif(trim(ts.recruitment_status), ''))
+                    ELSE NULL END AS status
+        FROM trial_sites ts
+        JOIN sites s ON s.id = ts.site_id
+        JOIN sites c ON c.id = coalesce(s.canonical_id, s.id)
+        WHERE ts.nct_id = %(nct)s AND ts.delisted_at IS NULL
+        GROUP BY c.id
+    )
+"""
+
+# The three status buckets, over the collapsed rows.
+_LIVE_STATUS_COUNTS = """
+    count(*) FILTER (WHERE status = 'RECRUITING') AS recruiting,
+    count(*) FILTER (WHERE status IS NOT NULL AND status <> 'RECRUITING') AS other_stated,
+    count(*) FILTER (WHERE status IS NULL) AS not_stated
+"""
+
+# City names are NOT part of what the merge collapses — two different
+# hospitals in 'Heraklion - Crete' and 'Heraklion, Crete' are two real
+# sites, and merging them would be wrong. But they are one city, and the
+# rollup counted them as two. Grouping on the normalised name and DISPLAYING
+# the most common spelling fixes the rollup without touching the sites.
+#
+# Same normalisation as scripts/merge_entities.py, deliberately: two
+# definitions of "the same string" that disagreed would put a city in one
+# bucket here and another there.
+_NORM_CITY = "btrim(regexp_replace(lower(coalesce(city, '')), '[^a-z0-9]+', ' ', 'g'))"
+_NORM_COUNTRY = "btrim(regexp_replace(lower(coalesce(country, '')), '[^a-z0-9]+', ' ', 'g'))"
+
+
 def _sites(cur, nct_id: str, site_limit: int) -> ExploreSites:
     """Where the trial runs, at three zoom levels.
 
-    Every query here filters `delisted_at IS NULL` except the last: a
-    delisted edge is a location the record stopped listing, and counting it
-    among the live ones would say the trial still runs somewhere it does
-    not. Kept in its own list rather than dropped, because "this trial
-    dropped three sites" is a result.
+    Every query filters `delisted_at IS NULL` except the last: a delisted
+    edge is a location the record stopped listing, and counting it among the
+    live ones would say the trial still runs somewhere it does not. Kept in
+    its own list rather than dropped, because "this trial dropped three
+    sites" is a result.
     """
+    params = {"nct": nct_id}
+
     cur.execute(
-        f"""
-        SELECT count(*) AS total,
-               {_STATUS_COUNTS},
-               count(*) FILTER (WHERE s.lat IS NULL OR s.lon IS NULL) AS unplaceable
-        FROM trial_sites ts
-        JOIN sites s ON s.id = ts.site_id
-        WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
+        _CANONICAL_SITES + f"""
+        SELECT count(*) AS total, {_LIVE_STATUS_COUNTS},
+               count(*) FILTER (WHERE NOT placeable) AS unplaceable
+        FROM live
         """,
-        (nct_id,),
+        params,
     )
     summary = cur.fetchone()
 
     cur.execute(
-        f"""
-        SELECT s.country, count(*) AS sites, {_STATUS_COUNTS}
-        FROM trial_sites ts
-        JOIN sites s ON s.id = ts.site_id
-        WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
-        GROUP BY s.country
-        ORDER BY sites DESC, s.country
+        _CANONICAL_SITES + f"""
+        SELECT country, count(*) AS sites, {_LIVE_STATUS_COUNTS}
+        FROM live GROUP BY country ORDER BY sites DESC, country
         """,
-        (nct_id,),
+        params,
     )
     countries = [ExplorePlace(**row) for row in cur.fetchall()]
 
     cur.execute(
-        f"""
-        SELECT s.country, s.city, count(*) AS sites, {_STATUS_COUNTS},
+        _CANONICAL_SITES + f"""
+        SELECT mode() WITHIN GROUP (ORDER BY country) AS country,
+               mode() WITHIN GROUP (ORDER BY city) AS city,
+               count(*) AS sites, {_LIVE_STATUS_COUNTS},
                count(*) OVER () AS cities_total
-        FROM trial_sites ts
-        JOIN sites s ON s.id = ts.site_id
-        WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
-        GROUP BY s.country, s.city
-        ORDER BY sites DESC, s.country, s.city
-        LIMIT %s
+        FROM live
+        GROUP BY {_NORM_COUNTRY}, {_NORM_CITY}
+        ORDER BY sites DESC, 1, 2
+        LIMIT %(limit)s
         """,
-        (nct_id, CITY_CAP),
+        {**params, "limit": CITY_CAP},
     )
     city_rows = cur.fetchall()
     # count(*) OVER () counts the GROUPED rows, so it is the number of
     # distinct cities BEFORE the LIMIT — the honest denominator the page
-    # prints beside a capped list. A second COUNT query would be one more
-    # round trip for a number this window function already has.
+    # prints beside a capped list, at no extra round trip.
     cities_total = city_rows[0]["cities_total"] if city_rows else 0
-    cities = [ExplorePlace(**{k: v for k, v in row.items() if k != "cities_total"}) for row in city_rows]
+    cities = [
+        ExplorePlace(**{k: v for k, v in row.items() if k != "cities_total"})
+        for row in city_rows
+    ]
 
-    cur.execute(
-        f"""
-        SELECT s.facility, s.city, s.country,
-               nullif(trim(ts.recruitment_status), '') AS status,
-               (s.lat IS NOT NULL AND s.lon IS NOT NULL) AS placeable
-        FROM trial_sites ts
-        JOIN sites s ON s.id = ts.site_id
-        WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
-        ORDER BY ({_RECRUITING}) DESC NULLS LAST, s.country, s.city, s.facility
-        LIMIT %s
-        """,
-        (nct_id, site_limit),
-    )
     # Recruiting first, then alphabetically. A truncated list therefore
-    # over-represents recruiting sites — which is the useful bias for the
-    # documented workflow (find a trial, phone a site that is open) and is
-    # safe only because the page states both the ordering and the cap.
+    # over-represents recruiting sites — the useful bias for the documented
+    # workflow (find a trial, phone a site that is open), and safe only
+    # because the page states both the ordering and the cap.
+    cur.execute(
+        _CANONICAL_SITES + """
+        SELECT facility, city, country, status, placeable
+        FROM live
+        ORDER BY (status = 'RECRUITING') DESC NULLS LAST, country, city, facility
+        LIMIT %(limit)s
+        """,
+        {**params, "limit": site_limit},
+    )
     listed = [ExploreSite(**row) for row in cur.fetchall()]
 
+    # Delisted edges are NOT collapsed. Each one is a specific location the
+    # record stopped listing, and merging two of them would report one
+    # dropped site where two were dropped.
     cur.execute(
-        f"""
+        """
         SELECT s.facility, s.city, s.country,
                nullif(trim(ts.recruitment_status), '') AS status,
                (s.lat IS NOT NULL AND s.lon IS NOT NULL) AS placeable,
                ts.delisted_at
         FROM trial_sites ts
         JOIN sites s ON s.id = ts.site_id
-        WHERE ts.nct_id = %s AND ts.delisted_at IS NOT NULL
+        WHERE ts.nct_id = %(nct)s AND ts.delisted_at IS NOT NULL
         ORDER BY ts.delisted_at DESC, s.country, s.city, s.facility
         """,
-        (nct_id,),
+        params,
     )
     delisted_sites = [ExploreSite(**row) for row in cur.fetchall()]
 
@@ -241,14 +296,19 @@ def _sites(cur, nct_id: str, site_limit: int) -> ExploreSites:
     )
 
 
-# Each entry is (edge table, its key column, the entity table to name, its
-# join column). Module constants, never request data — they are interpolated
-# into SQL below, and a caller-supplied table name here would be an
-# injection. Every value a request supplies is still a bound parameter.
+# Each entry is (edge table, its key column, the entity table). Module
+# constants, never request data — they are interpolated into SQL below, and
+# a caller-supplied table name here would be an injection. Every value a
+# request supplies is still a bound parameter.
+#
+# All three entity tables carry canonical_id since step 8 unit 3, so every
+# hop resolves identity the same way: coalesce(canonical_id, id). Before
+# that, two trials at one hospital spelled differently did not register as
+# sharing it at all — the neighbour list silently missed real overlaps.
 _NEIGHBOUR_HOPS = {
-    "site": ("trial_sites", "site_id", None, None),
-    "investigator": ("trial_investigators", "investigator_id", "investigators", "id"),
-    "intervention": ("trial_interventions", "term_id", "intervention_terms", "id"),
+    "site": ("trial_sites", "site_id", "sites", False),
+    "investigator": ("trial_investigators", "investigator_id", "investigators", True),
+    "intervention": ("trial_interventions", "term_id", "intervention_terms", True),
 }
 
 
@@ -268,22 +328,27 @@ def _neighbours(cur, nct_id: str, via: str, limit: int) -> tuple:
 
     Hop 2 is where the cost lives, and it does not scale with the trial: it
     scales with how popular the trial's entities are across the whole
-    database. RxPONDER's 1,568 sites reach 1,497 distinct trials because one
-    hospital alone carries 210. That is why the count is aggregated in
+    database. RxPONDER's 1,568 sites reach ~1,500 distinct trials because
+    one hospital alone carries 210. That is why the count is aggregated in
     Postgres and the list is capped here rather than in the page.
 
     Live edges on BOTH hops. A delisted edge is a connection the record no
     longer states, and a neighbour reached through one would be a
     relationship TrialLens invented (CLAUDE.md sec. 2).
-    """
-    edge, key, entity, entity_key = _NEIGHBOUR_HOPS[via]
 
-    if entity:
-        # Name the shared people or terms — with only a handful each, naming
-        # them IS the evidence. Sites get a count instead: the real answer
-        # for the mega-trial runs to 1,047 facility strings.
-        names = ", array_agg(DISTINCT n.name ORDER BY n.name) AS shared_names"
-        name_join = f"JOIN {entity} n ON n.{entity_key} = e.{key}"
+    `shared` counts DISTINCT canonical entities, not edges: a trial that
+    lists the same hospital under two spellings shares it once.
+    """
+    edge, key, entity, nameable = _NEIGHBOUR_HOPS[via]
+    canonical = f"coalesce(n.canonical_id, n.id)"
+
+    if nameable:
+        # Name the shared people or terms, in the canonical spelling — with
+        # only a handful each, naming them IS the evidence. Sites get a
+        # count instead: the real answer for the mega-trial runs to over a
+        # thousand facility strings.
+        names = ", array_agg(DISTINCT cn.name ORDER BY cn.name) AS shared_names"
+        name_join = f"JOIN {entity} cn ON cn.id = {canonical}"
     else:
         names = ", NULL::text[] AS shared_names"
         name_join = ""
@@ -291,13 +356,15 @@ def _neighbours(cur, nct_id: str, via: str, limit: int) -> tuple:
     cur.execute(
         f"""
         WITH mine AS (
-            SELECT {key} AS k FROM {edge}
-            WHERE nct_id = %(nct)s AND delisted_at IS NULL
+            SELECT DISTINCT {canonical} AS k
+            FROM {edge} e JOIN {entity} n ON n.id = e.{key}
+            WHERE e.nct_id = %(nct)s AND e.delisted_at IS NULL
         ),
         nb AS (
-            SELECT e.nct_id, count(*) AS shared{names}
+            SELECT e.nct_id, count(DISTINCT {canonical}) AS shared{names}
             FROM {edge} e
-            JOIN mine ON mine.k = e.{key}
+            JOIN {entity} n ON n.id = e.{key}
+            JOIN mine ON mine.k = {canonical}
             {name_join}
             WHERE e.delisted_at IS NULL AND e.nct_id <> %(nct)s
             GROUP BY e.nct_id
@@ -384,40 +451,60 @@ def _investigators(cur, nct_id: str) -> List[ExploreInvestigator]:
     highest-degree names in this table are pharma contact desks reused
     across a hundred trials, so a most-connected ordering would put
     'Pfizer CT.gov Call Center' above every actual investigator.
+
+    Grouped by canonical identity (step 8 unit 3), so one person spelled two
+    ways is one row and `other_trials` counts every variant of them.
     """
     cur.execute(
         """
-        SELECT i.name, i.affiliation, ti.role, ti.delisted_at,
+        SELECT c.name, c.affiliation, ti.role,
+               CASE WHEN bool_or(ti.delisted_at IS NULL) THEN NULL
+                    ELSE max(ti.delisted_at) END AS delisted_at,
                (SELECT count(DISTINCT x.nct_id)
                   FROM trial_investigators x
-                 WHERE x.investigator_id = i.id
+                  JOIN investigators xi ON xi.id = x.investigator_id
+                 WHERE coalesce(xi.canonical_id, xi.id) = c.id
                    AND x.delisted_at IS NULL
-                   AND x.nct_id <> ti.nct_id) AS other_trials
+                   AND x.nct_id <> %(nct)s) AS other_trials
         FROM trial_investigators ti
         JOIN investigators i ON i.id = ti.investigator_id
-        WHERE ti.nct_id = %s
-        ORDER BY (ti.role = 'PRINCIPAL_INVESTIGATOR') DESC, i.name
+        JOIN investigators c ON c.id = coalesce(i.canonical_id, i.id)
+        WHERE ti.nct_id = %(nct)s
+        GROUP BY c.id, c.name, c.affiliation, ti.role
+        ORDER BY (ti.role = 'PRINCIPAL_INVESTIGATOR') DESC, c.name
         """,
-        (nct_id,),
+        {"nct": nct_id},
     )
     return [ExploreInvestigator(**row) for row in cur.fetchall()]
 
 
 def _interventions(cur, nct_id: str) -> List[ExploreIntervention]:
-    """What the trial administers, by term as the registry received it."""
+    """What the trial administers, by term as the registry received it.
+
+    Grouped by canonical identity, which is where the merge is most visible:
+    'Semaglutide' (90 trials) and 'semaglutide' (12) were two rows carrying
+    two counts, and are now one. It still under-counts a real drug — the
+    merge is casefold-and-punctuation only, so 'Semaglutide 2.4 mg' and
+    'Placebo semaglutide' stay separate, correctly. The page says so.
+    """
     cur.execute(
         """
-        SELECT it.name, it.type, tri.delisted_at,
+        SELECT c.name, c.type,
+               CASE WHEN bool_or(tri.delisted_at IS NULL) THEN NULL
+                    ELSE max(tri.delisted_at) END AS delisted_at,
                (SELECT count(DISTINCT x.nct_id)
                   FROM trial_interventions x
-                 WHERE x.term_id = it.id
+                  JOIN intervention_terms xt ON xt.id = x.term_id
+                 WHERE coalesce(xt.canonical_id, xt.id) = c.id
                    AND x.delisted_at IS NULL
-                   AND x.nct_id <> tri.nct_id) AS other_trials
+                   AND x.nct_id <> %(nct)s) AS other_trials
         FROM trial_interventions tri
-        JOIN intervention_terms it ON it.id = tri.term_id
-        WHERE tri.nct_id = %s
-        ORDER BY it.type, it.name
+        JOIN intervention_terms t ON t.id = tri.term_id
+        JOIN intervention_terms c ON c.id = coalesce(t.canonical_id, t.id)
+        WHERE tri.nct_id = %(nct)s
+        GROUP BY c.id, c.name, c.type
+        ORDER BY c.type, c.name
         """,
-        (nct_id,),
+        {"nct": nct_id},
     )
     return [ExploreIntervention(**row) for row in cur.fetchall()]

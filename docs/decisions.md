@@ -2696,3 +2696,78 @@ mysterious: one trial tagged by tumour morphology, the other by AJCC stage,
 no shared string, both breast cancer.
 
 396 tests pass.
+
+## 2026-09-04 — Step 8 unit 3: the merge, scoped by measurement and written as a pointer
+
+Units 1-2 extracted everything unmerged on purpose so the registry's own
+words survived and any later merge had a baseline. This is that merge.
+
+**Measured before designing anything**, which cut the scope in half:
+
+| table | groups | rows collapsed | of |
+|---|---|---|---|
+| sites | 2,395 | 3,033 | 51,317 (5.9%) |
+| intervention_terms | 650 | 783 | 14,492 |
+| investigators | 99 | 111 | 7,722 |
+| **organizations** | **0** | **0** | already clean |
+
+Organizations got no column. The symmetric design gives all four tables the
+same treatment; the data says one of them has nothing to fix, and building
+it anyway is a merge with no duplicates to merge.
+
+**The "381 Madrid facility strings" that motivated this column are 381
+different Madrid hospitals**, not 381 spellings of one. The real duplication
+is smaller and dumber: 11 spellings of one Guangzhou cancer centre differing
+only in hyphens and capitals.
+
+**It writes a pointer, never a delete.** `canonical_id` is NULL for the ~94%
+of rows that are their own canonical form and otherwise points at the row
+chosen to represent the group. No row is removed, no edge is rewritten, and
+setting the column back to NULL restores the unmerged extraction exactly.
+Merging is a *judgement* about the data, and a judgement written
+destructively cannot be revisited (sec. 3, sec. 4). Same instinct as
+`delisted_at`: stamp, never delete.
+
+**The rule is deterministic and deliberately timid** — casefold, collapse
+non-alphanumeric runs to one space, trim. No edit distance, no abbreviation
+expansion, no model. That is what makes 3,033 merges safe to apply with
+nobody reviewing them individually. It merges `Semaglutide` with
+`semaglutide` (90 + 12 = 102 trials) and correctly does NOT merge
+`Placebo semaglutide` or `Semaglutide 2.4 mg` — a placebo arm is not the
+drug and a dose is not the intervention.
+
+**Identity boundaries are the dangerous part, so the script aborts rather
+than trusting itself.** Sites merge on the (facility, city, country) triple;
+a mutation dropping city and country was run and the guard caught it —
+**8,856 sites would have merged across a place boundary**, which would have
+reported trials as running on other continents. Nothing was committed. Terms
+never merge across `type` (real case: `semaglutide` exists as DRUG,
+BIOLOGICAL and OTHER, and only the DRUG pair may merge). Investigators never
+merge across affiliation.
+
+**What it actually changed, through the endpoint:**
+
+- RxPONDER's site-neighbours **1,497 -> 1,624**. 127 trials were invisible
+  purely because they spelled a shared hospital differently.
+- Its intervention-neighbours 282 -> 320; Letrozole's reach 114 -> 125.
+- NCT01740427 reported **299 sites for 292 real places**, with seven
+  duplicated rows on screen. Now 292.
+- The city rollup groups on the normalised name, so `Heraklion - Crete` and
+  `Heraklion, Crete` stop being two cities.
+- A collapsed site whose edges disagree about recruitment status resolves to
+  **NULL, not to one of them** — the same answer a disputed geoPoint gets.
+
+**A test that passed by luck, found by mutation.** The first version of the
+endpoint-level merge test used the busiest trial, which has no duplicate
+spellings at all — so removing the canonical join from the API broke nothing
+and 16 tests stayed green. The fixture now selects a trial where raw edges
+and canonical sites genuinely differ, and the mutation fails it. This is the
+second time this session that a green suite hid a real regression, and both
+times the fixture was the problem rather than the assertion.
+
+**It runs in monitor.yml after the graph backfill**, never before: the rows
+it must consider are the ones the backfill just inserted. Idempotent —
+verified by a second run changing 0 pointers, and by a read-only test that
+re-derives every assignment and compares it to what is stored.
+
+416 tests pass.

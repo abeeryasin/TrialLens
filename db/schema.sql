@@ -405,3 +405,57 @@ ALTER TABLE sites ADD COLUMN IF NOT EXISTS lon   DOUBLE PRECISION;
 -- the trial's record stopped listing this location at all. A site can be
 -- live (delisted_at IS NULL) while its recruitment_status reads 'WITHDRAWN'.
 ALTER TABLE trial_sites ADD COLUMN IF NOT EXISTS recruitment_status TEXT;
+
+-- ---------------------------------------------------------------------------
+-- Entity merging (step 8 unit 3, 2026-09-04).
+--
+-- Units 1-2 extracted everything unmerged ON PURPOSE, so that the registry's
+-- own words survived and any later merge had a baseline to be checked
+-- against. This is that later merge, and it is deliberately the smallest
+-- thing that works: a POINTER, never a delete.
+--
+-- NULL means "this row is its own canonical form" — the overwhelming
+-- majority. A value points at the id of the row chosen to represent the
+-- group. Read identity as `coalesce(canonical_id, id)` everywhere.
+--
+-- Nothing is removed and no edge is rewritten, so the unmerged extraction
+-- is still exactly on file and the whole merge is undone by setting this
+-- column back to NULL. That matters because merging is a JUDGEMENT about
+-- the data — "these two strings are one thing" — and a judgement written
+-- destructively cannot be revisited (CLAUDE.md sec. 3 and 4).
+--
+-- WHAT COUNTS AS THE SAME THING is deterministic and deliberately timid:
+-- casefold, replace every non-alphanumeric run with a single space, trim.
+-- Nothing else. No fuzzy distance, no abbreviation expansion, no model.
+-- 'Sun Yat-Sen University Cancer Center' and 'Sun yat sen university
+-- cancer center' merge (11 real spellings of that one Guangzhou hospital);
+-- 'Semaglutide' and 'semaglutide' merge, while 'Placebo semaglutide' and
+-- 'Semaglutide 2.4 mg' correctly do NOT — a placebo arm is not the drug,
+-- and a dose is not the same intervention.
+--
+-- Measured 2026-09-04 before writing any of this:
+--   sites               2,395 groups, 3,033 rows collapsed of 51,317 (5.9%)
+--   intervention_terms    650 groups,   783 rows collapsed
+--   investigators          99 groups,   111 rows collapsed
+--   organizations           0 groups — ALREADY CLEAN, so it gets no column.
+--
+-- That last line is why this is scoped the way it is. The obvious symmetric
+-- design gives all four tables the same treatment; the data says one of
+-- them has nothing to fix, and building it anyway would be a merge with no
+-- duplicates to merge.
+--
+-- Sites merge on the (facility, city, country) TRIPLE, never on facility
+-- alone: the same hospital name genuinely recurs in different cities, and
+-- collapsing those would move a trial to another country. The 381 Madrid
+-- facility strings that motivated this column are, on inspection, 381
+-- different Madrid hospitals — not 381 spellings of one.
+-- ---------------------------------------------------------------------------
+ALTER TABLE sites              ADD COLUMN IF NOT EXISTS canonical_id INTEGER REFERENCES sites(id);
+ALTER TABLE intervention_terms ADD COLUMN IF NOT EXISTS canonical_id INTEGER REFERENCES intervention_terms(id);
+ALTER TABLE investigators      ADD COLUMN IF NOT EXISTS canonical_id INTEGER REFERENCES investigators(id);
+
+-- Explore groups by canonical identity on every read, so these carry the
+-- same weight as the reverse-direction edge indexes above.
+CREATE INDEX IF NOT EXISTS idx_sites_canonical              ON sites(canonical_id);
+CREATE INDEX IF NOT EXISTS idx_intervention_terms_canonical ON intervention_terms(canonical_id);
+CREATE INDEX IF NOT EXISTS idx_investigators_canonical      ON investigators(canonical_id);

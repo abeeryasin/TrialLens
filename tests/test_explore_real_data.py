@@ -156,15 +156,30 @@ def test_the_status_counts_match_the_database(cur, busiest):
     """The buckets adding up is not the same as their being right — 0/0/N
     adds up perfectly while reporting every site as unstated."""
     nct_id, body = busiest
+    # Collapsed to canonical sites first, the way the endpoint counts since
+    # the merge. Comparing against raw edges passed only because this
+    # particular trial happens to have no duplicate spellings — an
+    # invariant that is true by luck is not an invariant.
     real = one(
         cur,
         """
+        WITH live AS (
+            SELECT CASE WHEN count(DISTINCT nullif(trim(ts.recruitment_status), '')) = 1
+                         AND count(*) FILTER (
+                                 WHERE nullif(trim(ts.recruitment_status), '') IS NULL) = 0
+                        THEN max(nullif(trim(ts.recruitment_status), ''))
+                        ELSE NULL END AS status
+            FROM trial_sites ts
+            JOIN sites s ON s.id = ts.site_id
+            WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
+            GROUP BY coalesce(s.canonical_id, s.id)
+        )
         SELECT count(*) AS total,
-               count(*) FILTER (WHERE recruitment_status = 'RECRUITING') AS recruiting,
-               count(*) FILTER (WHERE nullif(trim(recruitment_status), '') IS NOT NULL
-                                  AND recruitment_status <> 'RECRUITING') AS other_stated,
-               count(*) FILTER (WHERE nullif(trim(recruitment_status), '') IS NULL) AS not_stated
-        FROM trial_sites WHERE nct_id = %s AND delisted_at IS NULL
+               count(*) FILTER (WHERE status = 'RECRUITING') AS recruiting,
+               count(*) FILTER (WHERE status IS NOT NULL AND status <> 'RECRUITING')
+                   AS other_stated,
+               count(*) FILTER (WHERE status IS NULL) AS not_stated
+        FROM live
         """,
         (nct_id,),
     )
@@ -192,11 +207,17 @@ def test_cities_total_is_the_real_denominator_not_the_capped_list(cur, busiest):
     real = one(
         cur,
         """
+        -- Normalised, as the rollup groups: 'Heraklion - Crete' and
+        -- 'Heraklion, Crete' are one city, and counting them as two
+        -- reported a trial running in more places than it does.
         SELECT count(*) AS cities FROM (
-            SELECT s.country, s.city
+            SELECT btrim(regexp_replace(lower(coalesce(s.country, '')),
+                                        '[^a-z0-9]+', ' ', 'g')) AS k,
+                   btrim(regexp_replace(lower(coalesce(s.city, '')),
+                                        '[^a-z0-9]+', ' ', 'g')) AS c
             FROM trial_sites ts JOIN sites s ON s.id = ts.site_id
             WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
-            GROUP BY s.country, s.city
+            GROUP BY 1, 2
         ) grouped
         """,
         (nct_id,),
@@ -294,12 +315,20 @@ def test_the_neighbour_total_is_the_real_two_hop_count(cur, busiest):
     real = one(
         cur,
         """
+        -- Through canonical identity, as the endpoint hops since the merge.
+        -- Two trials at one hospital spelled differently did not register as
+        -- sharing it before, so this total legitimately GREW (1,497 -> 1,624
+        -- for the busiest trial on 2026-09-04). A test still asserting the
+        -- raw-edge number would be pinning the bug in place.
         WITH mine AS (
-            SELECT site_id FROM trial_sites
-            WHERE nct_id = %(nct)s AND delisted_at IS NULL
+            SELECT DISTINCT coalesce(s.canonical_id, s.id) AS k
+            FROM trial_sites ts JOIN sites s ON s.id = ts.site_id
+            WHERE ts.nct_id = %(nct)s AND ts.delisted_at IS NULL
         )
         SELECT count(DISTINCT ts.nct_id) AS neighbours
-        FROM trial_sites ts JOIN mine ON mine.site_id = ts.site_id
+        FROM trial_sites ts
+        JOIN sites s2 ON s2.id = ts.site_id
+        JOIN mine ON mine.k = coalesce(s2.canonical_id, s2.id)
         WHERE ts.delisted_at IS NULL AND ts.nct_id <> %(nct)s
         """,
         {"nct": nct_id},
@@ -355,3 +384,113 @@ def test_an_unknown_trial_is_404_against_the_real_database(client):
     nct_id that does not exist, rather than matching some row."""
     response = client.get("/explore/NCT00000000")
     assert response.status_code == 404
+
+
+def test_the_site_total_counts_canonical_sites_not_raw_edges(cur, busiest):
+    """Step 8 unit 3, seen through the endpoint.
+
+    Before the merge, 11 spellings of one Guangzhou hospital were 11 sites,
+    and 54 (trial, site) pairs listed the same hospital twice in one trial —
+    an inflated count and a visibly duplicated row. The endpoint must report
+    the collapsed number, or the merge is another layer nobody can see."""
+    nct_id, body = busiest
+    real = one(
+        cur,
+        """
+        SELECT count(*) AS raw_edges,
+               count(DISTINCT coalesce(s.canonical_id, s.id)) AS canonical_sites
+        FROM trial_sites ts JOIN sites s ON s.id = ts.site_id
+        WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
+        """,
+        (nct_id,),
+    )
+    assert body["sites"]["total"] == real["canonical_sites"], (
+        f"{nct_id}: the endpoint reports {body['sites']['total']} sites but "
+        f"{real['canonical_sites']} distinct canonical sites exist"
+    )
+
+
+def test_a_collapsed_site_with_conflicting_statuses_reports_none(cur, busiest):
+    """Two rows for one hospital can carry different recruitment statuses.
+    Picking one would invent a fact, so disagreement resolves to "not
+    stated" — the same answer a disputed geoPoint gets."""
+    nct_id, body = busiest
+    cur.execute(
+        """
+        SELECT count(*) AS conflicted FROM (
+            SELECT coalesce(s.canonical_id, s.id) AS cid
+            FROM trial_sites ts JOIN sites s ON s.id = ts.site_id
+            WHERE ts.nct_id = %s AND ts.delisted_at IS NULL
+            GROUP BY 1
+            HAVING count(DISTINCT nullif(trim(ts.recruitment_status), '')) > 1
+        ) c
+        """,
+        (nct_id,),
+    )
+    conflicted = cur.fetchone()["conflicted"]
+    stated = body["sites"]["recruiting"] + body["sites"]["other_stated"]
+    total = body["sites"]["total"]
+    assert stated + body["sites"]["not_stated"] == total
+    if conflicted:
+        assert body["sites"]["not_stated"] >= conflicted, (
+            f"{nct_id}: {conflicted} collapsed site(s) have conflicting statuses "
+            "but were not reported as unstated"
+        )
+
+
+@pytest.fixture(scope="module")
+def with_duplicate_sites(cur, client):
+    """A trial whose raw site edges outnumber its canonical sites.
+
+    The busiest trial does NOT have this property, so every merge assertion
+    written against it passed whether or not the endpoint read through
+    canonical_id at all — a mutation removing that join was caught by
+    nothing. An invariant that holds by luck is not an invariant, so this
+    fixture picks a trial where the two numbers genuinely differ."""
+    row = one(
+        cur,
+        """
+        SELECT ts.nct_id,
+               count(*) AS raw_edges,
+               count(DISTINCT coalesce(s.canonical_id, s.id)) AS canonical_sites
+        FROM trial_sites ts JOIN sites s ON s.id = ts.site_id
+        WHERE ts.delisted_at IS NULL
+        GROUP BY 1
+        HAVING count(*) <> count(DISTINCT coalesce(s.canonical_id, s.id))
+        ORDER BY count(*) - count(DISTINCT coalesce(s.canonical_id, s.id)) DESC,
+                 ts.nct_id
+        LIMIT 1
+        """,
+    )
+    if row is None:
+        pytest.skip("no trial currently lists the same site under two spellings")
+    response = client.get(f"/explore/{row['nct_id']}")
+    assert response.status_code == 200
+    return row, response.json()
+
+
+def test_a_duplicated_site_is_counted_once(cur, with_duplicate_sites):
+    """The merge, where it actually changes a number a researcher reads.
+
+    Real case on 2026-09-04: NCT01740427 held 299 site edges for 292 real
+    places. Before the merge the page said 299 and showed seven duplicated
+    rows."""
+    row, body = with_duplicate_sites
+    assert row["raw_edges"] > row["canonical_sites"], "fixture picked a trial with no duplicates"
+    assert body["sites"]["total"] == row["canonical_sites"], (
+        f"{row['nct_id']}: endpoint reports {body['sites']['total']} sites but "
+        f"{row['canonical_sites']} distinct places exist among "
+        f"{row['raw_edges']} edges — the read is not going through canonical_id"
+    )
+
+
+def test_a_duplicated_site_appears_once_in_the_listed_sites(with_duplicate_sites):
+    """Not just the count: the visible list must not repeat the hospital
+    either, which is what a researcher scanning for somewhere to phone
+    actually sees."""
+    row, body = with_duplicate_sites
+    listed = body["sites"]["listed"]
+    identities = [(s["facility"], s["city"], s["country"]) for s in listed]
+    assert len(identities) == len(set(identities)), (
+        f"{row['nct_id']}: the site list repeats a place"
+    )
