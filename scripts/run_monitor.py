@@ -31,9 +31,22 @@ from api.prose_interpreter import get_prose_amendments, interpret_amendments_bat
 
 CONDITIONS_FILE = ROOT / "config" / "tracked_conditions.json"
 
-# Step 7c budget and limits
-PROSE_BUDGET_USD = 0.25  # Hard cap for this monitor run
+# Step 7c budget and limits.
+PROSE_BUDGET_USD = 0.25  # Hard cap for ONE monitor run
 PROSE_MAX_CALLS = 50  # Never interpret more than this per run
+
+# A per-run cap says nothing about what a 6-hourly cron adds up to: 0.25 x 4
+# runs x 30 days is ~$30/month against a project whose standing budget is a
+# few dollars. This is the ceiling that actually binds. Spend is recorded on
+# monitor_runs.prose_spend_usd, so the window survives restarts and is
+# auditable after the fact rather than living in a variable.
+#
+# Sized against real volume, not the worst case: 42 prose amendments existed
+# on file in total, at ~$0.004 each, so a genuinely busy month is cents. This
+# leaves roughly 5-10x headroom and still fails long before the cron could
+# quietly drain the account.
+PROSE_ROLLING_CEILING_USD = 1.00
+PROSE_ROLLING_WINDOW_DAYS = 30
 
 
 def create_run_record(conn):
@@ -47,19 +60,45 @@ def create_run_record(conn):
     return run_id
 
 
-def update_run_record(conn, run_id, trials_checked, changes_detected, status="completed"):
+def update_run_record(conn, run_id, trials_checked, changes_detected,
+                      prose_spend_usd=0.0, status="completed"):
     """Update a monitor_runs record with results."""
     with conn.cursor() as cur:
         cur.execute(
             """
             UPDATE monitor_runs
             SET completed_at = now(), status = %s,
-                trials_checked = %s, changes_detected = %s
+                trials_checked = %s, changes_detected = %s,
+                prose_spend_usd = %s
             WHERE id = %s
             """,
-            (status, trials_checked, changes_detected, run_id),
+            (status, trials_checked, changes_detected, prose_spend_usd, run_id),
         )
     conn.commit()
+
+
+def rolling_budget_remaining(conn):
+    """Dollars left in the rolling window before step 7c must stop calling.
+
+    Sums what previous runs actually recorded rather than trusting a counter
+    held in memory, so the ceiling survives restarts, reruns and a workflow
+    dispatched by hand — and stays auditable afterwards, which a variable
+    would not be.
+
+    Counts by `started_at`, not `completed_at`: a run that spent money and
+    then died never gets a completed_at, and billing that a crash makes
+    invisible is exactly the failure this guard exists to prevent.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT coalesce(sum(prose_spend_usd), 0)
+            FROM monitor_runs
+            WHERE started_at > now() - interval '{PROSE_ROLLING_WINDOW_DAYS} days'
+            """
+        )
+        spent = float(cur.fetchone()[0])
+    return max(0.0, PROSE_ROLLING_CEILING_USD - spent)
 
 
 def run_prose_interpretation():
@@ -70,8 +109,26 @@ def run_prose_interpretation():
     Stores interpretations in study_changes.prose_interpretation (JSONB).
     """
     print("\nStep 7c: Interpreting prose amendments...", flush=True)
+    # Declared OUTSIDE the try on purpose. The except below used to return a
+    # flat 0.0, so a run that spent money and then failed while storing would
+    # record nothing — a budget guard fed by an accounting hole. Whatever was
+    # actually spent has to survive the exception and reach monitor_runs.
+    spend = 0.0
     try:
         conn = psycopg2.connect(os.environ["DATABASE_URL"])
+
+        remaining = rolling_budget_remaining(conn)
+        if remaining <= 0:
+            print(
+                f"  SKIPPED: the last {PROSE_ROLLING_WINDOW_DAYS} days already "
+                f"spent the ${PROSE_ROLLING_CEILING_USD:.2f} ceiling. No call "
+                "made. Raise PROSE_ROLLING_CEILING_USD deliberately if this is "
+                "wrong — it is not supposed to be routine.",
+                flush=True,
+            )
+            conn.close()
+            return 0.0
+
         amendments = get_prose_amendments(conn, hours_ago=6)
 
         if not amendments:
@@ -79,9 +136,18 @@ def run_prose_interpretation():
             conn.close()
             return 0.0
 
-        print(f"  Found {len(amendments)} prose field changes — interpreting...", flush=True)
+        # The tighter of the two caps. Without the min(), a single run could
+        # spend its full per-run budget straight through a ceiling that had
+        # only cents left.
+        budget = min(PROSE_BUDGET_USD, remaining)
+        print(
+            f"  Found {len(amendments)} prose field changes — interpreting "
+            f"(budget ${budget:.4f}: ${remaining:.4f} left in the "
+            f"{PROSE_ROLLING_WINDOW_DAYS}-day window)...",
+            flush=True,
+        )
         results, spend = interpret_amendments_batch(
-            amendments, max_cost_usd=PROSE_BUDGET_USD, max_calls=PROSE_MAX_CALLS
+            amendments, max_cost_usd=budget, max_calls=PROSE_MAX_CALLS
         )
 
         # Store interpretations
@@ -114,9 +180,12 @@ def run_prose_interpretation():
         )
         return spend
     except Exception as e:
-        print(f"  ERROR in step 7c: {e}", flush=True)
-        # Don't fail the whole monitor job if prose interpretation fails
-        return 0.0
+        # Don't fail the whole monitor job if prose interpretation fails —
+        # but DO return whatever was already spent. Returning 0.0 here is how
+        # a guard silently stops guarding: the money leaves the account and
+        # the rolling window never learns about it.
+        print(f"  ERROR in step 7c after ${spend:.4f} spent: {e}", flush=True)
+        return spend
 
 
 def main():
@@ -148,7 +217,8 @@ def main():
     # reading the previous completed run, and the gap grows until the alarm
     # fires — which is the honest outcome for a run that did not finish.
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    update_run_record(conn, run_id, total_trials_checked, total_changes)
+    update_run_record(conn, run_id, total_trials_checked, total_changes,
+                      prose_spend_usd=total_spend)
     conn.close()
 
     print(f"\nMonitor run #{run_id} complete.", flush=True)

@@ -153,6 +153,25 @@ CREATE TABLE IF NOT EXISTS monitor_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_monitor_runs_completed_at ON monitor_runs(completed_at DESC);
 
+-- What step 7c actually spent on this run (2026-09-03). NUMERIC, never a
+-- float: money summed across 120 runs a month should not accumulate binary
+-- rounding error in the value a spend ceiling is compared against.
+--
+-- This column IS the rolling budget. run_monitor.rolling_budget_remaining()
+-- sums it over the last 30 days and refuses to call when the ceiling is
+-- reached, because PROSE_BUDGET_USD only ever bounded ONE run and a 6-hourly
+-- cron makes 120 of them a month. Recording it rather than holding a counter
+-- in memory means the window survives restarts and stays auditable.
+--
+-- Summed by `started_at`, so a run that spent money and then crashed before
+-- completing still counts against the ceiling.
+--
+-- NULL on runs from before this existed, and on run #1 which was backfilled
+-- from a proxy. coalesce(...,0) in the sum treats those as "no spend
+-- recorded", which is true: step 7c had never run.
+ALTER TABLE monitor_runs ADD COLUMN IF NOT EXISTS prose_spend_usd NUMERIC(10, 4);
+CREATE INDEX IF NOT EXISTS idx_monitor_runs_started_at ON monitor_runs(started_at DESC);
+
 -- ---------------------------------------------------------------------------
 -- Explore / knowledge graph (step 8 unit 2, 2026-09-03).
 --

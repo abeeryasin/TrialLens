@@ -54,17 +54,43 @@ jobs:
       # without this the script dies on KeyError: 'DATABASE_URL' before the
       # first condition is ingested.
       #
-      # ANTHROPIC_API_KEY is deliberately absent: no such secret is
-      # configured on this repo, so step 7c's interpretation call cannot run
-      # here. It fails inside run_prose_interpretation's except clause and
-      # the monitor job continues, which is the intended degradation — but
-      # it does mean prose interpretation has never actually run on the
-      # schedule. Add the secret to turn it on.
+      # ANTHROPIC_API_KEY is optional. Without it, step 7c's interpretation
+      # call fails inside run_prose_interpretation's except clause and the
+      # monitor job continues — the intended degradation. With it, spend is
+      # bounded twice: PROSE_BUDGET_USD per run, and a rolling 30-day ceiling
+      # read from monitor_runs.prose_spend_usd, because a per-run cap alone
+      # says nothing about what four runs a day add up to.
       - name: Run the Monitor job
         env:
           API_BASE_URL: http://127.0.0.1:8000
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scripts/run_monitor.py
+
+      # The graph is a snapshot and the ingest above keeps moving, so a trial
+      # ingested since the last backfill has no edges at all until this runs.
+      # Run #3 on 2026-09-02 ingested 174 changes and left the graph behind;
+      # it was caught by reconciliation rather than by anything automatic.
+      # This is the "stop being a manual step" that
+      # test_the_graph_is_not_behind_the_studies_it_describes asks for.
+      #
+      # Safe to run every time: every write is idempotent, and on a quiet run
+      # it is a ~30s no-op reporting 0 rows changed. It also runs the
+      # delisting pass, so a site a trial dropped this cycle is stamped now
+      # rather than whenever someone remembers.
+      #
+      # `if: always()` for the same reason as the drift checks below — a
+      # partial ingest is exactly when the graph most needs reconciling, and
+      # the backfill only ever reads what is actually on file.
+      #
+      # Note this is a direct-DB script inside a repeating flow, which is the
+      # §5 tension run_monitor.py already carries. Routing the rebuild
+      # through FastAPI is the cleaner end state and is deferred, not denied.
+      - name: Rebuild the Explore graph from what was just ingested
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python scripts/backfill_graph_entities.py
 
       # Data-drift checks, run here rather than in tests.yml on purpose.
       # These assert things about what ClinicalTrials.gov actually sends —

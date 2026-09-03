@@ -144,18 +144,36 @@ seen (it needs a 12-hour-dead cron). `st.metric` carries its heading on
 `.label` and its figure on `.value` — read both, or half the footer is
 invisible to every assertion.
 
-**Step 7c is done** (2026-09-02). One AI call interprets the *prose* half
-of amendments (eligibility_criteria, brief_summary, primary_outcomes),
-running only in the scheduled job, never in the request path. Querying first
-verified scope: 42 real prose amendments on file (not 212); 32 successfully
-interpreted (76%). Cost: $0.168 for all, well under $0.30 budget. Model:
-claude-haiku-4-5, ~$0.004/call. Interpretations stored in
-study_changes.prose_interpretation (JSONB). Example: "Geographic scope
-narrowed from multi-state to rural Nebraska/Kansas only; removed
-non-sibling specification"—reducing recruitment pool from 7 to 2 states.
-The deterministic layer shipped first on purpose; this AI layer now
-addresses exactly what arithmetic cannot. `docs/plan_relevance_column.md`
-holds a second, further deferred AI feature (trial relevance classification).
+**Step 7c is written but has never actually run, and stores nothing.**
+Corrected 2026-09-03 — the previous text here claimed 32 interpretations
+were stored, and the live table holds **zero rows**. Two separate faults,
+both found by dispatching the workflow rather than reading the code:
+
+- The write used `UPDATE ... ORDER BY ... LIMIT`, which is MySQL. Postgres
+  rejects it outright and `run_prose_interpretation`'s `except` swallowed it
+  into a printed one-liner. The $0.168 was really spent; the interpretations
+  were computed and dropped. **Fixed** (writes by primary key now), but
+  unverified against a real call.
+- There is **no `ANTHROPIC_API_KEY` secret on the repo** — only
+  `DATABASE_URL` and `DATABASE_URL_READONLY` — so the interpretation call
+  cannot run on the schedule at all. It fails into the same `except` and the
+  monitor run continues. Adding the secret is the only thing that turns this
+  on, and a key must never be written into a repo file (§2).
+
+What is true: one AI call interprets the *prose* half of amendments
+(eligibility_criteria, brief_summary, primary_outcomes) in the scheduled job
+only, never the request path. Querying first cut scope from 212 to the 42
+real prose amendments on file, of which 32 interpreted successfully (76%) in
+a **manual** run — that is where the $0.168 and the ~$0.004/call figure come
+from (claude-haiku-4-5). Storage target is
+`study_changes.prose_interpretation` (JSONB).
+
+**Before enabling it, note the cap is per-run, not per-day:**
+`PROSE_BUDGET_USD = 0.25` with `PROSE_MAX_CALLS = 50`, against a 6-hourly
+cron — a worst case of ~$1/day, ~$30/month, against a project whose standing
+budget is far smaller. Real volume is usually zero (runs 4, 5 and 6 on
+2026-09-03 each found 0 changes), but nothing enforces a cumulative ceiling.
+`docs/plan_relevance_column.md` holds a second, further deferred AI feature.
 
 **The amendment grouping key is the trial's own `last_update_post_date`,
 never `detected_at`** — one cron run spreads its writes across a minute
