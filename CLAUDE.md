@@ -65,7 +65,28 @@ Steps 1-6 are built, tested, and live: schema + ingestion, the
 FastAPI-only-door layer, scheduler/cron automation (a real 6-hour cron
 running on GitHub Actions), Discover live-fallback (`GET /discover`), and
 the Streamlit frontend — Discover, Understand, and the Monitor feed
-(`GET /changes`). Explore and Investigate aren't built yet.
+(`GET /changes`). **332 tests pass.** Investigate isn't built.
+
+**START HERE (next session, 2026-09-04).** Step 8's graph is built and
+**entirely invisible** — nothing a user can see changed in three days. There
+is no `explore` router (`api/main.py` registers studies, discover, changes,
+watch) and nothing in `api/` or `frontend/` reads the graph tables. Sitting
+in the database, unreachable: **191,864 edges** across 8 tables, **49,606
+sites with coordinates**, **40,011 edges with a recruitment status**, and
+**7 prose interpretations**. `frontend/labels.format_site_status()` is
+written and called by nothing.
+
+So: **build `GET /explore/{nct_id}` and `frontend/pages/4_Explore.py`
+first, and defer unit 3 (the merge step).** The roadmap lists merge first;
+that order is wrong. The merge exists to fix "381 Madrid facility strings
+are 381 sites", but no page has ever displayed a site list — group by city
+and country, which is what "who else works in this space?" actually asks,
+and those 381 variants may never surface. Building the merge first risks
+solving a problem the UI does not have, which is the step 7 mistake exactly.
+Let the real page say whether merging is needed. Requirements the page must
+meet are already written in `docs/plan_explore_nodes.md` §4b — including
+that 1,666 sites cannot be placed on a map and the page has to say so rather
+than silently shrinking the result set.
 
 **Step 7 (AI ranking layer) was built, measured, and removed** on
 2026-09-01. Measuring it produced the case against it: four of its five
@@ -116,8 +137,36 @@ of 400 was replaced by a real count of 163" instead of the old generic sentence.
 Required walking the trial's history backwards to establish which count was true
 before each amendment. All 279 tests pass.
 
-**Next steps (decided 2026-09-02):**
-1. **Step 8** — Explore (knowledge graph)
+**Step 8 (Explore) — units 1, 2 and 2b are done** (2026-09-02/03), unit 3
+and the UI are not. See the START HERE block above for what to do next and
+why the roadmap's ordering was changed.
+
+- **Unit 1, the shape:** relational tables, not a graph database. The graph
+  already exists in `studies` — `lead_sponsor` holding 'Mayo Clinic' on 134
+  rows *is* 134 edges, written as repeated text. At 11,518 trials and 2-3
+  hop questions, index-free adjacency buys nothing a second sync path
+  doesn't cost back.
+- **Unit 2, extraction:** 6,207 organizations (lead sponsors and
+  collaborators in ONE table — 887 names are both), 51,272 sites, 7,717
+  investigators, 14,468 intervention terms, 191,864 edges. All from stored
+  `raw_json`, no CT.gov call. **Nothing is merged on purpose** — 381 Madrid
+  facility strings are 381 sites, and that unmerged extraction is the
+  baseline any later merge gets checked against.
+- **Unit 2b, node ranking + site enrichment:** an evidence review
+  (`docs/plan_explore_nodes.md`) asked whether researchers care about
+  collaborations. They don't, and the reason is definitional — CT.gov's
+  collaborator field covers funders *and* co-designers with no way to
+  separate them, reaches 37.4% of trials, and explicitly excludes
+  individuals. **Kept, but demoted from a network to traverse to an
+  attribute to filter on.** Sites lead instead at 93.8% coverage, so the
+  fields the parser had dropped were backfilled from `raw_json`.
+- **Edges are stamped `delisted_at`, never deleted.** Extraction is
+  insert-only, so a trial dropping a site left the edge live and Explore
+  would have said the trial still runs there. Stamping keeps it as a
+  finding — "this trial quietly dropped three sites" is a result in a
+  watch-over-time product. NULL means live. **The backfill now runs inside
+  `monitor.yml` after every ingest**, so the graph no longer goes stale.
+- 18 real-data tests, 14/14 mutations caught, all rolled back in-transaction.
 
 **Also done earlier this session:** enrollment_type switches now name the numbers,
 e.g. "the target of 400 was replaced by a real count of 163" instead of
@@ -144,35 +193,56 @@ seen (it needs a 12-hour-dead cron). `st.metric` carries its heading on
 `.label` and its figure on `.value` — read both, or half the footer is
 invisible to every assertion.
 
-**Step 7c is written but has never actually run, and stores nothing.**
-Corrected 2026-09-03 — the previous text here claimed 32 interpretations
-were stored, and the live table holds **zero rows**. Two separate faults,
-both found by dispatching the workflow rather than reading the code:
+**Step 7c is live and now genuinely stores interpretations** (2026-09-03/04).
+The `ANTHROPIC_API_KEY` secret was added on 2026-09-03 and the first real
+batch ran: 14 prose changes found, 8 stored. Everything below replaces the
+earlier "stores nothing" state, which was true until that key existed.
 
-- The write used `UPDATE ... ORDER BY ... LIMIT`, which is MySQL. Postgres
-  rejects it outright and `run_prose_interpretation`'s `except` swallowed it
-  into a printed one-liner. The $0.168 was really spent; the interpretations
-  were computed and dropped. **Fixed** (writes by primary key now), but
-  unverified against a real call.
-- There is **no `ANTHROPIC_API_KEY` secret on the repo** — only
-  `DATABASE_URL` and `DATABASE_URL_READONLY` — so the interpretation call
-  cannot run on the schedule at all. It fails into the same `except` and the
-  monitor run continues. Adding the secret is the only thing that turns this
-  on, and a key must never be written into a repo file (§2).
+Three faults were fixed once real output could be read:
 
-What is true: one AI call interprets the *prose* half of amendments
-(eligibility_criteria, brief_summary, primary_outcomes) in the scheduled job
-only, never the request path. Querying first cut scope from 212 to the 42
-real prose amendments on file, of which 32 interpreted successfully (76%) in
-a **manual** run — that is where the $0.168 and the ~$0.004/call figure come
-from (claude-haiku-4-5). Storage target is
-`study_changes.prose_interpretation` (JSONB).
+- The write used MySQL's `UPDATE ... ORDER BY ... LIMIT`; Postgres rejects it
+  and the `except` swallowed it. Writes by primary key now, and
+  `get_prose_amendments` carries `id` so an interpretation lands on the exact
+  row it describes.
+- The no-change gate was `summary.lower() != "no change"`, an exact match
+  against prose the model writes freely. It wrote "No meaningful change—the
+  criteria were reformatted…" and a paid call announcing nothing was stored
+  as a finding. The model now fills in **`MEANINGFUL: yes|no`** and the gate
+  reads that field.
+- **`why_matters` was dropped** — ~48% of output tokens, and every weak line
+  in the batch lived there. `summary` is tethered to the diff and checkable;
+  `why_matters` was speculation stored beside it with equal authority (§2).
+  A clinical researcher told the AE denominator moved to all randomized
+  patients does not need to be told that is an ITT shift.
 
-**Before enabling it, note the cap is per-run, not per-day:**
-`PROSE_BUDGET_USD = 0.25` with `PROSE_MAX_CALLS = 50`, against a 6-hourly
-cron — a worst case of ~$1/day, ~$30/month, against a project whose standing
-budget is far smaller. Real volume is usually zero (runs 4, 5 and 6 on
-2026-09-03 each found 0 changes), but nothing enforces a cumulative ceiling.
+**Quality verdict on the first real batch, read row by row: 2 clearly
+valuable, 2 debatable, 4 reformatting.** Not "7 of 8 are real" — that claim
+was made after reading only four. The gate was then verified on the exact
+rows the old one got wrong: 4 real calls, **4/4 agreement with a human
+reading** (dropped NCT03674567 and NCT06803888, stored NCT06635980 and
+NCT05846789). Stored data reconciled: non-change row cleared, `why_matters`
+stripped, **7 interpretations on file**.
+
+**Cost is measured now, not multiplied.** `COST_ESTIMATE_PER_CALL` used to be
+the recorded spend as well as the pre-flight guess, so the ceiling summed a
+constant. Spend comes from `response.usage` at haiku-4-5's $1/$5 per MTok.
+A third bug fell out of that: spend was added only when an interpretation came
+back, so every "no change" call was real money recorded as $0.00 — invisible
+to its own ceiling. Billing keys on *a call happened* now.
+
+**Real cost: ~$0.00125/call** (measured over 4 calls, range
+$0.00066–$0.00297; the spread is input length). The 0.004 estimate is ~3x
+high and is left that way deliberately — it is the "may I spend more?" guard,
+and over-estimating stops early while under-estimating walks through the
+ceiling.
+
+**Two ceilings, and the binding one is cumulative:** `PROSE_BUDGET_USD = 0.25`
+and `PROSE_MAX_CALLS = 50` bound one run; `PROSE_ROLLING_CEILING_USD = 1.00`
+over `PROSE_ROLLING_WINDOW_DAYS = 30` bounds the month, read from
+`monitor_runs.prose_spend_usd`. Per-run budget is `min(budget, remaining)`.
+At the measured rate $1.00 buys roughly 800 calls, not the ~250 assumed when
+it was set. Recorded 30-day spend is $0.0320 — still yesterday's inflated
+arithmetic; every run from here records real money.
 `docs/plan_relevance_column.md` holds a second, further deferred AI feature.
 
 **The amendment grouping key is the trial's own `last_update_post_date`,
