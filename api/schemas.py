@@ -419,6 +419,218 @@ class DiscoverResponse(BaseModel):
     note: str
 
 
+class ExplorePlace(BaseModel):
+    """One country, or one city within a country, that a trial runs in.
+
+    A rollup exists because a site LIST is unusable at the top end: the
+    median trial has 1 site but the largest has 1,568 across 899 cities
+    (measured 2026-09-04). Grouping is also what defers the merge —
+    "who else works in this space?" is a question about places, and 381
+    spellings of one Madrid hospital collapse to one city either way.
+
+    The three status counts are separate rather than a recruiting/not
+    boolean because 71.4% of live site edges carry no stated status, and
+    folding those in with the closed ones would report silence as closure
+    (docs/plan_explore_nodes.md sec. 4b).
+    """
+
+    country: Optional[str] = None
+    city: Optional[str] = None  # None on a country-level row
+    sites: int
+    recruiting: int
+    other_stated: int
+    # Stated, but something other than RECRUITING — which is NOT the same as
+    # closed: NOT_YET_RECRUITING lives here too. The exact code is on each
+    # ExploreSite; this bucket only means "the registry said something".
+    not_stated: int
+
+
+class ExploreSite(BaseModel):
+    """One place a trial runs, as the registry reported it.
+
+    `facility` is the raw source string, unmerged (db/schema.sql). It is
+    here rather than only in the rollup because the documented clinician
+    workflow ends in a phone call to a named hospital, and a city name
+    cannot be phoned.
+    """
+
+    facility: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    status: Optional[str] = None
+    # CT.gov's per-location recruitment status, raw. None means the registry
+    # did not state one — never "not recruiting". Rendered through
+    # frontend/labels.format_site_status, which is the one place that
+    # sentence is written.
+    placeable: bool = True
+    # False when the site has no coordinates and so cannot go on a map.
+    # 1,659 sites (3,705 live edges) are in this state, and a map that
+    # dropped them silently would under-report exactly the way step 4 did.
+    delisted_at: Optional[datetime] = None
+    # Set only on ExploreSites.delisted — the trial's record stopped listing
+    # this location, and this is when a backfill first could not find it.
+    # NOT the date the trial made the change; nothing on file says that.
+
+
+class ExploreSites(BaseModel):
+    """Where a trial runs, at three zoom levels plus what we cannot show."""
+
+    total: int
+    recruiting: int
+    other_stated: int
+    not_stated: int
+    unplaceable: int
+
+    countries: List[ExplorePlace] = []
+    cities: List[ExplorePlace] = []
+    cities_total: int = 0
+    # How many distinct cities exist, against however many `cities` holds.
+    # The page states both, so a capped list never reads as a complete one.
+
+    listed: List[ExploreSite] = []
+    listed_truncated: bool = False
+    # True when `listed` is a capped sample of `total` rather than all of
+    # it. The page MUST say so — "12 sites" printed above a list of 50 rows
+    # drawn from 1,568 is a false claim about the trial.
+
+    delisted: int = 0
+    delisted_sites: List[ExploreSite] = []
+    # Locations the trial dropped since TrialLens started watching. Rare (41
+    # edges across 23 trials, 2026-09-04) and deliberately kept rather than
+    # deleted — "this trial quietly dropped three sites" is a finding in a
+    # watch-over-time product, not an inconsistency to clean away.
+
+
+class ExploreOrganization(BaseModel):
+    """A sponsor or collaborator on this trial.
+
+    `role` carries which one, because they share a table on purpose: 887
+    names are both, and splitting them would make one organization two
+    nodes. Collaborator is deliberately NOT a network to traverse — the
+    registry's own definition merges funders with co-designers and excludes
+    individuals — so it renders as an attribute of this trial
+    (docs/plan_explore_nodes.md sec. 1).
+    """
+
+    name: str
+    role: str  # 'LEAD' | 'COLLABORATOR'
+    org_class: Optional[str] = None  # INDUSTRY / NIH / OTHER_GOV / ...
+    other_trials: int = 0
+    # Tracked trials this organization appears on, excluding this one. The
+    # first genuinely two-hop number on the page: trial -> org -> trials.
+    delisted_at: Optional[datetime] = None
+
+
+class ExploreInvestigator(BaseModel):
+    """A named official on this trial.
+
+    The only node type that can answer the people-shaped reading of "who
+    else works in this space", since the collaborator field bans
+    individuals outright. Mostly real people — 5,325 of 7,722 names carry
+    an MD or PhD and only 76 look like a contact desk — but the desks are
+    exactly the high-degree ones (a pharma call centre sits on 102 trials,
+    a professor on three), which is why nothing here ranks investigators by
+    trial count.
+    """
+
+    name: str
+    affiliation: Optional[str] = None
+    role: str  # PRINCIPAL_INVESTIGATOR | STUDY_DIRECTOR | STUDY_CHAIR
+    other_trials: int = 0
+    delisted_at: Optional[datetime] = None
+
+
+class ExploreIntervention(BaseModel):
+    """One intervention term as the registry received it.
+
+    "term", not "drug": these are surface forms, unmerged, so 55 spellings
+    of semaglutide are 55 terms. `other_trials` therefore undercounts a
+    real drug's reach, and the page must not present it as a drug's
+    landscape.
+    """
+
+    name: str
+    type: str
+    other_trials: int = 0
+    delisted_at: Optional[datetime] = None
+
+
+class ExploreNeighbour(BaseModel):
+    """Another tracked trial reachable in two hops, and the evidence for it.
+
+    `conditions` carries the neighbour's own condition tags rather than a
+    count of how many it shares with the anchor trial, and that is a
+    deliberate correction made 2026-09-04. The count was written first and
+    was actively misleading: RxPONDER and its nearest neighbour share 1,047
+    sites and, by exact string match, ZERO conditions — while both are
+    breast cancer trials. One tags morphology ("Invasive Breast Carcinoma"),
+    the other AJCC stage ("Stage IIB Breast Cancer AJCC v6 and v7"). Nothing
+    is merged, so "0 in common" measured spelling, not subject matter, and
+    printing it under two breast cancer trials would have been a false
+    claim dressed as arithmetic (CLAUDE.md sec. 2).
+
+    Showing the tags themselves is the same rule sec. 3 applies everywhere
+    else: the source text and the interpretation, never the conclusion
+    alone. The researcher reads "Recurrent Breast Carcinoma" and knows in
+    one glance what a number could not tell them.
+    """
+
+    nct_id: str
+    brief_title: str
+    overall_status: str
+    shared: int
+    # How many sites / investigators / terms this trial has in common with
+    # the anchor. A plain count of source facts, never a similarity score —
+    # /rank was measured and deleted for putting unexplainable numbers on
+    # screen (docs/roadmap.md, step 7).
+    shared_names: List[str] = []
+    # WHICH ones, where naming them is possible. Empty for sites, because
+    # the real answer runs to 1,047 facility strings; the count and the
+    # conditions carry the evidence there instead.
+    conditions: List[str] = []
+
+
+class ExploreNeighbours(BaseModel):
+    """Trials reachable from this one, kept in three separate lists.
+
+    Never fused into a single ranked "related trials" list. Sharing a
+    hospital and sharing a principal investigator are different claims with
+    different strengths, and blending them into one number would rebuild
+    exactly the black-box ranking this project removed. Three lists, three
+    stated reasons, and the reader decides which reason they care about.
+    """
+
+    by_site: List[ExploreNeighbour] = []
+    by_site_total: int = 0
+    by_investigator: List[ExploreNeighbour] = []
+    by_investigator_total: int = 0
+    by_intervention: List[ExploreNeighbour] = []
+    by_intervention_total: int = 0
+    # Each list is capped; each total is the real number of trials reachable
+    # that way. A mega-trial reaches 1,497 others through shared sites, and
+    # showing ten of them without the denominator would read as "this trial
+    # has ten neighbours".
+
+
+class ExploreResponse(BaseModel):
+    """Everything Explore states about one trial's relationships.
+
+    One endpoint for one screen, the same shape /watch takes: these
+    numbers are read together and a site count means something different
+    depending on how many of them the registry gave a status for.
+    """
+
+    nct_id: str
+    brief_title: str
+    overall_status: str
+    conditions: List[str] = []
+    sites: ExploreSites
+    organizations: List[ExploreOrganization] = []
+    investigators: List[ExploreInvestigator] = []
+    interventions: List[ExploreIntervention] = []
+    neighbours: ExploreNeighbours = ExploreNeighbours()
+
+
 class TrialDetail(BaseModel):
     """Full detail for one trial, tracked or not — Understand's real
     response shape. The tracked-only fields (fetched_at, last_matched_at,

@@ -2552,3 +2552,82 @@ ceiling buys roughly 800 calls, not the ~250 assumed when it was set.
 stripped from the other 7. Their summaries were correct and re-paying for
 identical text would be waste. 332 tests pass, including the 2026-09-03
 phrasing verbatim as a regression case.
+
+## 2026-09-04 — Step 8: the graph becomes visible, and a count that lied
+
+`GET /explore/{nct_id}` and `frontend/pages/4_Explore.py` exist. 191,864
+edges built over three days were reachable from nothing until now; the
+capability grid's Explore card is live rather than "planned".
+
+**The roadmap's order was wrong and was reversed.** Unit 3 (merging near-
+duplicate entities) was next on paper. It was deferred: the merge exists to
+fix "381 Madrid facility strings are 381 sites", and no page had ever shown
+a site list, so there was no evidence the problem was real. Building it
+first would have been step 7 again — a layer measured against nothing. The
+page groups by country and city, where those 381 variants collapse anyway.
+Whether the merge is needed is now a question the real page can answer.
+
+**A shared-condition count was written, measured, and thrown away the same
+hour.** The plan was to show each neighbour's count of conditions in common,
+as the evidence that lets a researcher dismiss a coincidental link. Run
+against real data it printed **0 shared conditions for RxPONDER and its
+nearest neighbour — two breast cancer trials.** One tags morphology
+("Invasive Breast Carcinoma"), the other AJCC stage ("Stage IIB Breast
+Cancer AJCC v6 and v7"). Nothing is merged here either: 7,808 distinct
+condition strings across 32,701 rows, with `Breast Cancer` (3,088),
+`Metastatic Breast Cancer` (325) and `Breast Neoplasms` (285) as separate
+strings. The count measured spelling, not subject matter, and under two
+breast cancer trials it would have been a false claim wearing arithmetic's
+costume — the same shape as step 7's "filters wearing a score's costume".
+
+Replaced by the neighbour's **own condition tags**, shown as text. The
+researcher reads "Recurrent Breast Carcinoma" and knows in one glance what
+the number could not tell them. This is sec. 3 applied literally: source
+text plus interpretation, never the conclusion alone.
+
+**Neighbours are three lists, never one.** Sharing a hospital and sharing a
+principal investigator are different claims of different strength. Fusing
+them into a single "related trials" ranking would rebuild exactly the
+unexplainable number `/rank` was deleted for. Three routes, three stated
+reasons, reader picks.
+
+**Site overlap partly measures hospital networks, and the page says so.**
+RxPONDER's top neighbour shares 1,047 sites; both are NCI cooperative-group
+trials running in the same ~1,400 US hospitals. Not filtered out — that
+would drop real overlaps silently and we could not say how many. Shown with
+the caveat printed beside it.
+
+**Every capped list carries its real denominator.** 10 of 1,497 neighbours,
+40 of 899 cities, 50 of 1,568 sites. A list reporting its own length as the
+total is the step-4 under-reporting bug in new clothes, and it is now
+asserted in both the endpoint tests and the page tests. `count(*) OVER ()`
+runs before `LIMIT`, so the denominator costs no extra round trip.
+
+**An investigator table I nearly wrote off.** Its top five names are
+`Pfizer CT.gov Call Center` and `Call 1-877-CTLILLY…`, which read as junk.
+Counting properly: 76 of 7,722 names carry desk words, 363 of 9,243 live
+edges look desk-like (3.9%), and 5,325 names carry an MD or PhD. The desks
+are top precisely *because* a contact desk is reused across 102 trials
+while a real investigator is on three. The table is fine; what it rules out
+is any "most prolific investigators" ranking, which would be all call
+centres. `_investigators` orders by role then name for that reason.
+
+**The fake connection has a blind spot, and it is exactly the dangerous
+one.** A planted mutation rewriting the site query to
+`coalesce(ts.recruitment_status, 'NOT_RECRUITING')` — turning registry
+silence into a claim a site is closed, the single worst thing this page can
+do — **passed all 11 fake-connection tests.** By design: the fake ignores
+SQL (tests/conftest.py). The honesty guarantee therefore lives entirely in
+`tests/test_explore_real_data.py`, which catches it. Nine mutations were
+planted across both suites and all nine were caught, but five of them only
+by the real-data half.
+
+**Latency is architectural, not this query.** `/explore` takes ~4.4s (5.5s
+with neighbours). So does `/watch` at 4.3s and `/changes` at 3.2s. The cost
+is **1.7s to open a Neon connection plus ~300–580ms per round trip** from a
+laptop — a per-request connection is deliberate (see 2026-08-26 on Neon's
+pooler), and the fix if it ever matters is colocating the API with the
+database, not tuning SQL. Neighbours were folded into the same endpoint
+rather than a second one for this reason: one connection, not two.
+
+378 tests pass.

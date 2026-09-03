@@ -64,29 +64,24 @@ Every substantive trial claim preserves source study, source field, the relevant
 Steps 1-6 are built, tested, and live: schema + ingestion, the
 FastAPI-only-door layer, scheduler/cron automation (a real 6-hour cron
 running on GitHub Actions), Discover live-fallback (`GET /discover`), and
-the Streamlit frontend — Discover, Understand, and the Monitor feed
-(`GET /changes`). **332 tests pass.** Investigate isn't built.
+the Streamlit frontend — Discover, Understand, the Monitor feed
+(`GET /changes`) and now Explore. **378 tests pass.** Investigate isn't
+built.
 
-**START HERE (next session, 2026-09-04).** Step 8's graph is built and
-**entirely invisible** — nothing a user can see changed in three days. There
-is no `explore` router (`api/main.py` registers studies, discover, changes,
-watch) and nothing in `api/` or `frontend/` reads the graph tables. Sitting
-in the database, unreachable: **191,864 edges** across 8 tables, **49,606
-sites with coordinates**, **40,011 edges with a recruitment status**, and
-**7 prose interpretations**. `frontend/labels.format_site_status()` is
-written and called by nothing.
+**Step 8's Explore is live and visible** (2026-09-04) —
+`GET /explore/{nct_id}` (`api/explore.py`) and
+`frontend/pages/4_Explore.py`, with Home's fifth capability card switched
+from "planned" to live. The 191,864 edges built over the preceding three
+days were reachable from nothing until this landed.
 
-So: **build `GET /explore/{nct_id}` and `frontend/pages/4_Explore.py`
-first, and defer unit 3 (the merge step).** The roadmap lists merge first;
-that order is wrong. The merge exists to fix "381 Madrid facility strings
-are 381 sites", but no page has ever displayed a site list — group by city
-and country, which is what "who else works in this space?" actually asks,
-and those 381 variants may never surface. Building the merge first risks
-solving a problem the UI does not have, which is the step 7 mistake exactly.
-Let the real page say whether merging is needed. Requirements the page must
-meet are already written in `docs/plan_explore_nodes.md` §4b — including
-that 1,666 sites cannot be placed on a map and the page has to say so rather
-than silently shrinking the result set.
+**START HERE (next session).** Two things are still built-and-invisible,
+and the first is the same failure at 1/27,000th the size: **the 7 prose
+interpretations** from step 7c are stored and read by no page — Understand
+is where they belong. Second, **unit 3 (the merge) is still open**, and the
+question to settle first is empirical: open Explore on a trial with a
+much-duplicated hospital and see whether the duplicates actually surface in
+the city rollup. If they do not, the merge stays deferred — that ordering
+reversal is what kept step 8 from repeating the step 7 mistake.
 
 **Step 7 (AI ranking layer) was built, measured, and removed** on
 2026-09-01. Measuring it produced the case against it: four of its five
@@ -137,9 +132,26 @@ of 400 was replaced by a real count of 163" instead of the old generic sentence.
 Required walking the trial's history backwards to establish which count was true
 before each amendment. All 279 tests pass.
 
-**Step 8 (Explore) — units 1, 2 and 2b are done** (2026-09-02/03), unit 3
-and the UI are not. See the START HERE block above for what to do next and
-why the roadmap's ordering was changed.
+**Step 8 (Explore) — units 1, 2, 2b and the endpoint+page are done**
+(2026-09-02/04); unit 3, the merge, is not. Two rules the Explore code
+exists to keep, both from `docs/plan_explore_nodes.md` §4b:
+
+- **Every capped list carries its real denominator** — 10 of 1,497
+  neighbours, 40 of 899 cities, 50 of 1,568 sites. `count(*) OVER ()` runs
+  before `LIMIT`, so the honest total costs no extra round trip. A list
+  reporting its own length as the total is the step-4 bug again.
+- **A shared-condition COUNT is not evidence** — it printed "0 in common"
+  for two breast cancer trials, because condition strings are unmerged too
+  (7,808 strings over 32,701 rows; `Breast Cancer`, `Metastatic Breast
+  Cancer` and `Breast Neoplasms` are three of them). Neighbours show their
+  own condition tags as text instead. Built and discarded the same hour.
+
+**A mutation that turns registry silence into "not recruiting" passes every
+fake-connection test.** `tests/conftest.py`'s fake ignores SQL by design, so
+`coalesce(recruitment_status, 'NOT_RECRUITING')` sailed through all 11 —
+the single worst claim this page can make. Whenever a query decides
+something a user reads as a fact, the guarantee has to live in a real-data
+test. 9/9 planted mutations were caught; 5 only by that half.
 
 - **Unit 1, the shape:** relational tables, not a graph database. The graph
   already exists in `studies` — `lead_sponsor` holding 'Mayo Clinic' on 134

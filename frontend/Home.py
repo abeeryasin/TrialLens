@@ -479,9 +479,9 @@ capabilities = [
     {
         "icon": "🕸️",
         "name": "Explore",
-        "desc": "How trials, sponsors, and interventions connect to each other.",
-        "page": None,
-        "status": "planned",
+        "desc": "Where a trial runs, who runs it, and which other tracked trials share its sites, investigators or interventions.",
+        "page": "pages/4_Explore.py",
+        "status": "live",
     },
     {
         "icon": "🧭",
