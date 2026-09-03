@@ -382,8 +382,8 @@ SITE_STATUS_LABELS = {
     "ENROLLING_BY_INVITATION": "Enrolling by invitation only",
     "ACTIVE_NOT_RECRUITING": "Active here, but not recruiting",
     "SUSPENDED": "Suspended at this site",
-    # CT.gov's WITHDRAWN, which is NOT our trial_sites.withdrawn_at. This one
-    # means the site withdrew before enrolling anyone; withdrawn_at means the
+    # CT.gov's WITHDRAWN, which is NOT our trial_sites.delisted_at. This one
+    # means the site withdrew before enrolling anyone; delisted_at means the
     # record stopped listing the location at all. See db/schema.sql.
     "WITHDRAWN": "Withdrawn before enrolling anyone",
     "COMPLETED": "Completed at this site",

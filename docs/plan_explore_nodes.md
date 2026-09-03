@@ -85,7 +85,7 @@ facility**. Both are location questions.
 
 | # | Node | Coverage | Why |
 |---|---|---|---|
-| 1 | **Sites** (+ per-site status, geo) | 93.8% | Highest reach; answers the phone-call question from stored data; combines with `withdrawn_at` so a dropped or suspended site becomes a monitoring signal |
+| 1 | **Sites** (+ per-site status, geo) | 93.8% | Highest reach; answers the phone-call question from stored data; combines with `delisted_at` so a dropped or suspended site becomes a monitoring signal |
 | 2 | **Investigators** | 66.4% | The only way to answer the people-shaped reading of "who else works here," since the collaborator field bans individuals |
 | 3 | **Interventions + phase + status** | — | Where landscape and pipeline questions actually live |
 | 4 | **Collaborator** | 37.4% | **Keep, do not traverse.** Demote to an attribute — "NIH-funded", "industry-partnered" — a filter, not a network |
@@ -133,7 +133,7 @@ its evidence deleted, and grey would be doing double duty for "closed" and
 "unknown". `SITE_STATUS_LABELS` renders sentences for the same reason the
 tracking drop reasons do (§3).
 
-**Withdrawn edges are a feature of the page, not noise.** `withdrawn_at`
+**Delisted edges are a feature of the page, not noise.** `delisted_at`
 exists so "this trial dropped three sites since June" is answerable. Default
 to live edges, but do not make the withdrawn ones unreachable.
 

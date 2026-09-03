@@ -2226,7 +2226,7 @@ trial drops a site the edge outlives the record that justified it — Explore
 would have gone on saying a trial runs at a location it had removed. One
 6-hour run produced 15 of those.
 
-**Decision: stamp `withdrawn_at`, never delete.** Deleting fixes the false
+**Decision: stamp `delisted_at`, never delete.** Deleting fixes the false
 claim and destroys the finding. This is a watch-over-time product; "this
 trial quietly dropped three sites" is a result, not a row to tidy away, and
 §3 wants the evidence kept rather than silently reconciled. NULL means the
@@ -2237,11 +2237,11 @@ invent precision the backfill does not have (§2).
 
 Consequences worth recording:
 
-- Edge inserts became `ON CONFLICT DO UPDATE SET withdrawn_at = NULL`, so a
+- Edge inserts became `ON CONFLICT DO UPDATE SET delisted_at = NULL`, so a
   re-listed site comes back. The action carries its own `WHERE
-  withdrawn_at IS NOT NULL`; without it every pass would dirty all 140,000
+  delisted_at IS NOT NULL`; without it every pass would dirty all 140,000
   edges writing NULL over NULL.
-- The withdrawal UPDATEs are guarded by `withdrawn_at IS NULL`, so an edge
+- The withdrawal UPDATEs are guarded by `delisted_at IS NULL`, so an edge
   keeps the date it was *first* seen missing. Re-running does not walk the
   stamp forward and destroy the only timing information it has.
 - `test_no_site_was_invented` had to be scoped to sites holding a live edge.
@@ -2351,10 +2351,10 @@ distinction or it repeats the step-4 under-reporting bug.
 
 **Naming trap, recorded because it will bite.** One of CT.gov's per-site
 status values is literally `WITHDRAWN`, and `trial_sites` also has our own
-`withdrawn_at`. They are unrelated: `recruitment_status = 'WITHDRAWN'` means
-the site withdrew from the trial before enrolling anyone; `withdrawn_at`
+`delisted_at`. They are unrelated: `recruitment_status = 'WITHDRAWN'` means
+the site withdrew from the trial before enrolling anyone; `delisted_at`
 means the trial's record stopped listing that location at all. A site can be
-live (`withdrawn_at IS NULL`) while reading `WITHDRAWN`.
+live (`delisted_at IS NULL`) while reading `WITHDRAWN`.
 
 **Proven able to fail.** Seven more mutations, injected in a transaction and
 rolled back: filling a coordinate on a disputed site, swapping lat and lon
@@ -2411,3 +2411,42 @@ would call `"   "` a stated status.
 the page must say so rather than silently shrinking the result set; status
 filters must offer "not reported" as its own option; site status renders as
 sentences, not colour, because grey would mean both "closed" and "unknown".
+
+## 2026-09-03 — `withdrawn_at` renamed to `delisted_at`
+
+The column created earlier the same day sat in `trial_sites` beside
+`recruitment_status`, whose CT.gov vocabulary contains the literal value
+`WITHDRAWN`. The two mean entirely different things: CT.gov's says the site
+withdrew before enrolling anyone; ours said the trial's record stopped
+listing that location at all. A row could legitimately be live
+(`withdrawn_at IS NULL`) while reading `WITHDRAWN`.
+
+A schema comment and a UI test were written to hold the distinction. Neither
+is worth much against a word that means two things in one table, and the
+cost of keeping it only grows: at the time of the rename exactly three files
+read the column, and after the Explore endpoint and page exist it would be
+many more, plus every future reader having to carry the ambiguity. Renamed
+rather than documented.
+
+**The migration is the part worth recording.** `schema.sql` is idempotent
+and every column in it is `ADD COLUMN IF NOT EXISTS`, so simply renaming the
+text of those four lines would have added a second, empty `delisted_at`
+beside a populated `withdrawn_at` and quietly stranded 17 stamped edges. The
+rename runs first, inside a guarded `DO $$` block that fires only when the
+old column exists and the new one does not — a no-op on a fresh database and
+on every subsequent run. Verified: 4 columns renamed, 0 leftovers, 17 stamps
+before and 17 after, then applied a second time to confirm idempotence, then
+the backfill re-run as a clean 0-change no-op.
+
+The prose moved too — `DELISTINGS`, "delisted: sites", "140,022 live, 15
+delisted". Leaving the output saying "withdrawn" would have preserved
+exactly the collision the rename was for. The one place "withdrawn" survives
+correctly is CT.gov's own vocabulary: `recruitment_status = 'WITHDRAWN'`,
+the trial-status list in `scripts/ingest.py`, and the label
+"Withdrawn before enrolling anyone".
+
+315 tests pass and both mutation harnesses still catch 14/14, re-run after
+the rename rather than assumed.
+
+**The general rule:** check the source vocabulary before naming a column.
+CT.gov already used the best word for a different fact.

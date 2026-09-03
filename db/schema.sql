@@ -261,7 +261,7 @@ CREATE INDEX IF NOT EXISTS idx_trial_investigators_inv ON trial_investigators(in
 CREATE INDEX IF NOT EXISTS idx_trial_interventions_term ON trial_interventions(term_id);
 
 -- ---------------------------------------------------------------------------
--- Withdrawn edges (2026-09-03).
+-- Delisted edges (2026-09-03).
 --
 -- Trials drop sites, swap investigators and retire intervention arms. The
 -- extraction only ever INSERTs, so without this an edge outlives the record
@@ -280,17 +280,48 @@ CREATE INDEX IF NOT EXISTS idx_trial_interventions_term ON trial_interventions(t
 -- the first run that could not find it. It is NOT the date the trial made
 -- the change; nothing on file says that, and writing the real amendment date
 -- here would be inventing precision the backfill does not have. Query
--- `WHERE withdrawn_at IS NULL` for the graph as it stands today.
+-- `WHERE delisted_at IS NULL` for the graph as it stands today.
 --
 -- An edge that comes back (a site re-listed) has its stamp cleared, which is
 -- why the backfill's ON CONFLICT clauses are DO UPDATE rather than DO
--- NOTHING. Entity rows are never withdrawn: a withdrawn edge still points at
+-- NOTHING. Entity rows are never delisted: a delisted edge still points at
 -- its site, and the site was genuinely reported once.
 -- ---------------------------------------------------------------------------
-ALTER TABLE trial_organizations ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
-ALTER TABLE trial_sites         ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
-ALTER TABLE trial_investigators ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
-ALTER TABLE trial_interventions ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ;
+-- Renamed from `withdrawn_at` on 2026-09-03, hours after it was created.
+-- CT.gov's own per-site vocabulary contains the value 'WITHDRAWN' meaning
+-- "the site withdrew before enrolling anyone", which is a completely
+-- different fact from "the record stopped listing this location". One word
+-- for two meanings in one table is a trap, and it was cheaper to remove it
+-- than to keep explaining it — at the time of the rename nothing outside
+-- this file, the backfill and its tests read the column.
+--
+-- The rename must run BEFORE the ADD COLUMN below, or a database that
+-- already has `withdrawn_at` would get a second, empty `delisted_at`
+-- alongside it and quietly lose 17 stamped edges. Guarded so the whole file
+-- stays idempotent: it renames on a database that still has the old name,
+-- and does nothing on a fresh one or on a second run.
+DO $$
+DECLARE t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['trial_organizations', 'trial_sites',
+                             'trial_investigators', 'trial_interventions']
+    LOOP
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = 'public' AND table_name = t
+                     AND column_name = 'withdrawn_at')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                           WHERE table_schema = 'public' AND table_name = t
+                             AND column_name = 'delisted_at')
+        THEN
+            EXECUTE format('ALTER TABLE %I RENAME COLUMN withdrawn_at TO delisted_at', t);
+        END IF;
+    END LOOP;
+END $$;
+
+ALTER TABLE trial_organizations ADD COLUMN IF NOT EXISTS delisted_at TIMESTAMPTZ;
+ALTER TABLE trial_sites         ADD COLUMN IF NOT EXISTS delisted_at TIMESTAMPTZ;
+ALTER TABLE trial_investigators ADD COLUMN IF NOT EXISTS delisted_at TIMESTAMPTZ;
+ALTER TABLE trial_interventions ADD COLUMN IF NOT EXISTS delisted_at TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
 -- Site enrichment (2026-09-03) — the fields the parser dropped.
@@ -345,9 +376,9 @@ ALTER TABLE sites ADD COLUMN IF NOT EXISTS lon   DOUBLE PRECISION;
 -- listing the same facility twice; those are left NULL and counted too.
 --
 -- NAMING TRAP: one of the values CT.gov uses here is literally 'WITHDRAWN',
--- and this table also has a `withdrawn_at` column. They are unrelated.
+-- and this table also has a `delisted_at` column. They are unrelated.
 -- recruitment_status = 'WITHDRAWN' is the registry saying the site withdrew
--- from the trial before enrolling anyone. `withdrawn_at` is OURS, and means
+-- from the trial before enrolling anyone. `delisted_at` is OURS, and means
 -- the trial's record stopped listing this location at all. A site can be
--- live (withdrawn_at IS NULL) while its recruitment_status reads 'WITHDRAWN'.
+-- live (delisted_at IS NULL) while its recruitment_status reads 'WITHDRAWN'.
 ALTER TABLE trial_sites ADD COLUMN IF NOT EXISTS recruitment_status TEXT;

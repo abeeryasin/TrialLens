@@ -20,9 +20,9 @@ needs to be: the graph is a snapshot, and a trial ingested since the last run
 has no edges until this runs again.
 
 Edges are never deleted. An edge the current record no longer justifies gets
-`withdrawn_at` stamped instead, because a trial dropping a site is a finding
+`delisted_at` stamped instead, because a trial dropping a site is a finding
 in a watch-over-time product rather than a row to tidy away. See the
-withdrawn-edges block in db/schema.sql.
+delisted-edges block in db/schema.sql.
 
 One of sec. 5's one-time administrative scripts, so it holds DATABASE_URL
 directly rather than going through FastAPI.
@@ -90,8 +90,8 @@ STEPS = [
         SELECT DISTINCT s.nct_id, o.id, 'LEAD', s.{LEAD_CLASS}
         FROM studies s JOIN organizations o ON o.name = s.lead_sponsor
         WHERE s.lead_sponsor IS NOT NULL
-        ON CONFLICT (nct_id, org_id, role) DO UPDATE SET withdrawn_at = NULL
-        WHERE trial_organizations.withdrawn_at IS NOT NULL
+        ON CONFLICT (nct_id, org_id, role) DO UPDATE SET delisted_at = NULL
+        WHERE trial_organizations.delisted_at IS NOT NULL
     """),
     ("edges: trial -> collaborator organizations", f"""
         INSERT INTO trial_organizations (nct_id, org_id, role, org_class)
@@ -99,8 +99,8 @@ STEPS = [
         FROM studies s, jsonb_array_elements(s.{COLLABORATORS}) col
         JOIN organizations o ON o.name = col->>'name'
         WHERE s.{COLLABORATORS} IS NOT NULL
-        ON CONFLICT (nct_id, org_id, role) DO UPDATE SET withdrawn_at = NULL
-        WHERE trial_organizations.withdrawn_at IS NOT NULL
+        ON CONFLICT (nct_id, org_id, role) DO UPDATE SET delisted_at = NULL
+        WHERE trial_organizations.delisted_at IS NOT NULL
     """),
     ("sites", """
         INSERT INTO sites (facility, city, country)
@@ -119,8 +119,8 @@ STEPS = [
          AND coalesce(si.city,'')     = coalesce(loc->>'city','')
          AND coalesce(si.country,'')  = coalesce(loc->>'country','')
         WHERE s.locations IS NOT NULL
-        ON CONFLICT (nct_id, site_id) DO UPDATE SET withdrawn_at = NULL
-        WHERE trial_sites.withdrawn_at IS NOT NULL
+        ON CONFLICT (nct_id, site_id) DO UPDATE SET delisted_at = NULL
+        WHERE trial_sites.delisted_at IS NOT NULL
     """),
     ("investigators", f"""
         INSERT INTO investigators (name, affiliation)
@@ -138,8 +138,8 @@ STEPS = [
           ON i.name = off->>'name'
          AND coalesce(i.affiliation,'') = coalesce(off->>'affiliation','')
         WHERE s.{OFFICIALS} IS NOT NULL AND off->>'role' IS NOT NULL
-        ON CONFLICT (nct_id, investigator_id, role) DO UPDATE SET withdrawn_at = NULL
-        WHERE trial_investigators.withdrawn_at IS NOT NULL
+        ON CONFLICT (nct_id, investigator_id, role) DO UPDATE SET delisted_at = NULL
+        WHERE trial_investigators.delisted_at IS NOT NULL
     """),
     ("intervention terms", """
         INSERT INTO intervention_terms (name, type)
@@ -156,16 +156,16 @@ STEPS = [
         FROM studies s, jsonb_array_elements(s.interventions) iv
         JOIN intervention_terms t ON t.name = iv->>'name' AND t.type = iv->>'type'
         WHERE s.interventions IS NOT NULL
-        ON CONFLICT (nct_id, term_id) DO UPDATE SET withdrawn_at = NULL
-        WHERE trial_interventions.withdrawn_at IS NOT NULL
+        ON CONFLICT (nct_id, term_id) DO UPDATE SET delisted_at = NULL
+        WHERE trial_interventions.delisted_at IS NOT NULL
     """),
 ]
 
-# Run AFTER every insert above, never before: an edge is only withdrawn if the
+# Run AFTER every insert above, never before: an edge is only delisted if the
 # current record does not justify it, and the inserts are what establish what
 # the current record says.
 #
-# `withdrawn_at IS NULL` in each WHERE makes these idempotent — an edge keeps
+# `delisted_at IS NULL` in each WHERE makes these idempotent — an edge keeps
 # the date it was FIRST seen missing, so re-running the backfill does not keep
 # moving the stamp forward and destroying the one piece of timing information
 # it has.
@@ -173,28 +173,28 @@ STEPS = [
 # Watch the printed counts. These are UPDATEs against the whole edge table,
 # and a partial ingest that left `locations` empty on many trials would show
 # up here as a mass withdrawal rather than the handful a normal run produces.
-WITHDRAWALS = [
-    ("withdrawn: lead organization", """
-        UPDATE trial_organizations tor SET withdrawn_at = now()
+DELISTINGS = [
+    ("delisted: lead organization", """
+        UPDATE trial_organizations tor SET delisted_at = now()
         FROM organizations o
-        WHERE o.id = tor.org_id AND tor.role = 'LEAD' AND tor.withdrawn_at IS NULL
+        WHERE o.id = tor.org_id AND tor.role = 'LEAD' AND tor.delisted_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM studies s
             WHERE s.nct_id = tor.nct_id AND s.lead_sponsor = o.name)
     """),
-    ("withdrawn: collaborator organizations", f"""
-        UPDATE trial_organizations tor SET withdrawn_at = now()
+    ("delisted: collaborator organizations", f"""
+        UPDATE trial_organizations tor SET delisted_at = now()
         FROM organizations o
-        WHERE o.id = tor.org_id AND tor.role = 'COLLABORATOR' AND tor.withdrawn_at IS NULL
+        WHERE o.id = tor.org_id AND tor.role = 'COLLABORATOR' AND tor.delisted_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.{COLLABORATORS}) col
             WHERE s.nct_id = tor.nct_id AND s.{COLLABORATORS} IS NOT NULL
               AND col->>'name' = o.name)
     """),
-    ("withdrawn: sites", """
-        UPDATE trial_sites ts SET withdrawn_at = now()
+    ("delisted: sites", """
+        UPDATE trial_sites ts SET delisted_at = now()
         FROM sites si
-        WHERE si.id = ts.site_id AND ts.withdrawn_at IS NULL
+        WHERE si.id = ts.site_id AND ts.delisted_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.locations) loc
             WHERE s.nct_id = ts.nct_id AND s.locations IS NOT NULL
@@ -202,10 +202,10 @@ WITHDRAWALS = [
               AND coalesce(loc->>'city','')     = coalesce(si.city,'')
               AND coalesce(loc->>'country','')  = coalesce(si.country,''))
     """),
-    ("withdrawn: investigators", f"""
-        UPDATE trial_investigators ti SET withdrawn_at = now()
+    ("delisted: investigators", f"""
+        UPDATE trial_investigators ti SET delisted_at = now()
         FROM investigators i
-        WHERE i.id = ti.investigator_id AND ti.withdrawn_at IS NULL
+        WHERE i.id = ti.investigator_id AND ti.delisted_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.{OFFICIALS}) off
             WHERE s.nct_id = ti.nct_id AND s.{OFFICIALS} IS NOT NULL
@@ -213,10 +213,10 @@ WITHDRAWALS = [
               AND coalesce(off->>'affiliation','') = coalesce(i.affiliation,'')
               AND off->>'role' = ti.role)
     """),
-    ("withdrawn: intervention terms", """
-        UPDATE trial_interventions ti SET withdrawn_at = now()
+    ("delisted: intervention terms", """
+        UPDATE trial_interventions ti SET delisted_at = now()
         FROM intervention_terms t
-        WHERE t.id = ti.term_id AND ti.withdrawn_at IS NULL
+        WHERE t.id = ti.term_id AND ti.delisted_at IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.interventions) iv
             WHERE s.nct_id = ti.nct_id AND s.interventions IS NOT NULL
@@ -352,8 +352,8 @@ def main():
                 print(f"  {label}: {cur.rowcount:,} row(s) written", flush=True)
             conn.commit()
 
-        print("\nWithdrawn (in the graph, not in the current record):", flush=True)
-        for label, sql in WITHDRAWALS:
+        print("\nDelisted (in the graph, not in the current record):", flush=True)
+        for label, sql in DELISTINGS:
             with conn.cursor() as cur:
                 cur.execute(sql)
                 print(f"  {label}: {cur.rowcount:,} newly stamped", flush=True)
@@ -375,14 +375,14 @@ def main():
             print("\nTable totals now:", flush=True)
             for table in COUNTS:
                 if table.startswith("trial_"):
-                    # Live and withdrawn separately: a single total would hide
+                    # Live and delisted separately: a single total would hide
                     # the withdrawals inside a number that only ever grows.
                     cur.execute(
-                        f"SELECT count(*) FILTER (WHERE withdrawn_at IS NULL),"
-                        f" count(*) FILTER (WHERE withdrawn_at IS NOT NULL) FROM {table}"
+                        f"SELECT count(*) FILTER (WHERE delisted_at IS NULL),"
+                        f" count(*) FILTER (WHERE delisted_at IS NOT NULL) FROM {table}"
                     )
                     live, gone = cur.fetchone()
-                    print(f"  {table}: {live:,} live, {gone:,} withdrawn", flush=True)
+                    print(f"  {table}: {live:,} live, {gone:,} delisted", flush=True)
                 else:
                     cur.execute(f"SELECT count(*) FROM {table}")
                     print(f"  {table}: {cur.fetchone()[0]:,}", flush=True)
@@ -398,8 +398,8 @@ def main():
                 print(f"  sites with {label}: {n:,} of {total:,} "
                       f"({100.0 * n / total:.1f}%)", flush=True)
             cur.execute("""
-                SELECT count(*) FILTER (WHERE withdrawn_at IS NULL),
-                       count(recruitment_status) FILTER (WHERE withdrawn_at IS NULL)
+                SELECT count(*) FILTER (WHERE delisted_at IS NULL),
+                       count(recruitment_status) FILTER (WHERE delisted_at IS NULL)
                 FROM trial_sites
             """)
             live, with_status = cur.fetchone()
@@ -407,7 +407,7 @@ def main():
                   f"of {live:,} ({100.0 * with_status / live:.1f}%)", flush=True)
             cur.execute("""
                 SELECT recruitment_status, count(*) FROM trial_sites
-                WHERE recruitment_status IS NOT NULL AND withdrawn_at IS NULL
+                WHERE recruitment_status IS NOT NULL AND delisted_at IS NULL
                 GROUP BY 1 ORDER BY 2 DESC
             """)
             for status, n in cur.fetchall():

@@ -244,7 +244,7 @@ def test_ctgov_withdrawn_is_not_described_as_delisting():
     """The naming trap, held in the UI layer too.
 
     CT.gov's WITHDRAWN means the site withdrew before enrolling anyone. Our
-    trial_sites.withdrawn_at means the record stopped listing the location.
+    trial_sites.delisted_at means the record stopped listing the location.
     If this label ever starts saying the site was removed from the trial, the
     two have been conflated where a user can see it.
     """

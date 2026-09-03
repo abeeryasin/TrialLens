@@ -11,9 +11,9 @@ be wrong, and they are opposites:
     Then "who else works in this space?" quietly returns a short answer, and
     a short answer looks exactly like a complete one.
 
-Both are judged against LIVE edges (`withdrawn_at IS NULL`). An edge the
+Both are judged against LIVE edges (`delisted_at IS NULL`). An edge the
 current record no longer justifies is stamped, not deleted, so a site a trial
-dropped stays visible as a finding — see the withdrawn-edges block in
+dropped stays visible as a finding — see the delisted-edges block in
 db/schema.sql. "Traces to nothing" is therefore only a fault when the edge
 still claims to be live.
 
@@ -118,8 +118,8 @@ def test_no_organization_was_invented(cur):
 def test_no_site_was_invented(cur):
     """Scoped to sites that still hold a LIVE edge.
 
-    A site reachable only through withdrawn edges is *supposed* to trace to no
-    current location — that is what withdrawn means. Before `withdrawn_at`
+    A site reachable only through delisted edges is *supposed* to trace to no
+    current location — that is what delisted means. Before `delisted_at`
     existed this test read every site and went red on 7 real ones that trials
     had simply dropped, calling them inventions. They were reported once and
     later removed, which is a different thing and worth keeping.
@@ -128,7 +128,7 @@ def test_no_site_was_invented(cur):
         SELECT count(*) FROM sites si
         WHERE EXISTS (
             SELECT 1 FROM trial_sites ts
-            WHERE ts.site_id = si.id AND ts.withdrawn_at IS NULL)
+            WHERE ts.site_id = si.id AND ts.delisted_at IS NULL)
           AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.locations) loc
             WHERE s.locations IS NOT NULL
@@ -233,11 +233,11 @@ def test_every_live_edge_is_justified_by_the_current_record(cur):
     This is the one that matters for CLAUDE.md sec. 2. A stale live edge is
     Explore telling a researcher a trial runs at a site it dropped — a
     connection the registry does not state, presented as if it does. One
-    6-hour monitor run produced 15 of them before `withdrawn_at` existed.
+    6-hour monitor run produced 15 of them before `delisted_at` existed.
     """
     stale_sites = scalar(cur, """
         SELECT count(*) FROM trial_sites ts JOIN sites si ON si.id = ts.site_id
-        WHERE ts.withdrawn_at IS NULL AND NOT EXISTS (
+        WHERE ts.delisted_at IS NULL AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.locations) loc
             WHERE s.nct_id = ts.nct_id AND s.locations IS NOT NULL
               AND coalesce(loc->>'facility','') = coalesce(si.facility,'')
@@ -252,7 +252,7 @@ def test_every_live_edge_is_justified_by_the_current_record(cur):
     stale_terms = scalar(cur, """
         SELECT count(*) FROM trial_interventions ti
         JOIN intervention_terms t ON t.id = ti.term_id
-        WHERE ti.withdrawn_at IS NULL AND NOT EXISTS (
+        WHERE ti.delisted_at IS NULL AND NOT EXISTS (
             SELECT 1 FROM studies s, jsonb_array_elements(s.interventions) iv
             WHERE s.nct_id = ti.nct_id AND s.interventions IS NOT NULL
               AND iv->>'name' = t.name AND iv->>'type' = t.type)
@@ -262,7 +262,7 @@ def test_every_live_edge_is_justified_by_the_current_record(cur):
     stale_leads = scalar(cur, """
         SELECT count(*) FROM trial_organizations tor
         JOIN organizations o ON o.id = tor.org_id
-        WHERE tor.role = 'LEAD' AND tor.withdrawn_at IS NULL AND NOT EXISTS (
+        WHERE tor.role = 'LEAD' AND tor.delisted_at IS NULL AND NOT EXISTS (
             SELECT 1 FROM studies s
             WHERE s.nct_id = tor.nct_id AND s.lead_sponsor = o.name)
     """)
@@ -277,23 +277,23 @@ def test_a_dropped_connection_is_stamped_rather_than_deleted(cur):
     only thing that notices the history is gone.
 
     Asserted as "the column works and nothing is in the future" rather than
-    "> 0 rows are withdrawn": a database freshly backfilled from a quiet week
+    "> 0 rows are delisted": a database freshly backfilled from a quiet week
     legitimately has none, and a test that demands churn would fail on a
     correct system.
     """
     future = scalar(cur, """
-        SELECT count(*) FROM trial_sites WHERE withdrawn_at > now()
+        SELECT count(*) FROM trial_sites WHERE delisted_at > now()
     """)
-    assert future == 0, f"{future} edges are withdrawn at a future date"
+    assert future == 0, f"{future} edges are delisted at a future date"
 
-    # A withdrawn edge must still point at a real entity — the row is kept
+    # A delisted edge must still point at a real entity — the row is kept
     # precisely so the connection stays inspectable.
     dangling = scalar(cur, """
         SELECT count(*) FROM trial_sites ts
-        WHERE ts.withdrawn_at IS NOT NULL
+        WHERE ts.delisted_at IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM sites si WHERE si.id = ts.site_id)
     """)
-    assert dangling == 0, f"{dangling} withdrawn edges lost their site"
+    assert dangling == 0, f"{dangling} delisted edges lost their site"
 
 
 def test_the_graph_is_not_behind_the_studies_it_describes(cur):
