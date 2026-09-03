@@ -309,6 +309,16 @@ class TestTheTwoHopEvidence:
         ]
         assert conditions == ["Recurrent Breast Carcinoma · Stage IA Breast Cancer AJCC v7"]
 
+    def test_the_anchor_trials_tags_sit_beside_the_neighbour_list(self, render):
+        """The comparison only works if both halves are on screen together.
+        The anchor's tags render at the top of the page, a full screen from
+        the "Its conditions" column they are meant to be read against."""
+        page, _ = render(
+            payload(neighbours=neighbours(by_site=[neighbour()], by_site_total=1))
+        )
+        assert "**This trial is tagged:** Obesity · Intrauterine Growth Restriction" in page
+        assert "study the same disease and share no tag at all" in page
+
     def test_it_warns_that_site_overlap_can_be_a_shared_network(self, render):
         """RxPONDER's top neighbour shares 1,047 sites. Presenting that as
         relatedness without the caveat overstates what a count can show."""

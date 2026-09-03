@@ -64,6 +64,7 @@ def test_changes_are_grouped_under_the_amendment_that_caused_them(api):
             "posted_on": "2026-08-31", "previously_posted_on": "2026-08-28",
             "detected_at": RUN_2, "field_name": field,
             "old_value": old, "new_value": new,
+            "prose_interpretation": None,
         }
         for field, old, new in [
             ("completion_date", "2026-08-31", "2027-08-27"),
@@ -98,6 +99,7 @@ def test_an_amendment_touching_only_untracked_fields_is_flagged_not_dropped(api)
         "posted_on": "2026-08-28", "previously_posted_on": "2026-07-31",
         "detected_at": RUN_1, "field_name": None,
         "old_value": None, "new_value": None,
+        "prose_interpretation": None,
     }]
     body = api(results(amendment_rows=rows)).get(
         "/studies/NCT02954874/amendments"
@@ -114,10 +116,10 @@ def test_two_amendments_stay_separate_and_newest_first(api):
     rows = [
         {"posted_on": "2026-08-31", "previously_posted_on": "2026-08-28",
          "detected_at": RUN_2, "field_name": "enrollment_count",
-         "old_value": "1155", "new_value": "1195"},
+         "old_value": "1155", "new_value": "1195", "prose_interpretation": None},
         {"posted_on": "2026-08-28", "previously_posted_on": "2026-07-31",
          "detected_at": RUN_1, "field_name": None,
-         "old_value": None, "new_value": None},
+         "old_value": None, "new_value": None, "prose_interpretation": None},
     ]
     body = api(results(amendment_rows=rows)).get(
         "/studies/NCT02954874/amendments"
@@ -137,10 +139,11 @@ def test_amendments_at_different_timestamps_never_merge(api):
     rows = [
         {"posted_on": "2026-08-31", "previously_posted_on": "2026-08-30",
          "detected_at": RUN_2, "field_name": "overall_status",
-         "old_value": "RECRUITING", "new_value": "ACTIVE_NOT_RECRUITING"},
+         "old_value": "RECRUITING", "new_value": "ACTIVE_NOT_RECRUITING",
+         "prose_interpretation": None},
         {"posted_on": "2026-08-31", "previously_posted_on": "2026-08-30",
          "detected_at": RUN_1, "field_name": "brief_title",
-         "old_value": "Old", "new_value": "New"},
+         "old_value": "Old", "new_value": "New", "prose_interpretation": None},
     ]
     body = api(results(amendment_rows=rows)).get(
         "/studies/NCT02954874/amendments"
@@ -190,3 +193,84 @@ def test_tracking_fields_are_excluded_by_the_query_not_by_the_caller(api):
         "both the amendment query and the orphan query must exclude tracking "
         "fields; excluding it from only one leaks it into unattributed_changes"
     )
+
+# ---------------------------------------------------------------------------
+# Stored model readings (step 7c), surfaced 2026-09-04.
+#
+# These sat in study_changes.prose_interpretation, written by the cron and
+# read by nothing, while every page rendered the diff alone. The column is
+# the only thing on an AmendedField a model wrote, so what matters is that
+# it arrives intact, that nothing else arrives in its place, and that a
+# malformed row reads as absence rather than as an empty finding.
+# ---------------------------------------------------------------------------
+
+REAL_SUMMARY = (
+    "The denominator for calculating adverse event rate changed from patients "
+    "who started RT at 2 years to all randomized patients in the primary "
+    "analysis population."
+)
+
+
+def prose_row(interpretation, field="primary_outcomes"):
+    return {
+        "posted_on": "2026-08-31", "previously_posted_on": "2026-08-28",
+        "detected_at": RUN_2, "field_name": field,
+        "old_value": "before", "new_value": "after",
+        "prose_interpretation": interpretation,
+    }
+
+
+def test_a_stored_interpretation_reaches_the_response(api):
+    """NCT06635980's real stored reading — the single most valuable one on
+    file, and invisible to every page until this shipped."""
+    rows = [prose_row({"summary": REAL_SUMMARY})]
+    body = api(results(amendment_rows=rows)).get("/studies/NCT06635980/amendments").json()
+
+    change = body["amendments"][0]["changes"][0]
+    assert change["interpretation"] == REAL_SUMMARY
+
+
+def test_a_change_with_no_interpretation_says_none(api):
+    """Absence must be null, not an empty string: a page rendering "" would
+    draw an attributed AI block containing nothing."""
+    rows = [prose_row(None, field="completion_date")]
+    body = api(results(amendment_rows=rows)).get("/studies/NCT02954874/amendments").json()
+
+    assert body["amendments"][0]["changes"][0]["interpretation"] is None
+
+
+def test_why_matters_from_an_older_row_is_not_resurrected(api):
+    """The column held {summary, why_matters} before 2026-09-04. why_matters
+    was deleted for being ~48% of output tokens and the home of every weak
+    line in the first batch — speculation stored beside a checkable summary
+    with equal authority. Reading only `summary` keeps it deleted."""
+    rows = [prose_row({
+        "summary": REAL_SUMMARY,
+        "why_matters": "This represents a shift to intention-to-treat analysis.",
+    })]
+    body = api(results(amendment_rows=rows)).get("/studies/NCT06635980/amendments").json()
+
+    change = body["amendments"][0]["changes"][0]
+    assert change["interpretation"] == REAL_SUMMARY
+    assert "intention-to-treat" not in str(change)
+
+
+def test_a_malformed_interpretation_reads_as_absence(api):
+    """Whatever went wrong, the page must show no AI block rather than an
+    attributed empty one or a raw dict."""
+    for stored in ({}, {"summary": ""}, {"summary": "   "}, {"summary": None}, "a string", []):
+        rows = [prose_row(stored)]
+        body = api(results(amendment_rows=rows)).get("/studies/NCT06635980/amendments").json()
+        assert body["amendments"][0]["changes"][0]["interpretation"] is None, stored
+
+
+def test_an_interpretation_never_becomes_the_effect(api):
+    """`effect` is arithmetic on two stored values; `interpretation` is a
+    model's reading. Merging them would give a model's guess the authority
+    of a computation (CLAUDE.md sec. 2)."""
+    rows = [prose_row({"summary": REAL_SUMMARY})]
+    body = api(results(amendment_rows=rows)).get("/studies/NCT06635980/amendments").json()
+
+    change = body["amendments"][0]["changes"][0]
+    assert change["effect"] != change["interpretation"]
+    assert change["effect"] is None or REAL_SUMMARY not in change["effect"]

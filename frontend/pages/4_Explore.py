@@ -307,6 +307,25 @@ st.caption(
     "hide which is which."
 )
 
+# The anchor trial's own tags, repeated here rather than only at the top of
+# the page. The "Its conditions" column is the evidence a reader judges a
+# neighbour by, and judging it means comparing against THIS trial's tags —
+# which were a full screen away. Repeating four words beats scrolling.
+#
+# It also makes the mismatch legible rather than mysterious: RxPONDER is
+# tagged by tumour morphology and its nearest neighbour by AJCC stage, so
+# the two lists share no string while both being breast cancer. Nothing is
+# merged here, exactly as with site names.
+if data["conditions"]:
+    st.markdown(
+        "**This trial is tagged:** " + " · ".join(data["conditions"])
+    )
+    st.caption(
+        "Compare against the “Its conditions” column below. Tags are free "
+        "text the sponsor wrote and nothing is merged, so two trials can "
+        "study the same disease and share no tag at all."
+    )
+
 ROUTES = [
     (
         "by_site",

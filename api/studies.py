@@ -313,6 +313,27 @@ def get_study_changes(nct_id: str, conn=Depends(get_readonly_db)):
     )
 
 
+def _stored_interpretation(stored) -> Optional[str]:
+    """Pull the model's summary out of the stored JSONB, defensively.
+
+    The column has held two shapes: `{summary, why_matters}` before
+    2026-09-04 and `{summary}` after why_matters was dropped for being ~48%
+    of the output tokens and the home of every weak line in the first batch.
+    Reading only `summary` means an old row renders correctly rather than
+    resurrecting speculation that was deliberately deleted.
+
+    Anything that is not a dict with a non-empty summary returns None. A
+    malformed row must read as "no interpretation", never as an empty
+    interpretation the page might render as a blank finding.
+    """
+    if not isinstance(stored, dict):
+        return None
+    summary = stored.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        return None
+    return summary.strip()
+
+
 @router.get("/{nct_id}/amendments", response_model=AmendmentHistory)
 def get_study_amendments(nct_id: str, conn=Depends(get_readonly_db)):
     """A trial's change history grouped into the amendments that caused it.
@@ -355,7 +376,12 @@ def get_study_amendments(nct_id: str, conn=Depends(get_readonly_db)):
             SELECT a.new_value AS posted_on,
                    a.old_value AS previously_posted_on,
                    a.detected_at,
-                   c.field_name, c.old_value, c.new_value
+                   c.field_name, c.old_value, c.new_value,
+                   -- The stored model reading of a prose diff (step 7c).
+                   -- Written by the cron since 2026-09-03 and, until now,
+                   -- read by nothing: seven interpretations sat in this
+                   -- column while every page rendered the diff alone.
+                   c.prose_interpretation
             FROM study_changes a
             LEFT JOIN study_changes c
                    ON c.nct_id = a.nct_id
@@ -423,6 +449,7 @@ def get_study_amendments(nct_id: str, conn=Depends(get_readonly_db)):
                     detected_at=key,
                     category=field_category(row["field_name"]),
                     aspect=field_aspect(row["field_name"]),
+                    interpretation=_stored_interpretation(row["prose_interpretation"]),
                 )
             )
 

@@ -27,7 +27,9 @@ from labels import (
     format_recording_since,
     humanize_value,
     is_long_text,
+    INTERPRETATION_SCOPE_NOTE,
     render_aspect_caption,
+    render_interpretation,
     render_structured_diff,
     render_text_diff,
     summarize_text_change,
@@ -118,9 +120,21 @@ if not is_live:
             else:
                 st.markdown(f"**{label}** changed{suffix}")
                 render_structured_diff(change["old_value"], change["new_value"])
+            # primary_outcomes is BOTH a structured field and one of the
+            # three the model interprets — and it is where 5 of the 7 stored
+            # readings live. Rendering interpretations only in the long-text
+            # branch would have left most of them invisible, which is the
+            # bug this whole change exists to fix.
+            render_interpretation(change.get("interpretation"))
         elif is_long_text(change["old_value"], change["new_value"]):
             summary = summarize_text_change(change["old_value"], change["new_value"])
             st.markdown(f"**{label}** — {summary}{suffix}")
+            # Above the expander, not inside it: a 4,000-character
+            # eligibility rewrite is exactly the case where "+83 / −41 words"
+            # says nothing a reader can act on, and this is the line that
+            # does. The diff stays one click below so the reading can be
+            # checked against the source rather than trusted.
+            render_interpretation(change.get("interpretation"))
             with st.expander("Show what changed"):
                 render_text_diff(change["old_value"], change["new_value"])
         else:
@@ -133,6 +147,10 @@ if not is_live:
             if effect:
                 line += f"  ·  *{effect}*"
             st.write(line + suffix)
+            # Rare — a prose field short enough to land here — but rendering
+            # it in two of three branches would make visibility depend on
+            # text length, which no reader could predict.
+            render_interpretation(change.get("interpretation"))
 
     try:
         history = get(f"/studies/{nct_id}/amendments")
@@ -162,6 +180,13 @@ if not is_live:
                 f"**Amended {times}** since TrialLens started watching "
                 f"on {recording_since}."
             )
+            # Shown only when at least one AI reading is actually on this
+            # page. Stated unconditionally it would be noise on the great
+            # majority of trials, which have none; stated never, a reader
+            # seeing one field explained and another not would reasonably
+            # conclude the silent one didn't matter.
+            if any(c.get("interpretation") for a in amendments for c in a["changes"]):
+                st.caption(INTERPRETATION_SCOPE_NOTE)
             # Amendments with nothing to show are accounted for HERE, by
             # date, and then not listed again. A line of their own carried
             # exactly one fact — which date — and restated this sentence

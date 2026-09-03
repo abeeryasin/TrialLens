@@ -65,7 +65,7 @@ Steps 1-6 are built, tested, and live: schema + ingestion, the
 FastAPI-only-door layer, scheduler/cron automation (a real 6-hour cron
 running on GitHub Actions), Discover live-fallback (`GET /discover`), and
 the Streamlit frontend — Discover, Understand, the Monitor feed
-(`GET /changes`) and now Explore. **378 tests pass.** Investigate isn't
+(`GET /changes`) and now Explore. **396 tests pass.** Investigate isn't
 built.
 
 **Step 8's Explore is live and visible** (2026-09-04) —
@@ -74,14 +74,26 @@ built.
 from "planned" to live. The 191,864 edges built over the preceding three
 days were reachable from nothing until this landed.
 
-**START HERE (next session).** Two things are still built-and-invisible,
-and the first is the same failure at 1/27,000th the size: **the 7 prose
-interpretations** from step 7c are stored and read by no page — Understand
-is where they belong. Second, **unit 3 (the merge) is still open**, and the
-question to settle first is empirical: open Explore on a trial with a
-much-duplicated hospital and see whether the duplicates actually surface in
-the city rollup. If they do not, the merge stays deferred — that ordering
-reversal is what kept step 8 from repeating the step 7 mistake.
+**Step 7c's prose interpretations are visible too** (2026-09-04). All
+seven are rendered in Understand via `AmendedField.interpretation`, drawn by
+`labels.render_interpretation` with the attribution inside the element
+rather than in a footnote — it is the only thing TrialLens shows that a
+model wrote rather than computed, and it never replaces the diff. Watch
+`primary_outcomes`: it is BOTH a structured field and one of the three
+interpreted ones, and 5 of the 7 readings are on it, so a change that
+renders interpretations in only one branch of `render_change` hides most of
+the feature. Absence of a reading means three different things the stored
+column cannot separate (wrong field / predates 2026-09-03 / the model said
+`MEANINGFUL: no`), so absence is never rendered as "nothing important
+changed".
+
+**START HERE (next session).** **Unit 3, the merge, is the last open piece
+of step 8**, and the question to settle first is empirical, not
+architectural: open Explore on a trial with a much-duplicated hospital and
+see whether the duplicates actually surface in the city rollup. If they do
+not, the merge stays deferred — that ordering reversal is what kept step 8
+from repeating the step 7 mistake. After that, step 9 (Investigate) is the
+last unbuilt capability.
 
 **Step 7 (AI ranking layer) was built, measured, and removed** on
 2026-09-01. Measuring it produced the case against it: four of its five

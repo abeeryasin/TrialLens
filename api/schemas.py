@@ -172,6 +172,23 @@ class AmendedField(StudyChange):
     # which is always the case for prose fields, where saying what a
     # rewrite MEANS would be a reading of clinical text, not a calculation.
 
+    interpretation: Optional[str] = None
+    # A MODEL's reading of a prose diff (step 7c), stored in
+    # study_changes.prose_interpretation and written by claude-haiku-4-5 —
+    # the one thing on this object that is not computed from the two values
+    # beside it. It exists precisely where `effect` cannot: an eligibility
+    # rewrite has no arithmetic.
+    #
+    # It is NOT a study fact and any UI showing it MUST attribute it, must
+    # show the real diff alongside rather than instead, and must never merge
+    # it into the same visual register as `effect` (CLAUDE.md sec. 2 and 3).
+    #
+    # None carries THREE different meanings that the stored column cannot
+    # tell apart: the field is not a prose field, the change predates
+    # 2026-09-03 when interpretation began, or the model was asked and
+    # answered MEANINGFUL: no. So absence is never evidence that nothing
+    # important changed, and the page must not imply it is.
+
 
 class Amendment(BaseModel):
     """One amendment ClinicalTrials.gov posted to a trial, and what moved.

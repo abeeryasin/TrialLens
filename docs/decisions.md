@@ -2631,3 +2631,68 @@ database, not tuning SQL. Neighbours were folded into the same endpoint
 rather than a second one for this reason: one connection, not two.
 
 378 tests pass.
+
+## 2026-09-04 — The seven interpretations become visible, and a canary for what CI cannot see
+
+**Step 7c's prose interpretations are on screen.** They had been written by
+the cron since 2026-09-03 into `study_changes.prose_interpretation` and read
+by nothing — the same "built, paid for, unreachable" state Explore was in,
+at 1/27,000th the size. `GET /studies/{nct_id}/amendments` now carries
+`AmendedField.interpretation` and Understand renders it.
+
+**A bug caught during the build, not after.** The first version rendered
+interpretations only in the long-text branch of `render_change`. But
+`primary_outcomes` is a STRUCTURED field, and **5 of the 7 stored readings
+are on it** — so most of the feature would have shipped invisible, which is
+the exact failure being fixed. All three branches render it now, and a page
+test fails if the structured one stops.
+
+**Attribution is in the element, not in a footnote.** This is the only thing
+TrialLens displays that a model wrote rather than computed, so
+`labels.render_interpretation` draws the label and the sentence in one
+block. The page test asserts they appear in the *same rendered element*, so
+a future edit cannot separate them while leaving both technically on the
+page. It never replaces the diff: the exact words stay one click away, so
+the claim can be checked against the source (sec. 3).
+
+**`why_matters` stays deleted by construction.** The column held
+`{summary, why_matters}` before it was dropped for being ~48% of output
+tokens and the home of every weak line in the first batch.
+`_stored_interpretation` reads only `summary`, so an older row renders
+correctly instead of resurrecting speculation, and a test pins that.
+
+**Absence of an interpretation means three different things** — wrong field,
+predates 2026-09-03, or the model answered `MEANINGFUL: no` — and the stored
+column cannot tell them apart. So the page never implies absence means
+nothing important changed; a scope note says what interpretation covers, and
+only appears when a reading is actually on screen.
+
+**A source-text canary for the gap between CI and the cron.**
+`tests/test_sql_honesty_guards.py`. The mutation that turned an unstated
+site status into `NOT_RECRUITING` passed all 11 fake-connection tests and
+was caught only by the real-data suite — which needs credentials, so it runs
+in `monitor.yml` on the 6-hour cron and **skips entirely in `tests.yml` on
+every push**. Between a bad push and the next cron, CI was green while the
+claim was wrong.
+
+The canary bans two things across `api/` and `frontend/`: any `coalesce()`
+supplying a default for `recruitment_status`, and the literal
+`NOT_RECRUITING`, which is not a value ClinicalTrials.gov publishes (the
+lookbehind spares the real `NOT_YET_RECRUITING` and
+`ACTIVE_NOT_RECRUITING`). Verified: with `DATABASE_URL_READONLY` unset, it
+fails on the exact mutation.
+
+It is a weak kind of test and says so in its own docstring — reading source
+text, not behaviour. It is a canary, not the guarantee, and it asserts that
+the real-data test it stands in for still exists by name, so deleting that
+one cannot leave these green over nothing.
+
+**Neighbour conditions are now comparable.** The anchor trial's own tags
+render directly above the neighbour tabs, not only at the top of the page.
+The "Its conditions" column is the evidence a reader judges a neighbour by,
+and judging it means comparing against this trial's tags — which were a
+screen away. It also makes the RxPONDER mismatch legible rather than
+mysterious: one trial tagged by tumour morphology, the other by AJCC stage,
+no shared string, both breast cancer.
+
+396 tests pass.

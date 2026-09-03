@@ -169,6 +169,50 @@ def render_aspect_caption(aspect):
     )
 
 
+# Step 7c's stored model readings, finally rendered (2026-09-04). Written
+# by claude-haiku-4-5 from a prose diff and stored in
+# study_changes.prose_interpretation, where seven of them sat unread while
+# every page showed the diff alone.
+#
+# This is the ONLY thing TrialLens displays that a model wrote, so it is the
+# only thing that has to be visibly separated from the record. The rules,
+# from CLAUDE.md sec. 2 and 3:
+#
+#   - It is attributed in the element itself, not in a footnote. A reader
+#     who sees only this line must still know a model wrote it.
+#   - It never replaces the diff. The exact words that changed stay one
+#     click away, so the claim can be checked against the source.
+#   - It does not share a visual register with `effect`, which is
+#     arithmetic on two stored values and is never wrong in the way this
+#     can be.
+#
+# A left rule and a small caps label rather than a coloured callout: green
+# or amber would score the change, and the interpretation is not a verdict.
+INTERPRETATION_LABEL = "AI reading · not from ClinicalTrials.gov"
+
+INTERPRETATION_SCOPE_NOTE = (
+    "AI readings exist only for eligibility criteria, summaries and primary "
+    "outcomes, and only for changes seen since 3 September 2026. A change "
+    "without one is not a change that means nothing — it usually just falls "
+    "outside that scope."
+)
+
+
+def render_interpretation(text):
+    """One model-written reading of a prose change, attributed in place."""
+    if not text:
+        return
+    st.markdown(
+        '<div style="border-left:3px solid #b7a4d4;padding:2px 0 2px 12px;'
+        'margin:6px 0 10px">'
+        '<div style="font-size:11px;letter-spacing:.06em;text-transform:uppercase;'
+        f'color:#8b7fa8;margin-bottom:2px">{html.escape(INTERPRETATION_LABEL)}</div>'
+        f'<div style="font-size:14px;line-height:1.5;color:#3a3b45">{html.escape(str(text))}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def format_posted_on(raw_value):
     """A date ClinicalTrials.gov stamped on a record version ("2026-08-31").
 
