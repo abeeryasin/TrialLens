@@ -33,6 +33,13 @@ PROSE_FIELDS = {"eligibility_criteria", "brief_summary", "primary_outcomes"}
 # is the real figure from `response.usage`, never this. Until 2026-09-04 this
 # constant was the recorded spend too, which made the rolling ceiling a
 # multiplication rather than a measurement.
+#
+# Measured 2026-09-04 across four real calls: $0.00125 average, range
+# $0.00066-$0.00297 (the spread is input length — an eligibility_criteria diff
+# is far longer than a primary_outcomes one). So 0.004 over-estimates by ~3x.
+# Deliberately left high: this is the "may I spend more?" guard, and a guard
+# that over-estimates stops early, while one that under-estimates walks
+# through the ceiling. PROSE_MAX_CALLS binds first in practice anyway.
 COST_ESTIMATE_PER_CALL = 0.004
 
 # claude-haiku-4-5 list price, $ per million tokens (verified 2026-09-04).

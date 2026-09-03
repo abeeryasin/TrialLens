@@ -2488,3 +2488,67 @@ rolled back, no leaks.
 **A red CI run was the cheapest possible outcome here.** Dispatching the
 workflow rather than trusting a local green is what surfaced it, for the
 third time on this project.
+
+## 2026-09-04 — Step 7c: ask what changed, not why it matters
+
+The first batch that ever really ran (2026-09-03, 8 stored interpretations,
+$0.032 recorded) was read row by row, and reading it found three faults.
+
+**`why_matters` is gone.** It was ~48% of output tokens and carried every
+weak line in the batch — "potentially affecting recruitment messaging and
+stakeholder communication", "researchers should verify their trial systems
+reflect this formatting change". The `summary` half stayed tethered to the
+diff and could be checked against the source text; `why_matters` was
+speculation about consequences stored beside it with equal authority, which
+is precisely the §2 line between reporting a change and inventing its
+significance. The audience argument is the decisive one: told that an
+adverse-event denominator moved to all randomized patients, a clinical
+researcher does not need to be told that is an ITT shift. The prompt now
+says so outright — "the reader is a clinical researcher who will judge
+significance themselves". Output bills at 5x input, so the shorter answer is
+also the cheaper one, but cost was the third reason, not the first.
+
+**The no-change gate matched prose and lost to rephrasing.** It was
+`summary.lower() != "no change"`, an exact comparison against a sentence the
+model writes freely. On 2026-09-03 the model wrote "No meaningful change—the
+criteria were reformatted for clarity" and a paid call announcing that
+nothing had happened was stored as a finding. The model now fills in
+`MEANINGFUL: yes|no` and the gate reads that field.
+
+Reading all 8 rows showed the problem was wider than the one obvious case:
+row 6 on NCT03674567 says "without altering the core safety and efficacy
+endpoints" and was stored too. Honest tally of the batch — **2 clearly
+valuable, 2 debatable, 4 reformatting**. The earlier note in this session
+that "7 of 8 are real" was written after reading only 4 and was wrong.
+
+**Verified against the rows that broke the old gate**, not just against
+fakes: four real calls, and the gate agreed with a human reading 4/4 —
+dropping NCT03674567 and NCT06803888, storing NCT06635980 (denominator moved
+to all randomized patients) and NCT05846789 (expanded to ER+/HER2−, up to 4
+prior lines). Unit tests with a faked client prove the gate reads the field;
+only real registry text proves the model fills it in correctly.
+
+**Billing is measured now, not multiplied.** `COST_ESTIMATE_PER_CALL` was
+the recorded spend as well as the pre-flight guess, so the rolling ceiling
+added up a constant rather than money. Cost now comes from `response.usage`
+at claude-haiku-4-5's $1.00/$5.00 per MTok, and `interpret_prose_change`
+returns `(interpretation, cost)`.
+
+That pairing fixed a third bug: spend had been added only when an
+interpretation came back, so every call that returned "no change" was real
+money recorded as $0.00 — invisible to the ceiling meant to bound it. Billing
+now keys on `cost > 0` (a call happened) rather than on whether the result
+was worth keeping.
+
+**Real cost is ~$0.00125 per call, not $0.004** — measured over four calls,
+range $0.00066–$0.00297, the spread being input length (an
+eligibility_criteria diff is far longer than a primary_outcomes one). The
+estimate is ~3x high and is left that way on purpose: it is the "may I spend
+more?" guard, and a guard that over-estimates stops early while one that
+under-estimates walks through the ceiling. It also means the $1.00 rolling
+ceiling buys roughly 800 calls, not the ~250 assumed when it was set.
+
+**Stored data reconciled:** the non-change row cleared, `why_matters`
+stripped from the other 7. Their summaries were correct and re-paying for
+identical text would be waste. 332 tests pass, including the 2026-09-03
+phrasing verbatim as a regression case.
