@@ -118,7 +118,11 @@ CREATE TABLE IF NOT EXISTS study_changes (
 CREATE INDEX IF NOT EXISTS idx_study_changes_nct_id ON study_changes(nct_id);
 
 -- Prose interpretation (step 7c): stores AI interpretation of eligibility/summary/outcome changes
--- JSON: {summary, why_matters} from interpret_prose_change()
+-- JSON: {summary} from interpret_prose_change(). why_matters was dropped
+-- 2026-09-04: it was ~48% of output tokens and carried every weak line in the
+-- first live batch — speculation about consequences sitting beside
+-- source-anchored fact with the same authority. A clinical researcher judges
+-- significance; the model's job is to spot the change (docs/decisions.md).
 ALTER TABLE study_changes ADD COLUMN IF NOT EXISTS prose_interpretation JSONB;
 
 -- Supports the Monitor page's aggregate feed (GET /changes, step 6,

@@ -27,7 +27,31 @@ from anthropic import Anthropic
 
 
 PROSE_FIELDS = {"eligibility_criteria", "brief_summary", "primary_outcomes"}
-COST_ESTIMATE_PER_CALL = 0.004  # measured against haiku-4-5
+
+# Used ONLY to decide whether there is room for another call before making it —
+# you cannot know a call's cost until it returns. What gets recorded afterwards
+# is the real figure from `response.usage`, never this. Until 2026-09-04 this
+# constant was the recorded spend too, which made the rolling ceiling a
+# multiplication rather than a measurement.
+COST_ESTIMATE_PER_CALL = 0.004
+
+# claude-haiku-4-5 list price, $ per million tokens (verified 2026-09-04).
+# Output is 5x input, which is why the prompt asks for one line instead of two.
+HAIKU_INPUT_USD_PER_MTOK = 1.00
+HAIKU_OUTPUT_USD_PER_MTOK = 5.00
+
+
+def _call_cost_usd(usage) -> float:
+    """Real cost of one call, from the token counts the API reports.
+
+    Cache fields are ignored on purpose: this call sends a unique diff every
+    time and caches nothing, so counting them would imply a discount that was
+    never earned.
+    """
+    return (
+        usage.input_tokens * HAIKU_INPUT_USD_PER_MTOK
+        + usage.output_tokens * HAIKU_OUTPUT_USD_PER_MTOK
+    ) / 1_000_000
 
 
 def get_prose_amendments(conn, hours_ago: int = 24) -> list[dict]:
@@ -84,36 +108,41 @@ def interpret_prose_change(
     field_name: str,
     old_value: Optional[str],
     new_value: Optional[str],
-) -> Optional[dict]:
+) -> tuple[Optional[dict], float]:
     """Interpret what a prose field change means for a researcher.
 
-    Returns {
-        'summary': 'one-line what changed',
-        'why_matters': 'why a researcher should care',
-    }
-    or None if the change is too small to interpret (both values empty/too short).
+    Returns `(interpretation, cost_usd)`:
+      - interpretation is {'summary': 'one line stating what changed'} when the
+        model reports the substance changed, else None.
+      - cost_usd is what the call actually cost, from `response.usage`. It is
+        0.0 only when no call was made (a pre-filter caught it first).
+
+    The cost is returned even when the interpretation is None, which is the
+    whole point of the pair. Before 2026-09-04 a call that came back "no
+    change" was recorded as $0.00 spent: real money, invisible to the budget
+    ceiling that is supposed to bound it.
 
     Raises: ValueError if API key is not set.
     """
     if field_name not in PROSE_FIELDS:
-        return None
+        return None, 0.0
 
     # Skip if either value is effectively empty
     old_text = (old_value or "").strip()
     new_text = (new_value or "").strip()
     if not old_text or not new_text:
-        return None
+        return None, 0.0
 
     # Too small to interpret meaningfully
     if len(old_text) < 20 and len(new_text) < 20:
-        return None
+        return None, 0.0
 
     # Pre-filter: skip if texts are >90% similar (formatting changes only)
     # This catches punctuation fixes, whitespace changes, line breaks, etc.
     # without calling the API. Cheap O(n) check prevents wasteful $0.004 calls.
     similarity = _similarity_ratio(old_text, new_text)
     if similarity > 0.90:
-        return None
+        return None, 0.0
 
     prompt = f"""A clinical trial NCT{nct_id.replace("NCT", "")} has changed its {field_name}.
 
@@ -123,16 +152,18 @@ BEFORE:
 AFTER:
 {new_text}
 
-Interpret this change concisely. Respond with exactly two lines:
+Respond with exactly two lines:
 
-SUMMARY: [One sentence describing what changed]
-WHY_MATTERS: [One sentence why a clinical researcher should care]
+SUMMARY: [One sentence stating what changed]
+MEANINGFUL: [yes if the substance changed; no if only formatting, wording, ordering or presentation changed]
 
-Example format:
+Example:
 SUMMARY: Age eligibility narrowed from all adults to 65+
-WHY_MATTERS: Significantly reduces potential referral population
+MEANINGFUL: yes
 
-Be factual. Reference specifics from the text. If no meaningful change, write "no change"."""
+Be factual and reference specifics from the text. Do not explain why it
+matters — the reader is a clinical researcher who will judge significance
+themselves."""
 
     client = _client()
     response = client.messages.create(
@@ -140,23 +171,31 @@ Be factual. Reference specifics from the text. If no meaningful change, write "n
         max_tokens=200,
         messages=[{"role": "user", "content": prompt}],
     )
+    cost = _call_cost_usd(response.usage)
 
     text = response.content[0].text.strip()
     summary = None
-    why_matters = None
+    meaningful = None
 
-    # Parse the two expected lines
     for line in text.split("\n"):
         line = line.strip()
         if line.startswith("SUMMARY:"):
             summary = line[8:].strip()
-        elif line.startswith("WHY_MATTERS:"):
-            why_matters = line[12:].strip()
+        elif line.startswith("MEANINGFUL:"):
+            meaningful = line[11:].strip().lower()
 
-    if summary and why_matters and summary.lower() != "no change":
-        return {"summary": summary, "why_matters": why_matters}
+    # Gate on the structured field, never on the prose.
+    #
+    # This used to be `summary.lower() != "no change"` — an exact string match
+    # against a sentence the model writes freely. On 2026-09-03 it wrote "No
+    # meaningful change—the criteria were reformatted for clarity...", which is
+    # not the literal string "no change", so a paid call announcing that
+    # nothing happened was stored as a finding. Matching prose will always lose
+    # to rephrasing; a field the model has to fill in with yes or no will not.
+    if summary and meaningful == "yes":
+        return {"summary": summary}, cost
 
-    return None
+    return None, cost
 
 
 def interpret_amendments_batch(
@@ -168,7 +207,9 @@ def interpret_amendments_batch(
 
     Args:
         amendments: List of dicts with {nct_id, field_name, old_value, new_value}
-        max_cost_usd: Stop if spend would exceed this
+        max_cost_usd: Stop before a call that COST_ESTIMATE_PER_CALL says would
+            exceed this. The stop is predictive because a call's price is
+            unknown until it returns; `spend` below is the measured total.
         max_calls: Stop if we would exceed this many calls
 
     Returns:
@@ -206,24 +247,28 @@ def interpret_amendments_batch(
             continue
 
         try:
-            interpretation = interpret_prose_change(
+            interpretation, cost = interpret_prose_change(
                 nct_id, field_name, old_value, new_value
             )
-            # Only count spend if interpretation was attempted
-            # (None can mean pre-filter skipped it OR no meaningful interpretation)
-            # The pre-filter returns None without API call; interpret_prose_change
-            # uses the API for anything that passes pre-filter.
-            # To track accurately, we count calls only when interpretation is not None
-            # OR when we're sure the API was called.
-            # For now, optimistic: if result is not None, we assume API was called.
-            # If None, assume it was filtered out (though some None come from API too).
-            if interpretation is not None:
-                spend += COST_ESTIMATE_PER_CALL
+            # Bill on `cost > 0`, which means a call was actually made — not on
+            # `interpretation is not None`, which only means the call produced
+            # something worth storing. Those came apart on every call that
+            # returned "no change": real money spent, recorded as zero, and
+            # invisible to the rolling ceiling.
+            spend += cost
+            if cost > 0:
                 calls_made += 1
-                print(
-                    f"  {nct_id} {field_name}: {interpretation['summary'][:60]}...",
-                    flush=True,
-                )
+                if interpretation is not None:
+                    print(
+                        f"  {nct_id} {field_name}: {interpretation['summary'][:60]}...",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"  {nct_id} {field_name}: no substantive change "
+                        f"(${cost:.4f})",
+                        flush=True,
+                    )
             results.append({**amendment, "prose_interpretation": interpretation})
         except ValueError as e:
             print(f"  ERROR: {e}", flush=True)

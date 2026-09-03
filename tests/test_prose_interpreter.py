@@ -25,7 +25,13 @@ class TestProseFieldDefinition:
 
 
 class TestInterpretProseChangeValidation:
-    """Test validation without calling the API."""
+    """Validation short-circuits, checked without calling the API.
+
+    Each asserts `(None, 0.0)`, and the 0.0 is the load-bearing half: these
+    paths must cost nothing, because they return before any request is made.
+    A non-zero cost here would mean a guard stopped guarding and the call went
+    out anyway.
+    """
 
     def test_non_prose_field_returns_none(self):
         """Non-prose fields should return None (no API call)."""
@@ -35,7 +41,7 @@ class TestInterpretProseChangeValidation:
             old_value="100",
             new_value="200",
         )
-        assert result is None
+        assert result == (None, 0.0)
 
     def test_empty_old_value_returns_none(self):
         """Empty old value should return None (too small to interpret)."""
@@ -45,7 +51,7 @@ class TestInterpretProseChangeValidation:
             old_value="",
             new_value="Some eligibility criteria here.",
         )
-        assert result is None
+        assert result == (None, 0.0)
 
     def test_empty_new_value_returns_none(self):
         """Empty new value should return None (too small to interpret)."""
@@ -55,7 +61,7 @@ class TestInterpretProseChangeValidation:
             old_value="Some eligibility criteria here.",
             new_value="",
         )
-        assert result is None
+        assert result == (None, 0.0)
 
     def test_both_values_too_short_returns_none(self):
         """If both are under 20 chars, no point interpreting."""
@@ -65,7 +71,7 @@ class TestInterpretProseChangeValidation:
             old_value="Short",
             new_value="Shorter",
         )
-        assert result is None
+        assert result == (None, 0.0)
 
 
 class TestAmendmentBatch:
@@ -126,3 +132,131 @@ class TestProseFieldsMatchDeterministicLayers:
                 new_value="Some new text " * 10,
             )
             assert result is None, f"{field} should not have deterministic description"
+
+
+# ---------------------------------------------------------------------------
+# The MEANINGFUL gate and real-usage billing (2026-09-04).
+#
+# Both replace things that failed against live data on 2026-09-03: a gate that
+# string-matched the model's prose, and a spend figure that was a constant
+# multiplied by a call count. Free — the client is faked, nothing is sent.
+# ---------------------------------------------------------------------------
+
+import api.prose_interpreter as pi
+
+
+class _FakeUsage:
+    def __init__(self, input_tokens, output_tokens):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class _FakeResponse:
+    def __init__(self, text, input_tokens=1000, output_tokens=100):
+        self.content = [type("Block", (), {"text": text})()]
+        self.usage = _FakeUsage(input_tokens, output_tokens)
+
+
+class _FakeClient:
+    def __init__(self, text, **usage):
+        self._text = text
+        self._usage = usage
+        self.messages = type(
+            "M", (), {"create": lambda _s, **kw: _FakeResponse(self._text, **self._usage)}
+        )()
+
+
+def _run(monkeypatch, text, **usage):
+    monkeypatch.setattr(pi, "_client", lambda: _FakeClient(text, **usage))
+    return pi.interpret_prose_change(
+        nct_id="NCT00000000",
+        field_name="eligibility_criteria",
+        old_value="Patients aged 18 and over with confirmed diagnosis.",
+        new_value="Patients aged 65 and over with confirmed diagnosis, ECOG 0-1.",
+    )
+
+
+class TestTheMeaningfulGate:
+    def test_a_meaningful_change_is_stored(self, monkeypatch):
+        result, cost = _run(
+            monkeypatch,
+            "SUMMARY: Age eligibility narrowed from 18+ to 65+\nMEANINGFUL: yes",
+        )
+        assert result == {"summary": "Age eligibility narrowed from 18+ to 65+"}
+        assert cost > 0
+
+    def test_the_phrasing_that_defeated_the_old_filter_is_now_rejected(self, monkeypatch):
+        """The real 2026-09-03 failure, verbatim.
+
+        The old gate was `summary.lower() != "no change"`. The model wrote
+        "No meaningful change—the criteria were reformatted for clarity", which
+        is not that literal string, so a paid call reporting that nothing
+        happened was stored as a finding on NCT05327608.
+        """
+        result, cost = _run(
+            monkeypatch,
+            "SUMMARY: No meaningful change—the criteria were reformatted for "
+            "clarity\nMEANINGFUL: no",
+        )
+        assert result is None
+        assert cost > 0, "the call still happened and still cost money"
+
+    def test_no_result_has_a_why_matters_field(self, monkeypatch):
+        """Dropped 2026-09-04. It was ~48% of output tokens and every weak
+        line in the live batch lived there — speculation about consequences,
+        presented beside source-anchored fact with the same authority."""
+        result, _ = _run(
+            monkeypatch,
+            "SUMMARY: Age narrowed to 65+\nMEANINGFUL: yes\n"
+            "WHY_MATTERS: Reduces the referral pool",
+        )
+        assert result is not None
+        assert "why_matters" not in result
+
+    def test_a_missing_meaningful_line_is_not_stored(self, monkeypatch):
+        """Absence is not consent. If the model skips the field, we do not get
+        to assume the change was substantive."""
+        result, cost = _run(monkeypatch, "SUMMARY: Age narrowed to 65+")
+        assert result is None
+        assert cost > 0
+
+
+class TestRealUsageBilling:
+    def test_cost_comes_from_the_token_counts(self, monkeypatch):
+        """$1.00/MTok in and $5.00/MTok out for claude-haiku-4-5."""
+        _, cost = _run(monkeypatch, "SUMMARY: x\nMEANINGFUL: yes",
+                       input_tokens=1_000_000, output_tokens=1_000_000)
+        assert cost == pytest.approx(6.00)
+
+    def test_output_tokens_cost_five_times_input(self, monkeypatch):
+        """The reason the prompt asks for one line instead of two."""
+        _, in_only = _run(monkeypatch, "SUMMARY: x\nMEANINGFUL: yes",
+                          input_tokens=10_000, output_tokens=0)
+        _, out_only = _run(monkeypatch, "SUMMARY: x\nMEANINGFUL: yes",
+                           input_tokens=0, output_tokens=10_000)
+        assert out_only == pytest.approx(in_only * 5)
+
+    def test_a_rejected_interpretation_still_reports_its_cost(self, monkeypatch):
+        """The billing blind spot, directly.
+
+        Until 2026-09-04 spend was added only when an interpretation came back,
+        so every "no change" call was real money recorded as $0.00 — invisible
+        to the ceiling meant to bound it.
+        """
+        _, cost = _run(monkeypatch, "SUMMARY: nothing\nMEANINGFUL: no",
+                       input_tokens=2000, output_tokens=50)
+        assert cost == pytest.approx((2000 * 1.00 + 50 * 5.00) / 1_000_000)
+
+
+def test_a_prefiltered_change_costs_nothing(monkeypatch):
+    """The pre-filter must return before the client is ever constructed."""
+    def _explode():
+        raise AssertionError("the API was called for a >90% similar change")
+    monkeypatch.setattr(pi, "_client", _explode)
+    result, cost = pi.interpret_prose_change(
+        nct_id="NCT00000000",
+        field_name="eligibility_criteria",
+        old_value="Patients aged 18 and over with a confirmed diagnosis of disease.",
+        new_value="Patients aged 18 and over with a confirmed diagnosis of disease!",
+    )
+    assert result is None and cost == 0.0

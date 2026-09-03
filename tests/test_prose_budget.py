@@ -119,7 +119,7 @@ def test_spend_survives_a_failure_after_the_money_is_gone(monkeypatch):
     monkeypatch.setattr(
         run_monitor, "interpret_amendments_batch",
         lambda amendments, max_cost_usd, max_calls: (
-            [{"id": 1, "prose_interpretation": {"summary": "x", "why_matters": "y"}}],
+            [{"id": 1, "prose_interpretation": {"summary": "x"}}],
             0.42,
         ),
     )
