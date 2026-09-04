@@ -180,11 +180,19 @@ def diverging_dates(rows):
     df["signed"] = df.apply(
         lambda r: r["count"] if r["direction"] == "Pushed later" else -r["count"], axis=1
     )
+    # Room for the value labels that sit OUTSIDE each bar end. Without it
+    # the negative side's label is drawn past the plot edge and lands on
+    # top of the category name — "Primary completion" + "18" rendered as
+    # "Primary completion18". Reported 2026-09-04.
+    span = max(abs(df["signed"].min()), abs(df["signed"].max())) or 1
+    domain = [df["signed"].min() - span * 0.18, df["signed"].max() + span * 0.12]
+
     chart = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadius=CORNER).encode(
         y=alt.Y("field:N", title=None, sort=None,
-                axis=alt.Axis(labelColor=INK, labelLimit=200, **LABEL_EVERY_ROW)),
+                axis=alt.Axis(labelLimit=200, **CATEGORY_LABEL, **LABEL_EVERY_ROW)),
         x=alt.X("signed:Q", title="← pulled earlier    ·    pushed later →",
-                axis=alt.Axis(format="+d")),
+                scale=alt.Scale(domain=domain, nice=False),
+                axis=alt.Axis(format="+d", grid=False)),
         color=alt.Color(
             "direction:N",
             scale=alt.Scale(domain=["Pushed later", "Pulled earlier"], range=[LATER, EARLIER]),
@@ -198,7 +206,7 @@ def diverging_dates(rows):
     # always sits clear of the bar end rather than on top of it.
     def _labels(subset, dx, align):
         return alt.Chart(subset).mark_text(
-            color=INK, fontSize=11, dx=dx, align=align
+            color=INK, fontSize=12, fontWeight=600, dx=dx, align=align
         ).encode(
             y=alt.Y("field:N", sort=None),
             x=alt.X("signed:Q"),
@@ -217,42 +225,70 @@ def diverging_dates(rows):
     ).encode(x="x:Q")
 
     return alt.layer(chart, zero, *label_layers).properties(
-        height=max(120, len(df["field"].unique()) * 52), background=SURFACE
+        height=max(140, len(df["field"].unique()) * 62), background=SURFACE
     ).configure_view(strokeWidth=0).configure_axis(
-        grid=True, gridColor=GRID, domain=False, tickSize=0,
+        grid=False, domain=False, tickSize=0,
         labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11, titleFontSize=11,
     )
 
 
 def target_vs_actual(rows, threshold=0.85):
-    """One line per trial from its target to what it enrolled.
+    """How close each trial came to its own recruitment plan.
 
-    A dumbbell, not two bars: the pair belongs to one trial and the
-    distance between them IS the finding. The rule marks 85% of target,
-    the threshold the accrual literature counts a shortfall against.
+    **The axis is percent of target, not participants.** Plotting absolute
+    headcount put a trial that enrolled 13 of 30 and one that enrolled
+    2,000 of 1,960 on the same 0-2,000 linear scale, where the small trial
+    is an invisible dot at the origin and its 57% shortfall — the more
+    serious of the two — cannot be seen at all. The ratio IS the finding,
+    so the ratio is the axis, and every trial is comparable regardless of
+    size. Reported 2026-09-04.
+
+    Each trial is a segment from its plan (100%) to where it landed, so
+    the distance from the 100% rule is the miss. The second rule marks
+    85%, the threshold the accrual literature counts a shortfall against.
+    The absolute numbers stay on the label — "163 of 400" — because a
+    percentage alone hides whether this was 6 people or 600.
     """
     df = pd.DataFrame(rows)
     if df.empty:
         return None
-    order = df.sort_values("ratio")["label"].tolist()
-    height = max(120, len(df) * (BAR_SIZE + 12))
+    df = df.copy()
+    df["pct_value"] = df["ratio"] * 100
+    df["plan"] = 100.0
+    df["counts"] = [
+        f"{int(a):,} of {int(t):,}" for a, t in zip(df["actual"], df["target"])
+    ]
+    order = df.sort_values("pct_value")["label"].tolist()
+    height = max(140, len(df) * ROW_HEIGHT)
 
-    connector = alt.Chart(df).mark_rule(strokeWidth=2, color="#c8c7c2").encode(
-        y=alt.Y("label:N", sort=order, title=None,
-                axis=alt.Axis(labelColor=INK, labelLimit=240, **LABEL_EVERY_ROW)),
-        x=alt.X("target:Q", title="Participants"),
-        x2="actual:Q",
+    axis = alt.Axis(format="d", grid=False, labelColor=INK_MUTED, labelFontSize=11)
+    scale = alt.Scale(
+        domain=[min(0, df["pct_value"].min() - 8), max(115, df["pct_value"].max() + 8)],
+        nice=False,
     )
-    target = alt.Chart(df).mark_point(
-        size=90, filled=True, stroke=SURFACE, strokeWidth=2, color=INK_MUTED
-    ).encode(
-        y=alt.Y("label:N", sort=order), x="target:Q",
-        tooltip=["label", "target", "actual", "pct"],
+
+    def base(chart):
+        return chart.encode(
+            y=alt.Y("label:N", sort=order, title=None,
+                    axis=alt.Axis(labelLimit=140, **CATEGORY_LABEL, **LABEL_EVERY_ROW)),
+        )
+
+    # The plan, and the threshold a shortfall is counted against.
+    rules = alt.Chart(pd.DataFrame({
+        "at": [100.0, threshold * 100],
+        "what": ["Their plan (100%)", f"{int(threshold * 100)}% of plan"],
+    })).mark_rule(strokeDash=[3, 3], strokeWidth=1, color=INK_MUTED).encode(
+        x=alt.X("at:Q", scale=scale, axis=axis, title="Percent of the trial's own target"),
+        tooltip=["what"],
     )
-    actual = alt.Chart(df).mark_point(
+    connector = base(alt.Chart(df).mark_rule(strokeWidth=2, color="#d8d7d2")).encode(
+        x=alt.X("plan:Q", scale=scale, axis=axis, title="Percent of the trial's own target"),
+        x2="pct_value:Q",
+    )
+    landed = base(alt.Chart(df).mark_point(
         size=110, filled=True, stroke=SURFACE, strokeWidth=2
-    ).encode(
-        y=alt.Y("label:N", sort=order), x="actual:Q",
+    )).encode(
+        x=alt.X("pct_value:Q", scale=scale, axis=axis),
         color=alt.Color(
             "shortfall:N",
             scale=alt.Scale(domain=["Below 85% of target", "At or above"],
@@ -261,15 +297,16 @@ def target_vs_actual(rows, threshold=0.85):
         ),
         tooltip=["label", "target", "actual", "pct"],
     )
-    labels = alt.Chart(df).mark_text(align="left", dx=10, color=INK, fontSize=11).encode(
-        y=alt.Y("label:N", sort=order),
-        x=alt.X("max_x:Q"),
-        text="pct:N",
+    labels = base(alt.Chart(df).mark_text(
+        align="left", dx=10, color=INK, fontSize=12, fontWeight=600
+    )).encode(
+        x=alt.X("pct_value:Q", scale=scale, axis=axis),
+        text="counts:N",
     )
-    return (connector + target + actual + labels).properties(
+    return alt.layer(rules, connector, landed, labels).properties(
         height=height, background=SURFACE
     ).configure_view(strokeWidth=0).configure_axis(
-        grid=True, gridColor=GRID, domain=False, tickSize=0,
+        grid=False, domain=False, tickSize=0,
         labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11, titleFontSize=11,
     )
 
