@@ -37,7 +37,6 @@ NEUTRAL = "#c8c7c2"   # artefacts and no-moves: visibly "nothing happened"
 CRITICAL = "#d03b3b"
 GOOD = "#0ca30c"
 
-BAR_SIZE = 18
 CORNER = 4
 
 # Every row must keep its own label, and this is not cosmetic.
@@ -56,8 +55,27 @@ CORNER = 4
 LABEL_EVERY_ROW = {"labelOverlap": False}
 
 # Vertical room per row on a horizontal bar chart. 28px was tight enough
-# for the theme to start dropping labels; 34 leaves the margin.
-ROW_HEIGHT = BAR_SIZE + 16
+# for the theme to start dropping labels; 34 left the margin but read as a
+# wall — thick bars, thin gaps. 40 gives the row more air than mark, which
+# is what makes a list of eight feel calm instead of packed.
+ROW_HEIGHT = 40
+
+# Bars are THIN. A bar's job is comparison, not presence: at 18px against a
+# 34px row the mark dominated and eight rows read as a block of colour.
+BAR_SIZE = 13
+
+# **A labelled bar needs no axis.** Every horizontal bar here prints its own
+# value, so the x scale, its ticks and its gridlines state the same fact a
+# second time — and at counts of 0-13 that is fourteen vertical rules behind
+# eight bars, which is most of what "crowded" was. Reported 2026-09-04.
+NO_AXIS = alt.Axis(
+    grid=False, domain=False, ticks=False, labels=False, title=None
+)
+
+# Category labels are SECONDARY; the number leads. Same 11px, but muted ink
+# against the value's 12px/600 primary — weight and colour carry the
+# hierarchy so nothing has to get bigger.
+CATEGORY_LABEL = {"labelColor": INK_MUTED, "labelFontSize": 11, "labelPadding": 12}
 
 
 def _base(df, height):
@@ -103,8 +121,9 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None,
             size=BAR_SIZE, cornerRadiusEnd=CORNER
         ).encode(
             y=alt.Y("_label:N", sort=label_order, title=None,
-                    axis=alt.Axis(labelColor=INK, labelLimit=300, **LABEL_EVERY_ROW)),
-            x=alt.X(f"{value_field}:Q", title=value_title, axis=alt.Axis(grid=True)),
+                    axis=alt.Axis(labelLimit=300, labelColor=INK, labelFontSize=11,
+                                  labelPadding=12, **LABEL_EVERY_ROW)),
+            x=alt.X(f"{value_field}:Q", axis=NO_AXIS),
             color=alt.value(color or SERIES[0]),
             tooltip=[c for c in df.columns if c != "_label"],
         ).add_params(
@@ -122,14 +141,14 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None,
 
     bars = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadiusEnd=CORNER).encode(
         y=alt.Y(f"{label_field}:N", sort=order, title=None,
-                axis=alt.Axis(labelColor=INK, labelLimit=260, **LABEL_EVERY_ROW)),
-        x=alt.X(f"{value_field}:Q", title=value_title, axis=alt.Axis(grid=True)),
+                axis=alt.Axis(labelLimit=260, **CATEGORY_LABEL, **LABEL_EVERY_ROW)),
+        x=alt.X(f"{value_field}:Q", axis=NO_AXIS),
         color=alt.value(color or SERIES[0]),
         tooltip=list(df.columns),
     )
 
     labels = alt.Chart(df).mark_text(
-        align="left", dx=6, color=INK, fontSize=11
+        align="left", dx=8, color=INK, fontSize=12, fontWeight=600
     ).encode(
         # No axis property here at all. Setting axis=None removed the
         # shared axis outright when Vega-Lite resolved the layers,
@@ -142,7 +161,7 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None,
     return (bars + labels).properties(height=height, background=SURFACE).configure_view(
         strokeWidth=0
     ).configure_axis(
-        grid=True, gridColor=GRID, domain=False, tickSize=0,
+        grid=False, domain=False, tickSize=0,
         labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11, titleFontSize=11,
     )
 
@@ -378,17 +397,24 @@ def lifecycle_bars(rows):
 
     bars = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadiusEnd=CORNER).encode(
         y=alt.Y("movement:N", sort=order, title=None,
-                axis=alt.Axis(labelColor=INK, labelLimit=320, **LABEL_EVERY_ROW)),
-        x=alt.X("count:Q", title="Trials"),
+                axis=alt.Axis(labelLimit=340, **CATEGORY_LABEL, **LABEL_EVERY_ROW)),
+        x=alt.X("count:Q", axis=NO_AXIS),
         color=alt.Color(
             "kind:N",
             scale=alt.Scale(domain=["Ordinary", "Unusual — worth a look"],
                             range=[SERIES[0], CRITICAL]),
-            legend=alt.Legend(title=None, orient="top"),
+            # No legend. Two categories, one of which usually has a single
+            # member, cost a whole row of chrome above an eight-row chart.
+            # The anomaly carries a marker in its own label instead, so
+            # identity is never colour alone.
+            legend=None,
         ),
         tooltip=["movement", "count", "kind", "examples"],
     )
-    labels = alt.Chart(df).mark_text(align="left", dx=6, color=INK, fontSize=11).encode(
+    # The number leads: 12px/600 primary against the category's 11px muted.
+    labels = alt.Chart(df).mark_text(
+        align="left", dx=8, color=INK, fontSize=12, fontWeight=600
+    ).encode(
         y=alt.Y("movement:N", sort=order),
         x=alt.X("count:Q"),
         text=alt.Text("count:Q"),
@@ -396,6 +422,6 @@ def lifecycle_bars(rows):
     return (bars + labels).properties(height=height, background=SURFACE).configure_view(
         strokeWidth=0
     ).configure_axis(
-        grid=True, gridColor=GRID, domain=False, tickSize=0,
+        grid=False, domain=False, tickSize=0,
         labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11, titleFontSize=11,
     )

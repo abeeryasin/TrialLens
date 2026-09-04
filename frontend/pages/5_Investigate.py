@@ -432,7 +432,15 @@ with changed_tab:
 
         movements = [
             {
-                "movement": f"{say(t['old_value'])}  →  {say(t['new_value'])}",
+                # The anomaly carries a marker in its own label. The chart
+                # dropped its legend (two categories, one usually of size 1,
+                # cost a whole row of chrome), so the red must never be the
+                # only thing saying "unusual".
+                # A word, not a glyph: "⚠" falls back to an emoji font and
+                # the row renders in a different typeface from its
+                # neighbours. Identity still never rests on colour alone.
+                "movement": f"{say(t['old_value'])}  →  {say(t['new_value'])}"
+                + ("   (unusual)" if f["anomaly"] else ""),
                 "count": t["count"],
                 "kind": "Unusual — worth a look" if f["anomaly"] else "Ordinary",
                 "examples": f["label"],
