@@ -79,13 +79,16 @@ not assumed: real monitoring is only ~1 week old, so the agent had nothing
 yet to call a trend, per its own system prompt. Design, build, and that
 first-run read: `docs/decisions.md`, 2026-09-04/05.
 
-**Step 10 (real deployment) is in progress, started 2026-09-05.** Platform
-is Render (free tier + a free UptimeRobot ping, not a paid always-on tier —
-real budget constraint, see `docs/decisions.md`). The long-flagged Neon
-rename is done (`dev` → `production`), and tracked conditions moved off a
-config file into a real database table with a UI to add one. `render.yaml`
-is written; deploying it and wiring env vars is the user's own dashboard
-work, in progress. Steps 11-12 (ops hardening, notifications) untouched.
+**Step 10 (real deployment) is LIVE as of 2026-09-05.** TrialLens runs on
+Render's free tier — API at `https://triallens-api.onrender.com`, frontend
+at `https://triallens-frontend.onrender.com` — reading the same Neon
+database the 6-hour cron writes to. Verified by a human loading the real
+page, not just by curl. The long-flagged Neon rename is done (`dev` →
+`production`), tracked conditions moved off a config file into a database
+table with a UI to add one, and the dependency stack is pinned so deployed
+equals tested. Remaining: the UptimeRobot keep-warm ping, and Neon's
+`Default` flag still points at `production-old-unused`. Steps 11-12 (ops
+hardening, notifications) untouched.
 
 Standing gotchas, dated postmortem for each in `docs/decisions.md`:
 
@@ -98,6 +101,12 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   `protocolSection`. Query real distributions before a query **or prompt** (§6).
 - **`git add -A` is not safe here** — it has committed an installed skill
   and a 2.4 MB design canvas in one session. Stage deliberately.
+- **Delete test rows by explicit list, never by pattern.** `_` is a
+  wildcard in SQL `LIKE`, so `LIKE '__%'` means "2+ characters", not "starts
+  with two underscores" — on 2026-09-05 that wiped the whole
+  `tracked_conditions` registry while cleaning up one probe row (restored
+  within seconds; the cron that reads it was ~70 min away). Same class as
+  the over-broad test cleanup of 2026-08-27. Use `WHERE x IN (...)`.
 - This project's real text runs ~2.61 chars/token, not ~4.0 — re-measure
   any cost estimate rather than trusting an old one.
 - **`requirements.txt` is pinned, and must stay pinned** (with
