@@ -2927,3 +2927,75 @@ denominator trap, and the three-cycle iteration record — so the next
 analysis does not re-derive them.
 
 590 tests pass.
+
+## 2026-09-04 — Investigate, read by a human: nine findings, and a chart that lied
+
+Step 9 shipped and was then actually used. Everything below came from that
+reading, not from a test — which is the point worth recording.
+
+**The serious one: a chart reporting wrong numbers with full confidence.**
+Vega-Lite thins axis labels it decides will not fit. On a numeric axis that
+is harmless; on a **categorical** axis each surviving label lands against
+whichever bar is nearest. Eight statuses, four labels:
+
+    the chart said        the truth
+    Terminated  78        Terminated is 237; 78 is Enrolling By Invitation
+    Withdrawn   24        Withdrawn is 69;   24 is Suspended
+    Recruiting  1,240     Recruiting is 2,053; 1,240 is Completed
+
+Nothing on screen indicated it. `labelOverlap=False` on every categorical
+axis, row height 40px, and `tests/test_charts.py` asserts it on the spec —
+3/3 planted mutations caught. **The first fix was worse than the bug:**
+`axis=None` on the value-label layer removed the shared axis outright and
+produced a chart with no labels at all.
+
+**Why it survived two rounds of looking.** The verification method was
+rendering to PNG and inspecting. A PNG export lays out with default spacing;
+only the live theme tightens it enough to trigger the thinning. The
+instrument was structurally incapable of showing the defect, so a clean
+result from it was not weak evidence — it was none. Rendering is necessary
+and not sufficient; layout guarantees live in a spec assertion.
+
+**A chart's form is a claim.** Enrolment bands drawn as horizontal bars
+sorted by length read as a league table ("why is 1-49 winning?"). Nothing was
+winning — it is a distribution, and ordered left-to-right columns say so.
+
+**The worst reporting flaw was not the crowding.** "Enrolment against plan"
+plotted absolute headcount on a 0-2,000 linear axis, so a trial that enrolled
+**13 of 30** — a 57% shortfall — was an invisible dot at the origin beside one
+that comfortably hit 2,000 of 1,960. The most serious miss was the least
+visible thing on screen. The axis is percent of the trial's own target now,
+with rules at 100% and 85%; absolute numbers stay on the label because a bare
+percentage hides whether a miss was 6 people or 600.
+
+**Six smaller ones, all from real use:** the window selector offered 30 and 90
+days over a 7-day record (it now asks `/watch` for the record start and offers
+nothing longer); the growth curve cut the axis at 2010 and *dropped* the 153
+trials that started earlier, the oldest in 1989 (rolled up and labelled now);
+its x labels collided into "2010201120122013"; flagged trials named an NCT ID
+with no way to open it; drug bars were a dead end (`GET /investigate/trials`,
+with `intervention_type` required — matching name alone returned 164 for a bar
+reading 163); and Home's results sentence was circular, both halves saying
+"posted results" when the distinction being drawn was status.
+
+**The lifecycle chart was called inaccurate and hard to read, and both were
+true for different reasons.** Inaccurate: the same label thinning. Hard to
+read: bars labelled with semantic buckets ("Finished", "Closed to new
+participants, still running") made the reader decode an abstraction first.
+Bars are literal movements now — "Recruiting → Completed", 11 — and
+`LifecycleFinding` carries the uncapped transitions behind each bucket. The
+counts reconcile: 1 + 21 + 13 + 12 + 1 = 48, every status change in the record.
+
+**`.interface-design/system.md` was committed and then un-committed.** It was
+written on a skill's instruction without weighing it against this repo's own
+recorded lesson — the roadmap and decisions are deliberately not a separate
+handoff file, because that went stale twice. Checked what would be lost: every
+value in it was already a comment beside the code it explains. Kept on disk,
+gitignored.
+
+**A note on the test suite.** One full run showed 15 real-data errors that were
+Neon closing pooled connections under load, not regressions — the failure mode
+`api/database.py` already documents, surfacing as a flaky run rather than a
+request error. They pass on retry.
+
+628 tests pass.

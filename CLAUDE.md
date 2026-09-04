@@ -65,7 +65,16 @@ Every substantive trial claim preserves source study, source field, the relevant
 Understand, Monitor, Explore and, as of 2026-09-04, Investigate. Schema +
 ingestion, the FastAPI-only-door layer, scheduler/cron automation (a real
 6-hour cron on GitHub Actions), Discover live-fallback (`GET /discover`)
-and the Streamlit frontend. **590 tests pass.**
+and the Streamlit frontend. **628 tests pass.**
+
+**Charts can lie, and this one did.** A categorical axis that thins its
+labels does not degrade — every surviving label lands against the nearest
+bar, so the status chart reported 78 terminated trials when the figure is
+237. `labelOverlap=False` on every categorical axis, guarded by
+`tests/test_charts.py`. It survived two rounds of visual inspection because
+a PNG export lays out with default spacing and only the live theme triggers
+the thinning: **rendering a chart and looking at it is necessary and not
+sufficient.** See `docs/decisions.md`, 2026-09-04.
 
 **Step 9, Investigate, is live** (2026-09-04) — `GET /investigate` (window
 findings) and `GET /investigate/landscape` (the corpus view) in
