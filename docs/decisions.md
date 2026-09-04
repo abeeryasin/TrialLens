@@ -2999,3 +2999,195 @@ Neon closing pooled connections under load, not regressions — the failure mode
 request error. They pass on retry.
 
 628 tests pass.
+
+## 2026-09-02 — README, CI, and the amendment grouping key
+
+Two small facts that had never been written down anywhere, surfaced while
+condensing CLAUDE.md's "Current Status" back under its original length —
+the rest of that section already duplicated this file; these two lines
+did not.
+
+**A README, and CI that actually runs the suite, both added.** Before this
+nothing ran the tests automatically — they only ran when someone remembered
+to. `tests.yml` runs on every push with no secrets: 226 pass, 22 skip. Those
+22 are the real-data and data-drift tests that need `DATABASE_URL`; running
+them without it would either fail on a missing secret or, worse, silently
+skip in a way nobody would notice. They run instead inside `monitor.yml`,
+on the data's own schedule, immediately after the ingest that could have
+introduced drift — the same placement reasoning `docs/decisions.md` already
+uses for the graph backfill and the Explore merge.
+
+**The amendment grouping key is the trial's own `last_update_post_date`,
+never `detected_at`.** A cron run writes one trial's whole diff inside a
+single transaction, and Postgres's `now()` is transaction-start time, so
+every row of one amendment shares an exact `detected_at` — but a run that
+happens to straddle a wall-clock minute boundary can still make grouping
+BY MINUTE split one real amendment into two. `api/studies.get_study_amendments`
+groups by the field CT.gov itself moved instead, so the split can't happen
+regardless of when the cron fired. `api/investigate.py`'s aggregate view
+calls the exact same grouping function rather than re-deriving the
+threshold, so the per-trial page and the cross-trial one can never disagree
+about how many amendments a trial had. Three real-data tests hold both the
+grouping and the equivalence.
+
+## 2026-09-02 — `git add -A` committed an installed skill and a 2.4 MB canvas
+
+One `git add -A`, meant to stage that day's real changes, also staged
+`.claude/skills/` (an installed skill, meant to stay local — the same
+directory this session's own curriculum-sweep skill now lives in and is
+gitignored) and a 2.4 MB generated design canvas from the Home.py rebuild
+(`design/*.dc.html` work). Both landed in one commit before anyone reviewed
+`git status` first.
+
+Neither was secret or destructive, so the fix was a follow-up commit
+removing them and adding them to `.gitignore` rather than a history
+rewrite — but the near miss is the reason `git add -A` (and `git add .`) is
+now a standing "don't" for this repo: staging has to name files
+deliberately, and `git status` gets read before every commit, not after
+something unexpected turns up in a diff. The general version of this rule
+already exists in the acting agent's own operating instructions; this is
+the concrete, dated case that justified it here specifically.
+
+## 2026-09-04 — Two cost-estimation numbers worth re-checking before quoting
+
+Both surfaced while measuring real spend for step 7c and step 9's synthesis
+agent, and neither one is intuitive enough to trust from memory:
+
+- **This project's text runs at ~2.61 characters per token**, not the
+  ~4.0 rule of thumb most estimates default to. Assuming 4.0 understates a
+  token-based cost projection by roughly 53%. Clinical trial text —
+  eligibility criteria, outcome measures — appears to tokenize less
+  efficiently than general prose; re-measure on real records rather than
+  assuming the rule of thumb holds here.
+- **A per-call cost estimate used as a safety ceiling should be measured
+  high, not accurate.** `COST_ESTIMATE_PER_CALL` (step 7c) and
+  `COST_ESTIMATE_PER_TURN_USD` (the synthesis agent) both intentionally sit
+  several times above the real measured average — a guard that stops one
+  call early because it over-estimated costs nothing; one that lets a call
+  through because it under-estimated walks straight through the budget it
+  exists to enforce. The real average is tracked separately, from
+  `response.usage`, and is what actually gets billed against the rolling
+  ceiling — the estimate only ever decides whether to attempt the next call.
+
+## 2026-09-05 — Building the weekly synthesis agent: nine build decisions
+
+Step 9's engine and page were done 2026-09-04; the agent itself — "is this
+week's movement a pattern or a coincidence?" — was designed and costed the
+same day but not started. Nine questions had to be settled before writing
+code, each with a reason, not just a pick:
+
+1. **Runtime: a hand-rolled loop against the raw Anthropic Messages API,
+   not the Claude Agent SDK.** The project has zero SDK dependency today,
+   `api/prose_interpreter.py` is already a working reference for the
+   cost-tracking/error-handling shape, and a 10-turn loop with four tools
+   is small enough that a managed framework buys little.
+2. **Model: claude-haiku-4-5**, same as step 7c. The $0.145/run costing
+   only pencils out at haiku's $1/$5-per-MTok rate, and the questions
+   Investigate hands the agent — are these numbers trending, does this
+   outcome-switch cluster with a funding source already flagged — are
+   pattern-matching over a few KB of pre-computed structure, not
+   open-ended reasoning. The same "language understanding earns its cost
+   here specifically" bar step 7c passed and step 7's ranking did not.
+3. **Trigger: a separate `synthesis.yml` on its own weekly cron**, not a
+   day-of-week gate inside `monitor.yml`. That file already runs three
+   unrelated jobs every 6 hours; folding in a weekly, budget-gated,
+   agent-driven step means every 6-hour run pays a conditional check for
+   something that fires 1/28th as often, and a failure in the new step
+   risks the run record `/watch` reads `last_checked_at` from.
+4. **Multi-week comparison: both directions, as two tools.**
+   `/investigate` is called 3-4 times walking `as_of` back a week at a
+   time (this week plus the prior 2-3), and `/investigate/landscape` once
+   for the corpus base rate. `as_of` was added to `/investigate` for
+   exactly this — a caller can now ask about a week that already ended,
+   not only the trailing week from right now. This mirrors how the human
+   reading of Investigate on 2026-09-04 actually judged the
+   outcome-switching finding: against a published external rate, not a
+   single window in isolation.
+5. **Duplicate avoidance: a real `get_recent_proposals` tool**, reading
+   `GET /synthesis/proposals`. The schema already commits to "never
+   overwritten, a reviewer can see the agent changed its mind" — a good
+   record, a bad reviewer experience if the same finding shows up as five
+   unrelated-looking rows across five weeks. A cheap read lets the agent
+   say "still true, third week running" in its own evidence text instead.
+6. **Zero-finding weeks: `synthesis_runs` alone is sufficient.**
+   `proposals_created = 0` on a completed run is unambiguous, unlike the
+   old `monitor_runs` proxy-timestamp problem this project already fixed
+   once. A synthetic "quiet" row in `review_queue` would need its own
+   confidence/finding_type/evidence to stay honest, and inventing evidence
+   of absence is exactly what §2 rules out.
+7. **Proposal emission: a `propose_finding` tool call per finding**, not
+   one JSON blob parsed out of a closing message. Each call's arguments
+   map directly onto a `review_queue` row, partial progress survives a
+   run that dies mid-way (proposals already filed are already committed),
+   and "no more tool calls" is a natural stopping signal.
+8. **Review queue UI: deferred.** This project's own pattern — Explore's
+   page before the merge, Investigate before its evaluation — is build the
+   layer, run it against real data, then design the surface once there is
+   something real to look at. A review-queue UI designed against zero real
+   proposals is the step-7 mistake in new clothes. `GET /synthesis/proposals`
+   exists now only because the agent's own dedup tool needs a read door.
+9. **Guardrails: `SYNTHESIS_BUDGET_USD = 0.20`, `SYNTHESIS_MAX_TURNS = 10`**,
+   checked against `rolling_budget_remaining()` before the run starts —
+   the same shape as step 7c's preflight. $0.20 sits comfortably above the
+   costed $0.145 estimate, the same over-estimate-on-purpose logic as
+   `COST_ESTIMATE_PER_CALL`.
+
+**The rolling ceiling became genuinely shared, not just conceptually
+shared.** Both features draw from the SAME $1.00/30-day window — a
+researcher reading a monthly bill does not care which feature spent the
+dollar, and capping them separately would let the two together spend
+$2.00 while each guard reported itself under budget. `PROSE_ROLLING_CEILING_USD`
+and `rolling_budget_remaining()` moved out of `scripts/run_monitor.py`
+into `api/cost_budget.py`, which sums `monitor_runs.prose_spend_usd` and
+`synthesis_runs.spend_usd` in one query. `run_monitor.py` imports the
+constant and the function under their old names, so nothing else in that
+file or in `tests/test_prose_budget.py` had to change.
+
+Built: `db/schema.sql` (`review_queue`, `synthesis_runs`), `api/cost_budget.py`,
+`api/investigate.py`'s `as_of` param, `api/synthesis_agent.py` (the loop —
+`get_window`, `get_landscape`, `get_trial_amendments`, `get_recent_proposals`,
+`propose_finding`), `api/synthesis.py` (`GET /synthesis/proposals`),
+`scripts/run_synthesis.py`, `.github/workflows/synthesis.yml`.
+
+## 2026-09-05 — First real synthesis run: $0.1099, zero proposals, and why that's not bug #4
+
+The build above shipped same-day; its first live run (`scripts/run_synthesis.py`,
+2026-09-04T16:02:45Z, real Anthropic call, real `synthesis_runs` row) spent
+**$0.1099** and filed **zero** `review_queue` rows. Given this project's own
+history — step 7c silently dropped 100% of its writes twice before anyone
+read the rows it should have produced (2026-09-02/03) — a zero-row first
+outcome does not get believed on the strength of "tests pass." It gets
+checked against what the agent actually saw.
+
+The window it ran on was not quiet: 235 trials changed, 276 amendments, 433
+field changes, 8 substantive primary-outcome changes, and one flagged
+lifecycle anomaly (NCT06904365, `COMPLETED` → `RECRUITING`, `anomaly: true`
+in `/investigate`'s own output). If the agent had nothing to say about a week
+that active, that would be the real bug 3+4 — a fourth silent-write failure
+in the same shape as step 7c's first two.
+
+It isn't. Re-querying `/investigate` for `weeks_ago=2,3,4` (free — no model
+call) returns **0/0/0/0** for every one of them. Real monitoring only started
+2026-08-28 (step 3); the run on 2026-09-04 had exactly one prior week of real
+history to compare against (79 trials changed) and the system prompt is
+explicit: *"Compare the current window against at least 2-3 prior weeks
+before calling anything a pattern... One week's number alone is never enough
+to justify 'high' confidence."* An agent following that instruction literally
+has nothing to call a trend yet, at any confidence level — the corpus is
+simply too young. Zero proposals here is the conservative branch of decision
+6 above ("a quiet, unremarkable week is a normal and valid outcome") working
+as designed, not the review-queue analogue of the MySQL `ORDER BY ... LIMIT`
+bug.
+
+**One loose thread, deliberately left open rather than resolved by
+inference:** `propose_finding`'s own tool description allows a standalone
+`single_trial_flag`, independent of any week-over-week trend — which is
+exactly what the reopened-after-finishing anomaly on NCT06904365 looks like.
+Whether the agent considered that trial and judged it not yet worth a human's
+attention, or never called `get_trial_amendments` on it at all, is not
+knowable from `synthesis_runs`/`review_queue` alone — only a turn-by-turn
+transcript would settle it, and that costs another real call. Deferred
+rather than spent on: next Monday's scheduled run (`synthesis.yml`, real
+cron) will have a full prior week plus this one to compare against, is the
+first run this project didn't have to reason about after the fact, and is
+free to wait for.

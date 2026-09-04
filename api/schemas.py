@@ -803,12 +803,22 @@ class EnrollmentMove(TrialRef):
     # must say "the record doesn't say" rather than showing a blank that
     # reads as zero.
     later_count_change: bool = False
+    # CT.gov's study_type (INTERVENTIONAL / OBSERVATIONAL / ...). Carried so
+    # the enrollment chart can exclude OBSERVATIONAL studies from a
+    # benchmark drawn from interventional-trial accrual literature — a
+    # real-world study enrolling 237,211 against a "target" of 35,000 is
+    # not a recruitment shortfall or success by that yardstick.
+    study_type: Optional[str] = None
     detected_at: datetime
 
 
 class EnrollmentFinding(BaseModel):
     became_actual: List[EnrollmentMove] = []
     became_actual_total: int = 0
+    # Of became_actual_total, how many were OBSERVATIONAL and so excluded
+    # from `became_actual` (and the 85%-of-target chart) rather than
+    # silently dropped — see EnrollmentMove.study_type.
+    became_actual_observational_total: int = 0
     # Of `became_actual_total`, how many enrolled fewer people than planned.
     under_target: int = 0
     # ACTUAL -> ESTIMATED: a real headcount reverting to a plan. Backwards,
@@ -1017,3 +1027,27 @@ class LandscapeTrials(BaseModel):
     condition: Optional[str] = None
     trials: List[LandscapeTrial] = []
     total: int = 0
+
+
+class Proposal(BaseModel):
+    """One row of review_queue — a synthesis agent's proposal, as filed.
+
+    Read-only from this endpoint (GET /synthesis/proposals); there is no
+    accept/dismiss endpoint yet (step 9 follow-on, deferred deliberately —
+    a review UI designed against zero real proposals is the step-7 mistake
+    again). Its first real caller is the agent itself, checking recent
+    weeks before deciding whether it is re-raising the same thing.
+    """
+
+    id: int
+    created_at: datetime
+    window_since: datetime
+    window_until: datetime
+    finding_type: str
+    summary: str
+    confidence: str
+    status: str
+
+
+class ProposalList(BaseModel):
+    proposals: List[Proposal] = []

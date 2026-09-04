@@ -1,0 +1,72 @@
+name: Weekly synthesis agent
+
+# Runs once a week — deliberately its own workflow, not a day-of-week gate
+# inside monitor.yml. See docs/decisions.md, 2026-09-05: monitor.yml already
+# runs three unrelated jobs every 6 hours; folding a weekly, budget-gated,
+# agent-driven step in there means every 6-hour run pays a conditional
+# check for something that fires 1/28th as often, and a failure in the new
+# step risks the run record /watch reads last_checked_at from.
+#
+# Monday 13:00 UTC — after the weekend's quiet days are on file, so the
+# agent's "compare against recent weeks" tool calls see a full prior week
+# rather than a partial one.
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  synthesis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Same reasoning as monitor.yml: no permanently-deployed FastAPI
+      # instance yet, so this job starts one ephemerally, exactly like
+      # local dev does. Keeps "FastAPI is the only door to the database"
+      # true for the agent's read tools without requiring a public
+      # deployment first.
+      - name: Start FastAPI (this job only, torn down when it ends)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_READONLY: ${{ secrets.DATABASE_URL_READONLY }}
+        run: |
+          nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
+          for i in $(seq 1 15); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+              echo "API is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API never became healthy"
+          cat api.log
+          exit 1
+
+      # DATABASE_URL: scripts/run_synthesis.py opens its own connection to
+      # write synthesis_runs and review_queue — the agent's own reads go
+      # through the API above, but the run record and the queue are
+      # written directly, the same split step 7c's writes take from
+      # run_monitor.py.
+      #
+      # ANTHROPIC_API_KEY is required here, unlike monitor.yml's optional
+      # treatment of it: a synthesis run with no key can do nothing at all
+      # (there is no non-agent fallback for "is this a pattern"), so a
+      # missing key should fail the job loudly rather than degrade silently.
+      - name: Run the weekly synthesis agent
+        env:
+          API_BASE_URL: http://127.0.0.1:8000
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/run_synthesis.py
+
+      - name: Show API log on failure
+        if: failure()
+        run: cat api.log

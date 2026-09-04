@@ -54,6 +54,41 @@ FILLED_DAY = "#cfd6e4"
 GOOD = "#0f8a3c"
 BAD = "#7d353b"
 
+# A record has numbers that must be read exactly, not felt at a glance — a
+# monospace face on every count keeps a 6 from ever leaning on a 1 and keeps
+# columns of figures aligned by digit. This is the one typographic choice on
+# the page that departs from Streamlit's own font, applied only to numbers
+# and the condition tags (never to prose, which stays the platform default —
+# a lab report's body text is typeset plainly; only its figures are precise).
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&display=swap');
+    .tl-num {
+        font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+        font-variant-numeric: tabular-nums;
+    }
+    /* Flatten Streamlit's own button chrome to match this page's stated
+       depth strategy (none — see .interface-design/system.md): a plain
+       bordered rectangle, no shadow, no colour until hovered. */
+    .stButton > button {
+        border-radius: 6px;
+        border: 1px solid #e6eaf1;
+        background: #ffffff;
+        color: #31333f;
+        font-weight: 600;
+        box-shadow: none;
+    }
+    .stButton > button:hover {
+        border-color: #8b8fa3;
+        color: #31333f;
+        background: #f0f2f6;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 def rule():
     st.markdown(
@@ -67,6 +102,33 @@ def eyebrow(text):
         f'<div style="font-size:13px;font-weight:600;color:{MUTED};'
         f'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">'
         f"{text}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def tag(text):
+    """A tracked condition, shown as a specimen label rather than joined
+    into a sentence — 'Watching Obesity, Breast Cancer' reads as prose about
+    the watch; a row of tags reads as what is actually on file."""
+    return (
+        f'<span class="tl-num" style="display:inline-block;font-size:11px;'
+        f'font-weight:600;color:{MUTED};background:{SURFACE};'
+        f"border:1px solid {RULE};border-radius:4px;padding:3px 9px;"
+        f'letter-spacing:0.01em">{text}</span>'
+    )
+
+
+def stat(label, value):
+    """One entry in the record strip — eyebrow label over a tabular value,
+    the same two-tier system the headline numbers use. Replaces st.metric,
+    whose boxed icon-and-delta look is the single most recognisable stock
+    Streamlit component in the app; this page never uses it anywhere else."""
+    st.markdown(
+        f'<div style="font-size:11px;font-weight:600;color:{MUTED};'
+        f'text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">'
+        f'{label}</div>'
+        f'<div class="tl-num" style="font-size:23px;font-weight:600;'
+        f'letter-spacing:-0.01em;color:{INK}">{value}</div>',
         unsafe_allow_html=True,
     )
 
@@ -103,16 +165,16 @@ except ApiError as exc:
 # ---------------------------------------------------------------------------
 
 conditions = watch["conditions"]
-named = (
-    ", ".join(conditions[:-1]) + " and " + conditions[-1]
-    if len(conditions) > 1
-    else (conditions[0] if conditions else "nothing yet")
-)
+chips = "".join(tag(c) for c in conditions) if conditions else tag("nothing yet")
 st.markdown(
-    f'<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:20px">'
+    f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
+    f'margin-bottom:20px">'
     f'<span style="font-size:20px;font-weight:700;letter-spacing:-0.01em;'
     f'color:{INK}">TrialLens</span>'
-    f'<span style="font-size:14px;color:{MUTED}">Watching {named}</span></div>',
+    f'<span style="width:1px;height:14px;background:{RULE}"></span>'
+    f'<span style="font-size:11px;font-weight:600;color:{FAINT};'
+    f'text-transform:uppercase;letter-spacing:0.06em">Watching</span>'
+    f"{chips}</div>",
     unsafe_allow_html=True,
 )
 
@@ -183,7 +245,7 @@ else:
     headline.markdown(
         f'<div style="font-size:40px;font-weight:700;letter-spacing:-0.02em;'
         f'line-height:1.1;color:{INK}">Watching '
-        f'{watch["trials_watched"]:,} trials</div>'
+        f'<span class="tl-num">{watch["trials_watched"]:,}</span> trials</div>'
         f'<div style="font-size:17px;color:{MUTED};margin-top:8px">'
         f"Checked every {watch['check_interval_hours']} hours · "
         f"last checked {relative_hours(hours_since)}</div>",
@@ -328,8 +390,8 @@ else:
         tiles.append(
             f'<div style="display:flex;flex-direction:column;gap:5px;'
             f'align-items:center">'
-            f'<div style="width:48px;height:48px;border-radius:6px;{fill};'
-            f'display:flex;align-items:center;justify-content:center;'
+            f'<div class="tl-num" style="width:48px;height:48px;border-radius:6px;'
+            f'{fill};display:flex;align-items:center;justify-content:center;'
             f'font-size:16px">{n}</div>'
             f'<div style="font-size:12px;color:{FAINT if weekend else MUTED};'
             f'white-space:nowrap">{parsed.strftime("%a")}</div>'
@@ -429,13 +491,14 @@ else:
 # ---------------------------------------------------------------------------
 rule()
 since, changes, amendments, checked = st.columns(4)
-since.metric("Watching since", format_recording_since(watch["recording_since"]))
-changes.metric("Changes recorded", f"{watch['changes_recorded']:,}")
-amendments.metric("Amendments seen", f"{watch['amendments_seen']:,}")
-checked.metric(
-    "Last check",
-    relative_hours(hours_since) if last_checked else "never",
-)
+with since:
+    stat("Watching since", format_recording_since(watch["recording_since"]))
+with changes:
+    stat("Changes recorded", f"{watch['changes_recorded']:,}")
+with amendments:
+    stat("Amendments seen", f"{watch['amendments_seen']:,}")
+with checked:
+    stat("Last check", relative_hours(hours_since) if last_checked else "never")
 
 st.caption(
     f"**{watch['amendments_seen']:,} trial updates** · "
@@ -453,61 +516,69 @@ st.caption(
 # ---------------------------------------------------------------------------
 # What TrialLens does. Below the watch now, not above it — the capabilities
 # are how the watch is used, not the headline.
+#
+# Five real questions, not five icons — the framing is CLAUDE.md's own
+# (sec. 1), so this list can't drift from what the product actually claims
+# to answer. An icon is arbitrary; a question a researcher would actually
+# ask is not, which is the whole difference between this strip and the
+# five-card-with-emoji grid it replaced.
 # ---------------------------------------------------------------------------
 rule()
-st.subheader("What TrialLens does")
+eyebrow("Five ways to ask")
 
 capabilities = [
     {
-        "icon": "🔎",
+        "q": "What matches this?",
         "name": "Discover",
         "desc": "Search any condition. Tracked ones show our own regularly-updated data; anything else is looked up live.",
         "page": "pages/1_Discover.py",
-        "status": "live",
     },
     {
-        "icon": "📄",
+        "q": "Why does this trial matter?",
         "name": "Understand",
         "desc": "A trial's full detail — what it studies, who's eligible, and every amendment since we started watching.",
         "page": "pages/2_Understand.py",
-        "status": "live",
     },
     {
-        "icon": "🛰️",
+        "q": "Tell me when something changes.",
         "name": "Monitor",
         "desc": "Every change across every tracked trial, in one filterable feed.",
         "page": "pages/3_Monitor.py",
-        "status": "live",
     },
-    # The Ranking card was removed 2026-09-01 along with the layer behind it.
-    # It was genuinely live — POST /rank returned real scored trials over
-    # HTTP — and it is gone anyway: four of its five scored signals were
-    # filters wearing a score's costume, and the one real judgment scales
-    # with volume in a product that sees ~17 changed trials a week. The
-    # reasoning is in docs/decisions.md; what replaces it is step 7b.
     {
-        "icon": "🕸️",
+        "q": "Who else works in this space?",
         "name": "Explore",
         "desc": "Where a trial runs, who runs it, and which other tracked trials share its sites, investigators or interventions.",
         "page": "pages/4_Explore.py",
-        "status": "live",
     },
     {
-        "icon": "🧭",
+        "q": "What's happened across everything tracked?",
         "name": "Investigate",
         "desc": "Patterns across every tracked trial — endpoints that moved, timelines that slipped, and what the field looks like.",
         "page": "pages/5_Investigate.py",
-        "status": "live",
     },
 ]
 
-cols = st.columns(len(capabilities))
-for col, cap in zip(cols, capabilities):
-    with col:
-        st.markdown(f"#### {cap['icon']} {cap['name']}")
-        st.caption(cap["desc"])
-        if cap["status"] == "live":
-            if st.button(f"Open {cap['name']} →", key=f"open_{cap['name']}", width="stretch"):
-                st.switch_page(cap["page"])
-        else:
-            st.caption("⚪ Not built yet.")
+for i, cap in enumerate(capabilities, start=1):
+    row, action = st.columns([6, 1])
+    row.markdown(
+        f'<div style="display:flex;gap:18px;align-items:baseline;padding:16px 0 14px">'
+        f'<span class="tl-num" style="font-size:12px;color:{FAINT};'
+        f'min-width:18px">{i:02d}</span>'
+        f"<div>"
+        f'<div style="font-size:11px;font-weight:600;color:{MUTED};'
+        f'text-transform:uppercase;letter-spacing:0.05em">{cap["q"]}</div>'
+        f'<div style="font-size:17px;font-weight:700;letter-spacing:-0.01em;'
+        f'color:{INK};margin-top:3px">{cap["name"]}</div>'
+        f'<div style="font-size:13px;color:{BODY};margin-top:4px;'
+        f'max-width:64ch;line-height:1.5">{cap["desc"]}</div>'
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+    with action:
+        st.write("")
+        st.write("")
+        if st.button("Open →", key=f"open_{cap['name']}"):
+            st.switch_page(cap["page"])
+    if i < len(capabilities):
+        st.markdown(f'<div style="height:1px;background:{RULE}"></div>', unsafe_allow_html=True)

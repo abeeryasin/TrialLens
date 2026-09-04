@@ -379,6 +379,43 @@ def test_under_target_counts_only_switches_with_two_real_numbers():
     assert finding.under_target == 1
 
 
+def test_an_observational_study_is_counted_but_not_compared():
+    """A real 2026 record: NCT07627074 enrolled 237,211 of a stated 35,000
+    "target" — an observational study pulling from existing records, not
+    a trial recruiting patients. The 85%-of-target accrual benchmark the
+    enrollment chart cites is about interventional-trial recruitment, so
+    an observational switch must still count in the total (nothing here
+    got dropped) but must not enter `became_actual`, the list the chart
+    and its benchmark are built from. Reported from real use, 2026-09-05."""
+    at = T0
+    rows = [
+        row("enrollment_type", "ESTIMATED", "ACTUAL", nct_id="NCT_OBS", at=at,
+            study_type="OBSERVATIONAL"),
+        row("enrollment_count", "35000", "237211", nct_id="NCT_OBS", at=at),
+        row("enrollment_type", "ESTIMATED", "ACTUAL", nct_id="NCT_RCT", at=at,
+            study_type="INTERVENTIONAL"),
+        row("enrollment_count", "400", "163", nct_id="NCT_RCT", at=at),
+    ]
+    finding = analyse_enrollment(rows)
+    assert finding.became_actual_total == 2, "the observational switch still counts"
+    assert finding.became_actual_observational_total == 1
+    (move,) = finding.became_actual
+    assert move.nct_id == "NCT_RCT", "the observational trial must not reach the chart's list"
+
+
+def test_a_missing_study_type_is_treated_as_comparable():
+    """Blacklisting OBSERVATIONAL, rather than whitelisting INTERVENTIONAL,
+    so a row with no study_type on file still reaches the chart instead of
+    being assumed incomparable by default."""
+    rows = [
+        row("enrollment_type", "ESTIMATED", "ACTUAL", nct_id="NCT_UNKNOWN", at=T0),
+        row("enrollment_count", "400", "163", nct_id="NCT_UNKNOWN", at=T0),
+    ]
+    finding = analyse_enrollment(rows)
+    assert finding.became_actual_observational_total == 0
+    assert len(finding.became_actual) == 1
+
+
 def test_the_same_amendment_pairs_by_exact_timestamp_not_by_trial_alone():
     """Two amendments to one trial must not borrow each other's numbers.
 

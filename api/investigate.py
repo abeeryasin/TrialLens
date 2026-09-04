@@ -454,6 +454,7 @@ def analyse_enrollment(rows, current_counts=None) -> EnrollmentFinding:
             count_after=after,
             count_moved=count_row is not None,
             later_count_change=later_count_change,
+            study_type=row.get("study_type"),
             detected_at=row["detected_at"],
         )
         if old_type == "ESTIMATED" and new_type == "ACTUAL":
@@ -496,9 +497,14 @@ def analyse_enrollment(rows, current_counts=None) -> EnrollmentFinding:
         m for m in became_actual
         if m.count_before is not None and m.count_after is not None and m.count_after < m.count_before
     ]
+    # OBSERVATIONAL is excluded (blacklisted, not whitelisted to
+    # INTERVENTIONAL) so an EXPANDED_ACCESS or unset study_type still
+    # reaches the chart rather than being assumed incomparable.
+    comparable = [m for m in became_actual if m.study_type != "OBSERVATIONAL"]
     return EnrollmentFinding(
-        became_actual=_by_gap(became_actual)[:NAMED_CAP],
+        became_actual=_by_gap(comparable)[:NAMED_CAP],
         became_actual_total=len(became_actual),
+        became_actual_observational_total=len(became_actual) - len(comparable),
         under_target=len(shortfalls),
         switched_back=switched_back[:NAMED_CAP],
         switched_back_total=len(switched_back),
@@ -585,6 +591,13 @@ _AMENDMENT_SQL = """
            s.primary_completion_date,
            s.start_date,
            s.has_results,
+           -- OBSERVATIONAL studies pull from existing records rather than
+           -- recruiting patients, so a "237,211 of 35,000" real-world study
+           -- is not a recruitment shortfall or a recruitment success by the
+           -- same yardstick an interventional trial is — the accrual
+           -- literature the enrollment chart cites is about interventional
+           -- trials specifically. See docs/decisions.md, 2026-09-05.
+           s.study_type,
            -- Lead sponsor class. The literature associates post-completion
            -- outcome changes with funding source (PMC5829948, OR 1.82),
            -- and CT.gov states this, so it needs no model to establish.
@@ -604,6 +617,7 @@ _AMENDMENT_SQL = """
     WHERE a.field_name = 'last_update_post_date'
       AND a.new_value IS NOT NULL
       AND a.detected_at >= %(since)s
+      AND a.detected_at < %(until)s
       {condition_clause}
     ORDER BY a.detected_at DESC, c.field_name
 """
@@ -621,6 +635,7 @@ _SCOPE_EXIT_SQL = """
     JOIN studies s ON s.nct_id = c.nct_id
     WHERE c.field_name = 'active_in_scope'
       AND c.detected_at >= %(since)s
+      AND c.detected_at < %(until)s
       {condition_clause}
     ORDER BY c.detected_at DESC
 """
@@ -646,6 +661,16 @@ def investigate(
         None,
         description="Restrict to trials tagged with a condition (substring match). Omit for everything tracked.",
     ),
+    as_of: Optional[datetime] = Query(
+        None,
+        description=(
+            "The window's upper edge. Defaults to now, which is every "
+            "caller except one: the weekly synthesis agent asks 'was last "
+            "week's movement a pattern or a coincidence?', which needs the "
+            "SAME 7-day arithmetic applied to a week that already ended, "
+            "not just the trailing week from right now."
+        ),
+    ),
     conn=Depends(get_readonly_db),
 ):
     """Cross-trial synthesis over the watch window.
@@ -654,9 +679,11 @@ def investigate(
     these findings are read together, and a slip count means something
     different depending on how many trials changed at all.
     """
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    until = as_of or datetime.now(timezone.utc)
+    since = until - timedelta(days=days)
     params = {
         "since": since,
+        "until": until,
         "tracking_fields": sorted(TRACKING_FIELDS),
         "condition": f"%{condition}%" if condition else None,
     }
@@ -722,7 +749,7 @@ def investigate(
     window = InvestigateWindow(
         days=days,
         since=since,
-        until=datetime.now(timezone.utc),
+        until=until,
         recording_since=recording_since,
         covers_full_window=recording_since is not None and recording_since <= since,
         condition=condition,

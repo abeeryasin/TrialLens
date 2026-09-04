@@ -61,341 +61,42 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 ## Current Status
 
-**All five capabilities are built, tested and live** — Discover,
-Understand, Monitor, Explore and, as of 2026-09-04, Investigate. Schema +
-ingestion, the FastAPI-only-door layer, scheduler/cron automation (a real
-6-hour cron on GitHub Actions), Discover live-fallback (`GET /discover`)
-and the Streamlit frontend. **628 tests pass.**
+All five capabilities are live (Discover, Understand, Monitor, Explore,
+Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
+6-hour GitHub Actions cron, and the Streamlit frontend. **660 tests pass.**
+Dated reasoning: `docs/decisions.md`. Per-step build status:
+`docs/roadmap.md`. This section stays short on purpose — a status essay
+copied into three files goes stale in three files.
 
-**Charts can lie, and this one did.** A categorical axis that thins its
-labels does not degrade — every surviving label lands against the nearest
-bar, so the status chart reported 78 terminated trials when the figure is
-237. `labelOverlap=False` on every categorical axis, guarded by
-`tests/test_charts.py`. It survived two rounds of visual inspection because
-a PNG export lays out with default spacing and only the live theme triggers
-the thinning: **rendering a chart and looking at it is necessary and not
-sufficient.** See `docs/decisions.md`, 2026-09-04.
+**The weekly synthesis agent (step 9 follow-on) is built and live** — the
+one genuinely multi-step judgment in the product ("is this week's movement a
+pattern or a coincidence?"), reading `/investigate` as its tools and filing
+labelled-confidence proposals into `review_queue` for human review. Never a
+verdict, never a summed score (§3). Schema migrated onto the real `dev`
+database, its own weekly `synthesis.yml` cron live. First real run
+(2026-09-04, $0.1099) filed zero proposals — explained, not assumed: real
+monitoring is only ~1 week old, so the agent had nothing yet to call a
+trend, per its own system prompt. Design, build, and that first-run read:
+`docs/decisions.md`, 2026-09-04/05. Steps 10-12 (deployment, ops hardening,
+notifications) untouched.
 
-**Step 9, Investigate, is live** (2026-09-04) — `GET /investigate` (window
-findings) and `GET /investigate/landscape` (the corpus view) in
-`api/investigate.py`, `frontend/pages/5_Investigate.py`, Home's fifth card
-switched from "planned" to live. Deterministic, per §5: every question it
-answers has exactly one correct answer. **The weekly synthesis agent is
-designed and costed but NOT built** — one specialist reading pre-computed
-findings, ~$0.145/run, ~$0.63/month inside the existing $1.00 rolling
-ceiling. Never a crew: a 3-agent pipeline costs ~2.9x a single agent's
-tokens and the findings payload is a few KB.
-
-**The headline finding came from outside evidence, not from what the
-columns allowed** — primary-outcome changes. 31.7% of registered CT.gov
-studies have had one; the change is associated with funding source at OR
-1.82 and with 16% effect-size inflation; an LLM reaches 0.97 sensitivity on
-detecting them. The record holds 17, **5 after the trial's own primary
-completion date**. The deterministic layer exists to STOP false alarms:
-normalisation de-escalates 9 of 17 as reformatting, including NCT03674567,
-which has results posted and changed after completion — the strongest flag
-combination available — and whose change is `Safety and tolerability` →
-`Safety and Tolerability`. **Flags are listed, never summed**; a score
-would be step 7's invisible ranking again. Nothing is an accusation: the
-page says what changed, when, and that it **requires review** (§2's
-vocabulary, same as eligibility).
-
-**"~17 changed trials a week" was wrong by ~20x.** Measured 2026-09-04:
-184 trials amended in 3.5 days, ~370/week, ~1,600/month. The step-7
-removal still stands on its four-of-five-signals argument, but the
-"low-volume product" leg is not true — re-measure before citing volume.
-
-**Step 8's Explore is live and visible** (2026-09-04) —
-`GET /explore/{nct_id}` (`api/explore.py`) and
-`frontend/pages/4_Explore.py`, with Home's fifth capability card switched
-from "planned" to live. The 191,864 edges built over the preceding three
-days were reachable from nothing until this landed.
-
-**Step 7c's prose interpretations are visible too** (2026-09-04). All
-seven are rendered in Understand via `AmendedField.interpretation`, drawn by
-`labels.render_interpretation` with the attribution inside the element
-rather than in a footnote — it is the only thing TrialLens shows that a
-model wrote rather than computed, and it never replaces the diff. Watch
-`primary_outcomes`: it is BOTH a structured field and one of the three
-interpreted ones, and 5 of the 7 readings are on it, so a change that
-renders interpretations in only one branch of `render_change` hides most of
-the feature. Absence of a reading means three different things the stored
-column cannot separate (wrong field / predates 2026-09-03 / the model said
-`MEANINGFUL: no`), so absence is never rendered as "nothing important
-changed".
-
-**Step 8 unit 3, the merge, is done** (2026-09-04) — `canonical_id` on
-`sites`, `intervention_terms` and `investigators`, written by
-`scripts/merge_entities.py` and read by Explore as
-`coalesce(canonical_id, id)`. A POINTER, never a delete: NULL means "this
-row is its own canonical form", nothing is removed, and setting the column
-back to NULL restores the unmerged extraction. The rule is casefold +
-punctuation only — deterministic and timid, which is what makes 3,033
-merges safe unreviewed. **Organizations got no column: measured 0
-duplicates.** Sites merge on the (facility, city, country) triple; a
-mutation dropping city/country was caught by the script's own abort guard,
-which found 8,856 cross-place merges and committed nothing. Runs in
-`monitor.yml` after the graph backfill.
-
-**START HERE (next session): the weekly synthesis agent.** Everything
-else in steps 1-9 is built. The agent's job is the one genuinely
-multi-step judgment in the product — "is this week's movement a pattern or
-a coincidence?" — reading `/investigate`'s findings as its tools, tagging
-proposals with confidence into a human review queue (which also satisfies
-the review-queue habit, currently unpracticed). Design and costing are in
-`docs/decisions.md`, 2026-09-04. Steps 10-12 (deployment, autonomous-ops
-hardening, notifications) remain untouched.
-
-**Investigate has two halves and they answer different questions.** "What
-changed" reads `study_changes`; "the field" reads `studies`. The second
-was added mid-build after noticing nothing anywhere answered "what has
-been done in breast cancer" — Explore answers it per trial, Monitor per
-change. Its three honesty rules: the unstated phase share stays in the
-picture (52% of breast-cancer trials report `NA` or nothing, and `NA`
-means "not a phased study", a real answer but not a rung on the ladder);
-the current year is muted and labelled because 2025's 899 beside 2026's
-756-so-far reads as a decline that is only the calendar; and a term's
-reach is measured against trials that list any intervention (4,938 of
-5,377), never the slice.
-
-**A self-join that looked like a working chart.** Joining
-`intervention_terms` to itself on `coalesce(canonical_id, id)`
-cross-products the table and every term returns the SAME count. Two
-aliases (`raw` then `canon`) is the correct canonical-merge form; the
-signature of the bug is identical counts, which a real-data test now
-asserts against.
-
-**Benchmarks are cited, but 31.7% is deliberately not plotted.** Findings
-are read against published baselines (12.2-month median delay; 19% of
-trials missing 85% of target; 55% of terminations for low accrual). The
-outcome-switching prevalence is caption context only — "studies that ever
-changed an outcome" and "changes seen in eight days" do not share an axis,
-and drawing them together would manufacture a comparison neither source
-supports.
-
-**A green suite hid a real regression twice this session, and both times the
-FIXTURE was at fault, not the assertion.** Removing the canonical join from
-the API broke nothing because the test used the busiest trial, which has no
-duplicate spellings; the interpretation renderer skipped structured fields
-while every test still passed. When testing a property that only some rows
-have, select the fixture BY that property (`HAVING count(*) <> count(DISTINCT ...)`),
-never by convenience.
-
-**Step 7 (AI ranking layer) was built, measured, and removed** on
-2026-09-01. Measuring it produced the case against it: four of its five
-scored signals were filters wearing a score's costume, and only "is this
-trial actually about the condition?" was a genuine judgment — whose value
-scales with volume, in a product that is deliberately low-volume (~17
-changed trials a week). `/rank` no longer exists; 75 free tests pass. The
-deterministic scorers survive with no importer yet, waiting to become
-filter predicates. `f9ccb45` stays in history as the documented dead end —
-a commit saying "we built this, measured it, and it didn't earn its place"
-is evidence, not clutter.
-
-**Step 7b is done** (2026-09-02). Three time-based directions:
-**Direction 1, amendment history** — `GET /studies/{nct_id}/amendments` groups
-a trial's changes into the amendments that caused them, `api/amendments.py`
-says what each did — dates that slipped, targets that became actuals, sites
-added, results posted — with no model. Understand leads with it.
-
-**Direction 2, the watch** — `GET /watch` and a rebuilt `frontend/Home.py`
-where the watch leads and the capability grid sits below it. Three states,
-all tested through Streamlit's `AppTest` — the quiet week stated as a finding
-with its zero days drawn as zeros, a news week led by what changed the science
-rather than by a row count, and an alarm that *replaces* the page instead of
-sitting above it. The footer states "212 trial updates · 498 individual field changes" — concrete enough that users needn't decode what the numbers mean.
-
-**Direction 3, the watch record** — `monitor_runs` table (2026-09-02). Every
-scheduled run opens a row at the start and closes it `completed` at the end,
-with trials checked and changes detected. `/watch` reads `last_checked_at`
-from the newest completed run, and `last_checked_source` is gone — the value
-is a record now, not a proxy needing a label.
-
-**The empty-table trap that deferred this was solved by backfilling, not by
-waiting.** A fresh `monitor_runs` reads as "never checked" and fires the
-alarm on a healthy watch — the exact reason the roadmap pushed this to step
-10. The way out: the proxy it replaces *is* evidence a run completed, so
-`scripts/backfill_monitor_runs.py` seeds one row from
-`max(studies.last_matched_at)` and the cron takes over from there. Its
-`changes_detected` is left NULL — nothing on file says how many changes that
-particular run found, and writing a number would invent one (§2). Verified
-live: `/watch` reports healthy, 4.95 hours since check, off run #1. 278
-tests pass.
-
-**Step 7b refinement (2026-09-02, committed):** enrollment counts now tracked
-through amendment history via `enrollment_context()` function. When an amendment
-changes enrollment_type, the description now includes both counts as they were
-at that moment, not today's value. Real case: NCT03402139 now reads "the target
-of 400 was replaced by a real count of 163" instead of the old generic sentence.
-Required walking the trial's history backwards to establish which count was true
-before each amendment. All 279 tests pass.
-
-**Step 8 (Explore) — units 1, 2, 2b and the endpoint+page are done**
-(2026-09-02/04); unit 3, the merge, is not. Two rules the Explore code
-exists to keep, both from `docs/plan_explore_nodes.md` §4b:
-
-- **Every capped list carries its real denominator** — 10 of 1,497
-  neighbours, 40 of 899 cities, 50 of 1,568 sites. `count(*) OVER ()` runs
-  before `LIMIT`, so the honest total costs no extra round trip. A list
-  reporting its own length as the total is the step-4 bug again.
-- **A shared-condition COUNT is not evidence** — it printed "0 in common"
-  for two breast cancer trials, because condition strings are unmerged too
-  (7,808 strings over 32,701 rows; `Breast Cancer`, `Metastatic Breast
-  Cancer` and `Breast Neoplasms` are three of them). Neighbours show their
-  own condition tags as text instead. Built and discarded the same hour.
-
-**A mutation that turns registry silence into "not recruiting" passes every
-fake-connection test.** `tests/conftest.py`'s fake ignores SQL by design, so
-`coalesce(recruitment_status, 'NOT_RECRUITING')` sailed through all 11 —
-the single worst claim this page can make. Whenever a query decides
-something a user reads as a fact, the guarantee has to live in a real-data
-test. 9/9 planted mutations were caught; 5 only by that half.
-
-- **Unit 1, the shape:** relational tables, not a graph database. The graph
-  already exists in `studies` — `lead_sponsor` holding 'Mayo Clinic' on 134
-  rows *is* 134 edges, written as repeated text. At 11,518 trials and 2-3
-  hop questions, index-free adjacency buys nothing a second sync path
-  doesn't cost back.
-- **Unit 2, extraction:** 6,207 organizations (lead sponsors and
-  collaborators in ONE table — 887 names are both), 51,272 sites, 7,717
-  investigators, 14,468 intervention terms, 191,864 edges. All from stored
-  `raw_json`, no CT.gov call. **Nothing is merged on purpose** — 381 Madrid
-  facility strings are 381 sites, and that unmerged extraction is the
-  baseline any later merge gets checked against.
-- **Unit 2b, node ranking + site enrichment:** an evidence review
-  (`docs/plan_explore_nodes.md`) asked whether researchers care about
-  collaborations. They don't, and the reason is definitional — CT.gov's
-  collaborator field covers funders *and* co-designers with no way to
-  separate them, reaches 37.4% of trials, and explicitly excludes
-  individuals. **Kept, but demoted from a network to traverse to an
-  attribute to filter on.** Sites lead instead at 93.8% coverage, so the
-  fields the parser had dropped were backfilled from `raw_json`.
-- **Edges are stamped `delisted_at`, never deleted.** Extraction is
-  insert-only, so a trial dropping a site left the edge live and Explore
-  would have said the trial still runs there. Stamping keeps it as a
-  finding — "this trial quietly dropped three sites" is a result in a
-  watch-over-time product. NULL means live. **The backfill now runs inside
-  `monitor.yml` after every ingest**, so the graph no longer goes stale.
-- 18 real-data tests, 14/14 mutations caught, all rolled back in-transaction.
-
-**Also done earlier this session:** enrollment_type switches now name the numbers,
-e.g. "the target of 400 was replaced by a real count of 163" instead of
-just "the recruitment target was replaced". This required walking a trial's
-history backwards to establish which count was true AT EACH AMENDMENT, not
-just today's value. 270 free tests pass.
-
-**`has_results` was found missing on 2026-09-02 and added.** `hasResults`
-sits at the TOP level of the CT.gov response, not inside `protocolSection`,
-so the parser never saw it; 1,056 of 11,518 trials already had results
-posted, and each of those amendments had been rendering as "the record
-changed; we can't show what". Backfilled from stored `raw_json` with no
-network call — the first time §4's keep-the-raw-record rule paid for
-itself. Roughly 40% of amendments still show nothing: `referencesModule`
-(4,443 trials), `oversightModule` and central contacts remain unread.
-
-**There is a README, and CI actually runs the tests** (both new 2026-09-02).
-`tests.yml` runs the suite on every push without secrets — 226 pass, 22
-skip; the 22 data-drift/real-data tests run in `monitor.yml` instead, on
-the data's schedule. Before this, nothing ever ran the suite automatically.
-Streamlit pages are testable: `streamlit.testing.v1.AppTest` renders a page
-and returns its element tree, which is the only way the alarm state is ever
-seen (it needs a 12-hour-dead cron). `st.metric` carries its heading on
-`.label` and its figure on `.value` — read both, or half the footer is
-invisible to every assertion.
-
-**Step 7c is live and now genuinely stores interpretations** (2026-09-03/04).
-The `ANTHROPIC_API_KEY` secret was added on 2026-09-03 and the first real
-batch ran: 14 prose changes found, 8 stored. Everything below replaces the
-earlier "stores nothing" state, which was true until that key existed.
-
-Three faults were fixed once real output could be read:
-
-- The write used MySQL's `UPDATE ... ORDER BY ... LIMIT`; Postgres rejects it
-  and the `except` swallowed it. Writes by primary key now, and
-  `get_prose_amendments` carries `id` so an interpretation lands on the exact
-  row it describes.
-- The no-change gate was `summary.lower() != "no change"`, an exact match
-  against prose the model writes freely. It wrote "No meaningful change—the
-  criteria were reformatted…" and a paid call announcing nothing was stored
-  as a finding. The model now fills in **`MEANINGFUL: yes|no`** and the gate
-  reads that field.
-- **`why_matters` was dropped** — ~48% of output tokens, and every weak line
-  in the batch lived there. `summary` is tethered to the diff and checkable;
-  `why_matters` was speculation stored beside it with equal authority (§2).
-  A clinical researcher told the AE denominator moved to all randomized
-  patients does not need to be told that is an ITT shift.
-
-**Quality verdict on the first real batch, read row by row: 2 clearly
-valuable, 2 debatable, 4 reformatting.** Not "7 of 8 are real" — that claim
-was made after reading only four. The gate was then verified on the exact
-rows the old one got wrong: 4 real calls, **4/4 agreement with a human
-reading** (dropped NCT03674567 and NCT06803888, stored NCT06635980 and
-NCT05846789). Stored data reconciled: non-change row cleared, `why_matters`
-stripped, **7 interpretations on file**.
-
-**Cost is measured now, not multiplied.** `COST_ESTIMATE_PER_CALL` used to be
-the recorded spend as well as the pre-flight guess, so the ceiling summed a
-constant. Spend comes from `response.usage` at haiku-4-5's $1/$5 per MTok.
-A third bug fell out of that: spend was added only when an interpretation came
-back, so every "no change" call was real money recorded as $0.00 — invisible
-to its own ceiling. Billing keys on *a call happened* now.
-
-**Real cost: ~$0.00125/call** (measured over 4 calls, range
-$0.00066–$0.00297; the spread is input length). The 0.004 estimate is ~3x
-high and is left that way deliberately — it is the "may I spend more?" guard,
-and over-estimating stops early while under-estimating walks through the
-ceiling.
-
-**Two ceilings, and the binding one is cumulative:** `PROSE_BUDGET_USD = 0.25`
-and `PROSE_MAX_CALLS = 50` bound one run; `PROSE_ROLLING_CEILING_USD = 1.00`
-over `PROSE_ROLLING_WINDOW_DAYS = 30` bounds the month, read from
-`monitor_runs.prose_spend_usd`. Per-run budget is `min(budget, remaining)`.
-At the measured rate $1.00 buys roughly 800 calls, not the ~250 assumed when
-it was set. Recorded 30-day spend is $0.0320 — still yesterday's inflated
-arithmetic; every run from here records real money.
-`docs/plan_relevance_column.md` holds a second, further deferred AI feature.
-
-**The amendment grouping key is the trial's own `last_update_post_date`,
-never `detected_at`** — one cron run spreads its writes across a minute
-boundary, so grouping by minute reports one amendment as two. Rows of one
-amendment share an exact `detected_at` because Postgres `now()` is
-transaction-start time; three real-data tests hold that.
-
-**Anthropic account credits: $0.30 max budget for step 7c.** Real measured
-cost on step 7c: **~$0.004 per amendment** (claude-haiku-4-5). Step 7
-measured **~$0.019 per trial** (opus, now deleted), **~$0.0016** on the
-one-question replacement — *not* the $0.006 in older notes (measured
-against synthetic fixtures). This project's real text is **2.61 characters
-per token**, not the usual ~4.0 rule of thumb; assuming 4.0 understates
-any estimate by ~53%. Re-measure before quoting. `.ranking_cache/` still
-replays recorded requests for $0. Never put a paid harness in CI.
-
-Standing gotchas, before touching data or git:
+Standing gotchas, dated postmortem for each in `docs/decisions.md`:
 
 - The Neon branch named **`dev` is the real live database** (`production`
-  is an empty leftover; use `sandbox` to rehearse destructive changes).
-- A `JOIN` against `study_conditions` needs **`DISTINCT`** before its
-  output feeds a write, and that table is **deleted and re-inserted
-  wholesale on every batch upsert** — never store anything durable on it.
-- **Never `SELECT *` against `studies`** — `raw_json` is 52% of the table
-  and no query reads it. Use `STUDY_DETAIL_COLUMNS`.
-- Stored values rarely match what the API docs imply — phase is `PHASE2`
-  not "Phase 2", 64% of trials have no usable phase, ages carry units
-  other than years, `CLOSED` is not a real status, and `hasResults` sits
-  a level above every other field. Query the real distributions before
-  writing a query **or a prompt** (§6).
-- **`git add -A` is not safe in this repo.** It has committed an installed
-  skill into the public tree and a 2.4 MB generated design canvas, both in
-  one session. Stage deliberately.
+  is an empty leftover; `sandbox` rehearses destructive changes).
+- A `JOIN` against `study_conditions` needs **`DISTINCT`** before feeding a
+  write — that table is wiped and re-inserted wholesale every batch upsert.
+- **Never `SELECT *` against `studies`** — `raw_json` is 52% of the table.
+  Use `STUDY_DETAIL_COLUMNS`.
+- Stored values rarely match the API docs: phase is `PHASE2` not "Phase 2",
+  64% of trials have no usable phase, `hasResults` sits above
+  `protocolSection`. Query real distributions before a query **or prompt** (§6).
+- **`git add -A` is not safe here** — it has committed an installed skill
+  and a 2.4 MB design canvas in one session. Stage deliberately.
+- This project's real text runs ~2.61 chars/token, not ~4.0 — re-measure
+  any cost estimate rather than trusting an old one.
 
-**What does not travel with a clone**, all gitignored: `.env.local` (the
-database URLs — without it the 12 real-data tests skip cleanly rather than
-failing), `.ranking_cache/` (71 recorded responses; nothing reads them now
-that ranking is gone — keep or delete deliberately), `.claude/skills/`, and
-`design/triallens-the-watch.html` (rebuild it from `design/*.dc.html`).
-
-Full status and dated reasoning: `docs/roadmap.md`, `docs/decisions.md`.
-Where the project is going next, and its known gaps: `docs/roadmap.md` rows
-7b/7c and the Current Status above — deliberately not a separate handoff
-file, which went stale twice and was read only when someone remembered it
-existed.
+**Doesn't travel with a clone**, all gitignored: `.env.local` (DB URLs —
+real-data tests skip cleanly without it), `.ranking_cache/` (orphaned
+since step 7's removal), `.claude/skills/`, `design/triallens-the-watch.html`
+(rebuild from `design/*.dc.html`).

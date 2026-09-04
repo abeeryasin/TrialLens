@@ -155,6 +155,45 @@ def test_the_window_start_is_days_before_now(api):
     assert timedelta(days=29, hours=23) < until - since < timedelta(days=30, hours=1)
 
 
+# ---------------------------------------------------------------------------
+# as_of (2026-09-05) — a historical window, for the weekly synthesis agent's
+# "was last week's movement a pattern or a coincidence?" question. That needs
+# the exact same 7-day arithmetic applied to a week that already ended, not
+# only the trailing week from right now.
+# ---------------------------------------------------------------------------
+
+def test_as_of_moves_the_window_instead_of_defaulting_to_now(api):
+    as_of = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    body = api(results()).get(
+        "/investigate", params={"days": 7, "as_of": as_of.isoformat()}
+    ).json()["window"]
+    until = datetime.fromisoformat(body["until"].replace("Z", "+00:00"))
+    since = datetime.fromisoformat(body["since"].replace("Z", "+00:00"))
+    assert until == as_of
+    assert since == as_of - timedelta(days=7)
+
+
+def test_as_of_reaches_the_sql_as_an_upper_bound(api):
+    """Without this, a historical as_of would still pull every amendment up
+    to the real present — the exact bug that would make two 'weekly' windows
+    overlap instead of being distinct."""
+    holder = []
+    as_of = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    api(results(), keep=holder).get(
+        "/investigate", params={"days": 7, "as_of": as_of.isoformat()}
+    )
+    _, params = holder[0].cursor_obj.executed[0]
+    assert params["until"] == as_of
+
+
+def test_omitting_as_of_still_behaves_like_before(api):
+    """The default caller (every page except the synthesis agent) must see
+    no change: until defaults to now, same as it always did."""
+    body = api(results()).get("/investigate", params={"days": 7}).json()["window"]
+    until = datetime.fromisoformat(body["until"].replace("Z", "+00:00"))
+    assert (datetime.now(timezone.utc) - until) < timedelta(seconds=30)
+
+
 def test_findings_render_through_the_response_model(api):
     """One row of each kind, so a schema that cannot serialise a finding
     fails here rather than in the browser."""

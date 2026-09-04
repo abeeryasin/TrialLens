@@ -238,8 +238,11 @@ class TestPrimaryOutcomes:
             "wording_only": 9, "after_primary_completion": 5, "unreadable": 0,
         }))
         assert "Reformatting only" in page
-        assert "list numbering removed" in page
-        assert "narrowed 17" in page
+        assert "capitalisation, punctuation and list numbering" in page
+        # The caption states the split in the tiles' own words, not a vague
+        # "narrowed X to Y" a reader has to map back to them (reported from
+        # real use, 2026-09-05).
+        assert "Of the 17 changes above: 8 substantive, 9 reformatting only." in page
 
     def test_a_missing_ai_reading_is_not_reported_as_nothing_important(self, render):
         """Absence means three things the column cannot separate."""
@@ -327,6 +330,69 @@ class TestEnrollment:
         }))
         assert "85% of target" in page
         assert "55% of terminated trials stop for low accrual" in page
+
+    def test_a_plotted_trial_is_openable_not_a_dead_end(self, render):
+        """The outcomes section above got this fix on 2026-09-04 ("the NCT
+        ID was a dead end... gave no way to go read it"); this section had
+        never had it. Reported from real use, 2026-09-05."""
+        page, _ = render(investigate(enrollment={
+            "became_actual": [{"nct_id": "NCT03402139", "brief_title": "A real trial title",
+                               "old_type": "ESTIMATED", "new_type": "ACTUAL",
+                               "count_before": 400, "count_after": 163,
+                               "count_moved": True, "later_count_change": False,
+                               "detected_at": "2026-08-31T18:02:47Z"}],
+            "became_actual_total": 1, "under_target": 1,
+            "switched_back": [], "switched_back_total": 0,
+            "target_raised": [], "target_raised_total": 0,
+            "target_lowered": [], "target_lowered_total": 0,
+        }))
+        assert "A real trial title" in page
+        assert "163 of 400 planned (41%)" in page
+        assert "open_enrollment_NCT03402139" in [b.key for b in _.button]
+
+    def test_the_chart_states_how_many_of_the_total_it_shows(self, render):
+        """13 in the tile above, only NAMED_CAP=8 ever reach the chart —
+        the chart must say so rather than silently showing a subset."""
+        moves = [
+            {"nct_id": f"NCT{i}", "brief_title": "T", "old_type": "ESTIMATED",
+             "new_type": "ACTUAL", "count_before": 100, "count_after": 50 + i,
+             "count_moved": True, "later_count_change": False,
+             "detected_at": "2026-08-31T18:02:47Z"}
+            for i in range(3)
+        ]
+        page, _ = render(investigate(enrollment={
+            "became_actual": moves, "became_actual_total": 13, "under_target": 3,
+            "switched_back": [], "switched_back_total": 0,
+            "target_raised": [], "target_raised_total": 0,
+            "target_lowered": [], "target_lowered_total": 0,
+        }))
+        assert "Showing the 3 largest gaps of 13 interventional-trial switches" in page
+
+    def test_an_observational_study_exclusion_is_stated_not_silent(self, render):
+        """api/investigate.py's analyse_enrollment already excludes
+        OBSERVATIONAL studies from `became_actual` before this page ever
+        sees it (a real-world study can enroll far more than its "target" —
+        237,211 of 35,000 in the live record — because it pulls from
+        existing records rather than recruiting patients, and the
+        85%-of-target accrual benchmark this chart cites doesn't apply).
+        This page's job is only to say so rather than let the count quietly
+        not add up. Reported from real use, 2026-09-05."""
+        moves = [
+            {"nct_id": "NCT_RCT", "brief_title": "A real trial", "old_type": "ESTIMATED",
+             "new_type": "ACTUAL", "count_before": 400, "count_after": 163,
+             "count_moved": True, "later_count_change": False,
+             "study_type": "INTERVENTIONAL", "detected_at": "2026-08-31T18:02:47Z"},
+        ]
+        page, _ = render(investigate(enrollment={
+            "became_actual": moves, "became_actual_total": 2,
+            "became_actual_observational_total": 1, "under_target": 0,
+            "switched_back": [], "switched_back_total": 0,
+            "target_raised": [], "target_raised_total": 0,
+            "target_lowered": [], "target_lowered_total": 0,
+        }))
+        assert "NCT_RCT" in page
+        assert "1 real-world/observational study also switched" in page
+        assert "doesn't apply to a study pulling from existing records" in page
 
     def test_an_unattributable_count_is_declared_not_silently_omitted(self, render):
         page, _ = render(investigate(enrollment={

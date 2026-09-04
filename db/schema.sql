@@ -459,3 +459,57 @@ ALTER TABLE investigators      ADD COLUMN IF NOT EXISTS canonical_id INTEGER REF
 CREATE INDEX IF NOT EXISTS idx_sites_canonical              ON sites(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_intervention_terms_canonical ON intervention_terms(canonical_id);
 CREATE INDEX IF NOT EXISTS idx_investigators_canonical      ON investigators(canonical_id);
+
+-- ---------------------------------------------------------------------------
+-- Weekly synthesis agent (step 9 follow-on, 2026-09-04/05).
+--
+-- The one genuinely multi-step judgment in the product: "is this week's
+-- movement a pattern or a coincidence?" Investigate's numbers are exactly
+-- checkable (CLAUDE.md sec. 5) but do not compare themselves across weeks
+-- or decide which of several true facts is worth a researcher's attention —
+-- that reasoning is the agent's job, once a week, reading /investigate and
+-- /investigate/landscape as its only tools. See docs/decisions.md,
+-- 2026-09-04, for the costing that ruled out a multi-agent crew.
+-- ---------------------------------------------------------------------------
+
+-- Run record, same shape as monitor_runs and for the same reason: the
+-- ceiling below sums `spend_usd` over `started_at`, so a run that spent
+-- money and then failed before finishing is still counted rather than
+-- becoming invisible to its own budget guard.
+CREATE TABLE IF NOT EXISTS synthesis_runs (
+    id                 SERIAL PRIMARY KEY,
+    started_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at       TIMESTAMPTZ,
+    status             TEXT NOT NULL DEFAULT 'running',
+    proposals_created  INTEGER,
+    spend_usd          NUMERIC(10, 4)
+);
+CREATE INDEX IF NOT EXISTS idx_synthesis_runs_started_at ON synthesis_runs(started_at DESC);
+
+-- What the agent proposes, never what it decides. A proposal sits here
+-- until a person accepts or dismisses it — this table IS the review queue
+-- named in CLAUDE.md's "Current Status", and per sec. 3 every row carries
+-- its evidence, not just its conclusion: `evidence` holds the tool results
+-- the agent actually read, so "why does the agent think this" is answered
+-- by the row itself rather than by trusting the summary.
+--
+-- `confidence` is a label (high/medium/low), never a number — sec. 3 and
+-- the step-7 removal both rule out an unexplained score. Two labels of the
+-- same finding a week apart are two rows: nothing here is ever overwritten,
+-- so a reviewer can see the agent changed its mind, not just its current
+-- opinion.
+CREATE TABLE IF NOT EXISTS review_queue (
+    id             SERIAL PRIMARY KEY,
+    run_id         INTEGER REFERENCES synthesis_runs(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    window_since   TIMESTAMPTZ NOT NULL,
+    window_until   TIMESTAMPTZ NOT NULL,
+    finding_type   TEXT NOT NULL,
+    summary        TEXT NOT NULL,
+    evidence       JSONB NOT NULL,
+    confidence     TEXT NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
+    status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'dismissed')),
+    reviewed_at    TIMESTAMPTZ,
+    reviewed_note  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status, created_at DESC);

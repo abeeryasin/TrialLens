@@ -197,11 +197,14 @@ with changed_tab:
         if split is not None:
             st.altair_chart(split, use_container_width=True)
         st.caption(
-            f"Measure names are compared with capitalisation, punctuation and "
-            f"list numbering removed, so a retitled endpoint is not reported as "
-            f"a changed one. That narrowed {outcomes['total']} "
-            f"{plural(outcomes['total'], 'change')} to "
-            f"{outcomes['substantive']}."
+            f"Before a name change counts as substantive, TrialLens strips "
+            f"capitalisation, punctuation and list numbering — a purely "
+            f'cosmetic edit (e.g. "Safety and tolerability" → "Safety and '
+            f'Tolerability", or a list number added) isn\'t reported as a '
+            f"changed endpoint. Of the {outcomes['total']} "
+            f"{plural(outcomes['total'], 'change')} above: "
+            f"{outcomes['substantive']} substantive, "
+            f"{outcomes['wording_only']} reformatting only."
         )
         if outcomes["unreadable"]:
             st.caption(
@@ -363,6 +366,7 @@ with changed_tab:
         )
 
         dumbbell = []
+        plotted_moves = []
         for move in enrollment["became_actual"]:
             if not move["count_before"] or move["count_after"] is None:
                 continue
@@ -376,15 +380,52 @@ with changed_tab:
                 "max_x": max(move["count_before"], move["count_after"]),
                 "shortfall": "Below 85% of target" if ratio < 0.85 else "At or above",
             })
+            plotted_moves.append(move)
         chart = charts.target_vs_actual(dumbbell)
         if chart is not None:
             st.altair_chart(chart, use_container_width=True)
+            observational_total = enrollment.get("became_actual_observational_total", 0)
+            comparable_total = enrollment["became_actual_total"] - observational_total
+            observational_note = ""
+            if observational_total:
+                n = observational_total
+                observational_note = (
+                    f" {n} {plural(n, 'real-world/observational study', 'real-world/observational studies')} "
+                    "also switched to an actual count but "
+                    f"{'is' if n == 1 else 'are'} not shown here — "
+                    "the 85% benchmark below is drawn from interventional-trial "
+                    "accrual literature and doesn't apply to a study pulling "
+                    "from existing records."
+                )
             st.caption(
                 "Grey marks the target, coloured marks what was enrolled. 85% of "
                 "target is the threshold accrual studies count a shortfall "
                 "against; roughly 19% of trials in one published cohort fell "
-                "below it, and 55% of terminated trials stop for low accrual."
+                "below it, and 55% of terminated trials stop for low accrual. "
+                f"Showing the {len(plotted_moves)} largest gaps of "
+                f"{comparable_total} interventional-trial switches this "
+                f"window.{observational_note}"
             )
+
+            # Each chart row, made openable — without this a trial ID on an
+            # axis is a dead end. The outcomes section above already had
+            # this (fixed 2026-09-04, "the NCT ID was a dead end"); this
+            # section did not. Reported from real use, 2026-09-05.
+            for move in sorted(plotted_moves, key=lambda m: m["count_after"] / m["count_before"]):
+                with st.container(border=True):
+                    head, action = st.columns([6, 1])
+                    pct = move["count_after"] / move["count_before"] * 100
+                    head.markdown(
+                        f"**{move['nct_id']}** — {move['brief_title']}  \n"
+                        f"{move['count_after']:,} of {move['count_before']:,} "
+                        f"planned ({pct:.0f}%)"
+                    )
+                    if action.button(
+                        "Open →", key=f"open_enrollment_{move['nct_id']}",
+                        help="Read this trial in Understand",
+                    ):
+                        st.session_state["selected_nct_id"] = move["nct_id"]
+                        st.switch_page("pages/2_Understand.py")
 
         unattributable = [m for m in enrollment["became_actual"] if m["later_count_change"]]
         if unattributable:

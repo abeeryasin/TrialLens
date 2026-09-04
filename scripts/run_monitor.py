@@ -28,6 +28,11 @@ load_dotenv(ROOT / ".env")
 
 from scripts.ingest import run_ingest  # noqa: E402
 from api.prose_interpreter import get_prose_amendments, interpret_amendments_batch  # noqa: E402
+from api.cost_budget import (  # noqa: E402
+    ROLLING_CEILING_USD as PROSE_ROLLING_CEILING_USD,
+    ROLLING_WINDOW_DAYS as PROSE_ROLLING_WINDOW_DAYS,
+    rolling_budget_remaining,
+)
 
 CONDITIONS_FILE = ROOT / "config" / "tracked_conditions.json"
 
@@ -35,6 +40,13 @@ CONDITIONS_FILE = ROOT / "config" / "tracked_conditions.json"
 PROSE_BUDGET_USD = 0.25  # Hard cap for ONE monitor run
 PROSE_MAX_CALLS = 50  # Never interpret more than this per run
 
+# The rolling ceiling itself (PROSE_ROLLING_CEILING_USD / _WINDOW_DAYS) and
+# rolling_budget_remaining() moved to api/cost_budget.py on 2026-09-05: the
+# weekly synthesis agent draws from the same $1.00/30-day window, not a
+# second one, so the sum and the constant needed one home. Imported under
+# their old names here so nothing else in this file, or in
+# tests/test_prose_budget.py, has to change.
+#
 # A per-run cap says nothing about what a 6-hourly cron adds up to: 0.25 x 4
 # runs x 30 days is ~$30/month against a project whose standing budget is a
 # few dollars. This is the ceiling that actually binds. Spend is recorded on
@@ -45,8 +57,6 @@ PROSE_MAX_CALLS = 50  # Never interpret more than this per run
 # on file in total, at ~$0.004 each, so a genuinely busy month is cents. This
 # leaves roughly 5-10x headroom and still fails long before the cron could
 # quietly drain the account.
-PROSE_ROLLING_CEILING_USD = 1.00
-PROSE_ROLLING_WINDOW_DAYS = 30
 
 
 def create_run_record(conn):
@@ -75,30 +85,6 @@ def update_run_record(conn, run_id, trials_checked, changes_detected,
             (status, trials_checked, changes_detected, prose_spend_usd, run_id),
         )
     conn.commit()
-
-
-def rolling_budget_remaining(conn):
-    """Dollars left in the rolling window before step 7c must stop calling.
-
-    Sums what previous runs actually recorded rather than trusting a counter
-    held in memory, so the ceiling survives restarts, reruns and a workflow
-    dispatched by hand — and stays auditable afterwards, which a variable
-    would not be.
-
-    Counts by `started_at`, not `completed_at`: a run that spent money and
-    then died never gets a completed_at, and billing that a crash makes
-    invisible is exactly the failure this guard exists to prevent.
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT coalesce(sum(prose_spend_usd), 0)
-            FROM monitor_runs
-            WHERE started_at > now() - interval '{PROSE_ROLLING_WINDOW_DAYS} days'
-            """
-        )
-        spent = float(cur.fetchone()[0])
-    return max(0.0, PROSE_ROLLING_CEILING_USD - spent)
 
 
 def run_prose_interpretation():
