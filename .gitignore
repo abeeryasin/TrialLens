@@ -19,3 +19,10 @@ SKILL.md
 
 # Seeded design canvas: ~2.5MB of embedded editor, rebuilt from design/*.dc.html
 design/triallens-the-watch.html
+
+# A cache for the interface-design skill, not a source of truth.
+# Every value in it is already a comment beside the code it explains in
+# frontend/charts.py, and this repo has already learned that a separate
+# doc file goes stale and gets read only when someone remembers it
+# exists (CLAUDE.md, on why there is no handoff file).
+.interface-design/
