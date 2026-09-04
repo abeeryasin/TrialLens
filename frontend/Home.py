@@ -486,9 +486,9 @@ capabilities = [
     {
         "icon": "🧭",
         "name": "Investigate",
-        "desc": "Synthesis across everything tracked — patterns across trials, not just within one.",
-        "page": None,
-        "status": "planned",
+        "desc": "Patterns across every tracked trial — endpoints that moved, timelines that slipped, and what the field looks like.",
+        "page": "pages/5_Investigate.py",
+        "status": "live",
     },
 ]
 

@@ -61,12 +61,40 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 ## Current Status
 
-Steps 1-6 are built, tested, and live: schema + ingestion, the
-FastAPI-only-door layer, scheduler/cron automation (a real 6-hour cron
-running on GitHub Actions), Discover live-fallback (`GET /discover`), and
-the Streamlit frontend — Discover, Understand, the Monitor feed
-(`GET /changes`) and now Explore. **416 tests pass.** Investigate isn't
-built.
+**All five capabilities are built, tested and live** — Discover,
+Understand, Monitor, Explore and, as of 2026-09-04, Investigate. Schema +
+ingestion, the FastAPI-only-door layer, scheduler/cron automation (a real
+6-hour cron on GitHub Actions), Discover live-fallback (`GET /discover`)
+and the Streamlit frontend. **590 tests pass.**
+
+**Step 9, Investigate, is live** (2026-09-04) — `GET /investigate` (window
+findings) and `GET /investigate/landscape` (the corpus view) in
+`api/investigate.py`, `frontend/pages/5_Investigate.py`, Home's fifth card
+switched from "planned" to live. Deterministic, per §5: every question it
+answers has exactly one correct answer. **The weekly synthesis agent is
+designed and costed but NOT built** — one specialist reading pre-computed
+findings, ~$0.145/run, ~$0.63/month inside the existing $1.00 rolling
+ceiling. Never a crew: a 3-agent pipeline costs ~2.9x a single agent's
+tokens and the findings payload is a few KB.
+
+**The headline finding came from outside evidence, not from what the
+columns allowed** — primary-outcome changes. 31.7% of registered CT.gov
+studies have had one; the change is associated with funding source at OR
+1.82 and with 16% effect-size inflation; an LLM reaches 0.97 sensitivity on
+detecting them. The record holds 17, **5 after the trial's own primary
+completion date**. The deterministic layer exists to STOP false alarms:
+normalisation de-escalates 9 of 17 as reformatting, including NCT03674567,
+which has results posted and changed after completion — the strongest flag
+combination available — and whose change is `Safety and tolerability` →
+`Safety and Tolerability`. **Flags are listed, never summed**; a score
+would be step 7's invisible ranking again. Nothing is an accusation: the
+page says what changed, when, and that it **requires review** (§2's
+vocabulary, same as eligibility).
+
+**"~17 changed trials a week" was wrong by ~20x.** Measured 2026-09-04:
+184 trials amended in 3.5 days, ~370/week, ~1,600/month. The step-7
+removal still stands on its four-of-five-signals argument, but the
+"low-volume product" leg is not true — re-measure before citing volume.
 
 **Step 8's Explore is live and visible** (2026-09-04) —
 `GET /explore/{nct_id}` (`api/explore.py`) and
@@ -100,9 +128,41 @@ mutation dropping city/country was caught by the script's own abort guard,
 which found 8,856 cross-place merges and committed nothing. Runs in
 `monitor.yml` after the graph backfill.
 
-**START HERE (next session). Step 9, Investigate, is the last unbuilt
-capability** — synthesis across everything tracked. Nothing else in steps
-1-8 is outstanding.
+**START HERE (next session): the weekly synthesis agent.** Everything
+else in steps 1-9 is built. The agent's job is the one genuinely
+multi-step judgment in the product — "is this week's movement a pattern or
+a coincidence?" — reading `/investigate`'s findings as its tools, tagging
+proposals with confidence into a human review queue (which also satisfies
+the review-queue habit, currently unpracticed). Design and costing are in
+`docs/decisions.md`, 2026-09-04. Steps 10-12 (deployment, autonomous-ops
+hardening, notifications) remain untouched.
+
+**Investigate has two halves and they answer different questions.** "What
+changed" reads `study_changes`; "the field" reads `studies`. The second
+was added mid-build after noticing nothing anywhere answered "what has
+been done in breast cancer" — Explore answers it per trial, Monitor per
+change. Its three honesty rules: the unstated phase share stays in the
+picture (52% of breast-cancer trials report `NA` or nothing, and `NA`
+means "not a phased study", a real answer but not a rung on the ladder);
+the current year is muted and labelled because 2025's 899 beside 2026's
+756-so-far reads as a decline that is only the calendar; and a term's
+reach is measured against trials that list any intervention (4,938 of
+5,377), never the slice.
+
+**A self-join that looked like a working chart.** Joining
+`intervention_terms` to itself on `coalesce(canonical_id, id)`
+cross-products the table and every term returns the SAME count. Two
+aliases (`raw` then `canon`) is the correct canonical-merge form; the
+signature of the bug is identical counts, which a real-data test now
+asserts against.
+
+**Benchmarks are cited, but 31.7% is deliberately not plotted.** Findings
+are read against published baselines (12.2-month median delay; 19% of
+trials missing 85% of target; 55% of terminations for low accrual). The
+outcome-switching prevalence is caption context only — "studies that ever
+changed an outcome" and "changes seen in eight days" do not share an axis,
+and drawing them together would manufacture a comparison neither source
+supports.
 
 **A green suite hid a real regression twice this session, and both times the
 FIXTURE was at fault, not the assertion.** Removing the canonical join from

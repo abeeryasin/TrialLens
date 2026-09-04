@@ -91,7 +91,7 @@ def field_aspect(field_name: str) -> Optional[str]:
 # What did it actually do? Arithmetic only.
 # ============================================================================
 
-def _parse_partial_date(value: Optional[str]):
+def parse_partial_date(value: Optional[str]):
     """A CT.gov date, which may be month-precision only.
 
     Returns (date, is_month_only) or None. ~23% of trials report these as
@@ -119,8 +119,8 @@ def describe_date_shift(old_value, new_value) -> Optional[str]:
     gave to the month would invent precision the registry never stated
     (sec. 2).
     """
-    old = _parse_partial_date(old_value)
-    new = _parse_partial_date(new_value)
+    old = parse_partial_date(old_value)
+    new = parse_partial_date(new_value)
     if old is None or new is None:
         return None
 
@@ -245,11 +245,11 @@ def describe_list_shift(old_value, new_value, noun: str) -> Optional[str]:
 # "CLOSED", which an earlier prompt taught a model, is not among them.
 # Grouped by what a change between them means for a researcher who wants to
 # know whether they can still refer a patient.
-_STATUS_OPEN = {"RECRUITING", "ENROLLING_BY_INVITATION"}
-_STATUS_UNDERWAY_CLOSED = {"ACTIVE_NOT_RECRUITING"}
-_STATUS_FINISHED = {"COMPLETED"}
-_STATUS_STOPPED = {"TERMINATED", "SUSPENDED", "WITHDRAWN"}
-_STATUS_PENDING = {"NOT_YET_RECRUITING"}
+STATUS_OPEN = {"RECRUITING", "ENROLLING_BY_INVITATION"}
+STATUS_UNDERWAY_CLOSED = {"ACTIVE_NOT_RECRUITING"}
+STATUS_FINISHED = {"COMPLETED"}
+STATUS_STOPPED = {"TERMINATED", "SUSPENDED", "WITHDRAWN"}
+STATUS_PENDING = {"NOT_YET_RECRUITING"}
 
 
 def describe_results_posting(old_value, new_value) -> Optional[str]:
@@ -293,17 +293,17 @@ def describe_status_change(old_value, new_value) -> Optional[str]:
     if not old_value or not new_value or old_value == new_value:
         return None
 
-    if old_value in _STATUS_PENDING and new_value in _STATUS_OPEN:
+    if old_value in STATUS_PENDING and new_value in STATUS_OPEN:
         return "opened to enrolment"
-    if new_value in _STATUS_STOPPED:
+    if new_value in STATUS_STOPPED:
         return f"stopped early ({new_value.lower()}) — worth reading why"
-    if new_value in _STATUS_FINISHED:
+    if new_value in STATUS_FINISHED:
         return "finished — results may start appearing"
-    if old_value in _STATUS_OPEN and new_value in _STATUS_UNDERWAY_CLOSED:
+    if old_value in STATUS_OPEN and new_value in STATUS_UNDERWAY_CLOSED:
         return "closed to new participants, still running"
-    if old_value in _STATUS_UNDERWAY_CLOSED and new_value in _STATUS_OPEN:
+    if old_value in STATUS_UNDERWAY_CLOSED and new_value in STATUS_OPEN:
         return "reopened to new participants"
-    if new_value in _STATUS_OPEN:
+    if new_value in STATUS_OPEN:
         return "now open to new participants"
     return None
 

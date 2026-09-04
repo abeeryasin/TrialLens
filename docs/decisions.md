@@ -2771,3 +2771,159 @@ verified by a second run changing 0 pointers, and by a read-only test that
 re-derives every assignment and compares it to what is stored.
 
 416 tests pass.
+
+## 2026-09-04 — Step 9, Investigate: deterministic analysis, and one number that was wrong by 20x
+
+**The five capabilities are complete.** `GET /investigate` and
+`GET /investigate/landscape` (`api/investigate.py`),
+`frontend/pages/5_Investigate.py`, and Home's fifth card is live. **590
+tests pass**, up from 418.
+
+### The number that was wrong
+
+The step-7 removal argument leans on "this product is deliberately
+low-volume (~17 changed trials a week)". Measured against the live record
+while sizing an agent for step 9:
+
+```
+2026-09-01 → 09-04 (3.5 days): 184 trials amended, 322 content field changes
+                               → ~370 trials/week, ~1,600/month
+```
+
+**Off by roughly 20x.** It does not overturn the step-7 decision — that
+rested mainly on four of five signals being filters wearing a score's
+costume, which is unaffected — but the "low volume" leg of it is not true
+and should not be cited again without re-measuring. Corrected in
+`docs/roadmap.md`.
+
+### Why Investigate is deterministic, and where an agent still earns a place
+
+Every question the engine answers has exactly one correct answer:
+`2027-05-31 → 2026-03-19` is 14 months (subtraction),
+`RECRUITING → ACTIVE_NOT_RECRUITING` happened 13 times (counting),
+`400 → 163` missed target by 237 (subtraction). A model computing these
+could only be slower, dearer, and occasionally wrong.
+
+External evidence agreed on the agent shape. A three-agent pipeline
+consumes ~29,000 tokens where a single agent uses ~10,000; a five-agent
+triage system spent 80% of its tokens on agents describing their work to
+each other and was better, 4x faster and a quarter the cost rebuilt as one
+agent with the same tools. Multi-agent wins only when the task exceeds one
+context window or needs genuinely adversarial roles. The findings payload
+is a few KB. **So: one specialist agent, weekly, reading pre-computed
+findings — not a crew.** Costed at ~$0.145/run (a 10-turn loop re-sends its
+history; the $0.00125 measured for step 7c is a single-shot figure), so
+~$0.63/month against the existing $1.00 rolling ceiling. The naive
+per-changed-trial design would be ~$232/month.
+
+### Outcome switching — the finding that came from outside evidence
+
+The first feature in this project chosen from published literature rather
+than from what the columns allowed. Changing a registered primary outcome
+after the data can be seen is a named, measured problem:
+**31.7%** of registered ClinicalTrials.gov studies have had one changed
+(PMC4032105); the change is associated with funding source at **OR 1.82**
+(PMC5829948); among 389 trials, the 130 with a change overstated effect
+size by **16%** (PMC6646984). An LLM approach reaches **0.97 sensitivity /
+0.95 PPV** on detecting them (npj Digit Med 2026) — external validation
+that language understanding earns its cost here specifically, which step 7's
+ranking never had. The registry records every one of these and surfaces none.
+
+In the record: **17 outcome changes, 5 of them after the trial's own primary
+completion date.**
+
+**The deterministic layer exists to stop false alarms, not raise them.**
+NCT03674567 has results posted and changed its outcome after primary
+completion — the strongest flag combination available — and the change is
+`Safety and tolerability` → `Safety and Tolerability`. Comparing normalised
+measure names catches that as wording. Reading real output then found a
+second false positive of our own making: NCT05327608 renumbered its only
+outcome (`"1. Proportion..."` → `"Proportion..."`) and punctuation stripping
+alone left the bare `1` behind, so it read as a different endpoint.
+`_LIST_MARKER` strips leading enumeration first, and requires a digit be
+followed by `.` or `)` **and** whitespace so `6-minute walk distance` and
+`30 day mortality` survive. That moved the split from 9 substantive / 8
+wording to **8 substantive / 9 wording**.
+
+**Flags are listed, never summed.** No score, no confidence number — that
+is the invisible ranking sec. 3 forbids and step 7 was removed for. And
+nothing here is an accusation: a changed endpoint has innocent explanations
+and the record cannot say which, so the page states what changed, when,
+relative to the trial's own milestones, and that it **requires review** —
+sec. 2's vocabulary, the same one used for eligibility.
+
+### The landscape half, added mid-build
+
+Investigate initially answered only "what changed". That left "what has
+been done in breast cancer" unanswered anywhere: Explore answers it per
+trial, Monitor per change. `GET /investigate/landscape` answers it for the
+corpus — trials started per year, phase, status, enrollment bands, what is
+being tested, who runs them.
+
+Three honesty rules it exists to keep:
+
+- **The unstated share stays in the picture.** 2,838 of 5,377 breast-cancer
+  trials report `NA` or no phase (52%). CT.gov's `NA` means the trial does
+  not use phases at all — a real answer, but not a rung on the ladder, so it
+  is counted with the unstated rather than plotted beside PHASE3.
+- **The current year is not a data point yet.** 2025 started 899 trials and
+  2026 shows 756 in September. Drawn at equal weight that is a decline, and
+  it is the calendar. Current year and future (planned) starts are muted and
+  labelled.
+- **A term's reach is measured against trials that list any intervention**
+  (4,938 of 5,377), never against the slice.
+
+**A self-join that looked like a working chart.** The first intervention
+query joined `intervention_terms` to itself on
+`coalesce(canonical_id, id)`, which cross-products the table — every term
+came back with the identical count 4,938. Two aliases (`raw` then `canon`)
+is the correct canonical-merge form. `test_the_intervention_join_is_not_a_self_join`
+asserts the counts are not all equal, which is the signature.
+
+### Two bugs the tests caught that reading the code did not
+
+- `analyse_enrollment` reported `None` for the 8 of 20 target-became-actual
+  switches with no count row in their amendment, while its own docstring
+  claimed it reported the unchanged number. Today's stored count is only
+  attributable when nothing has moved it since — the reasoning already
+  written into `amendments.enrollment_context` — so `later_count_change`
+  carries which case applied. **The guard never fires on live data**, so it
+  needed a constructed test; a suite run only against production would have
+  reported it covered while never executing it.
+- The page said "No trial changed a registered primary outcome" when
+  changes existed but none could be *read*. An unreadable row is not an
+  absent one, and that sentence was false. Caught by
+  `test_unreadable_values_are_reported`.
+
+### One definition per concept
+
+`classify_date_move` calls `describe_date_shift` rather than re-deriving its
+threshold, so the aggregate and Understand's per-amendment view cannot
+disagree about whether the same row moved. A test asserts the equivalence
+across the boundary, which is where it turned out the cut-off is **>= 14
+days counts as a move** (exactly two weeks is reported, 13 days with a
+month-precision side is an anchoring artefact) — the code was right and the
+first draft of the test was wrong.
+
+### Benchmarks, and the denominator trap
+
+Findings are read against published baselines: median delay **12.2 months**
+with ~1 in 5 finishing on time (PMC9857498, 2,542 RCTs); **19%** of trials
+missing 85% of target and **55%** of terminations being low accrual. Ours:
+6.3 months median push, and 6 of 20 (30%) below 85%.
+
+**31.7% is deliberately NOT plotted.** "Studies that ever changed an
+outcome" and "changes seen in eight days" do not share an axis, and drawing
+them together would manufacture a comparison neither source supports. It is
+caption context. The delay and accrual lines carry the same caveat stated
+out loud: ours is a window of amendments, theirs a cohort of completed
+trials.
+
+### Reusable analysis skill
+
+`.claude/skills/triallens-trial-analysis/` (gitignored, like every skill
+here) packages the procedure, the benchmark table with its citations, the
+denominator trap, and the three-cycle iteration record — so the next
+analysis does not re-derive them.
+
+590 tests pass.

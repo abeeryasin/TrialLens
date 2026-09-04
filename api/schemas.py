@@ -686,3 +686,292 @@ class TrialDetail(BaseModel):
     interventions: List[Intervention] = []
     primary_outcomes: List[OutcomeMeasure] = []
     locations: List[TrialLocation] = []
+
+
+# ============================================================================
+# Investigate — cross-trial synthesis (step 9)
+# ============================================================================
+#
+# Every model here carries a total alongside whatever list it names, and a
+# count of what could not be read. That is the same rule Explore's capped
+# lists keep, applied to an aggregate: a finding without its denominator is
+# a claim about the corpus that nobody can check.
+
+
+class TrialRef(BaseModel):
+    nct_id: str
+    brief_title: str
+
+
+class DateMove(TrialRef):
+    """One trial's date change, with the arithmetic already done."""
+
+    field_name: str
+    old_value: str
+    new_value: str
+    delta_days: int  # signed: positive is later
+    # At least one side was month-precision ("2027-06"). ~23% of CT.gov
+    # dates are, and the flag has to travel with the number — a reader
+    # told "slipped 184 days" about a value the registry gave to the
+    # month has been given precision that does not exist (sec. 2).
+    imprecise: bool
+    effect: str  # the same sentence Understand shows for this row
+    detected_at: datetime
+
+
+class DateMovement(BaseModel):
+    """What happened to one date field across the whole window."""
+
+    field_name: str
+    label: str
+    pushed: int  # got later
+    pulled: int  # got earlier
+    median_push_days: Optional[int] = None
+    median_pull_days: Optional[int] = None
+    # Real moves where at least one side was month-precision. If this is a
+    # large share of `pushed + pulled`, the medians above are approximate
+    # and the page must say so rather than printing a bare day count.
+    imprecise_moves: int = 0
+    # Rows that changed but did not move the date: a month-precision value
+    # gaining a day ("2026-03" -> "2026-03-15") is an artefact of anchoring
+    # both sides to the 1st, not a 15-day slip.
+    precision_only: int = 0
+    no_move: int = 0
+    # Counted, never dropped (rule 2). A parse failure that silently
+    # vanished would shrink the denominator and overstate everything else.
+    unreadable: int = 0
+    rows_seen: int
+    biggest: List[DateMove] = []
+    biggest_total: int = 0
+
+
+class StatusMove(TrialRef):
+    old_value: str
+    new_value: str
+    detected_at: datetime
+
+
+class LifecycleFinding(BaseModel):
+    """Status transitions that mean the same thing, counted together."""
+
+    kind: str
+    label: str
+    count: int
+    # Anomalies sort first regardless of count and are flagged for the UI.
+    # COMPLETED -> RECRUITING happened once in the first eight days; a
+    # synthesis that averages away the one surprising row in the record has
+    # failed at the only job it has.
+    anomaly: bool = False
+    trials: List[StatusMove] = []
+
+
+class EnrollmentMove(TrialRef):
+    """A trial's enrollment target meeting reality, or being revised.
+
+    `old_type`/`new_type` are None for a plain count revision — nothing
+    switched, the plan just changed. `count_moved` False means the type
+    switched while the number stayed put: the trial enrolled exactly its
+    target, which is a statement the record makes and not a missing value.
+    """
+
+    old_type: Optional[str] = None
+    new_type: Optional[str] = None
+    count_before: Optional[int] = None
+    count_after: Optional[int] = None
+    count_moved: bool = False
+    # True when the count did not move in this amendment but DID move in a
+    # later one, so today's stored figure cannot honestly be attributed
+    # here. count_before/count_after are None in that case, and the page
+    # must say "the record doesn't say" rather than showing a blank that
+    # reads as zero.
+    later_count_change: bool = False
+    detected_at: datetime
+
+
+class EnrollmentFinding(BaseModel):
+    became_actual: List[EnrollmentMove] = []
+    became_actual_total: int = 0
+    # Of `became_actual_total`, how many enrolled fewer people than planned.
+    under_target: int = 0
+    # ACTUAL -> ESTIMATED: a real headcount reverting to a plan. Backwards,
+    # rare (1 in the first eight days), and surfaced rather than dropped
+    # for not fitting the expected direction.
+    switched_back: List[EnrollmentMove] = []
+    switched_back_total: int = 0
+    target_raised: List[EnrollmentMove] = []
+    target_raised_total: int = 0
+    target_lowered: List[EnrollmentMove] = []
+    target_lowered_total: int = 0
+
+
+class ScopeExit(TrialRef):
+    """A trial that left the watch. Nobody amended it — our filter stopped
+    matching. `reason` is None when the stored data doesn't explain it,
+    which renders as "we can't tell", never as a guess."""
+
+    overall_status: Optional[str] = None
+    reason: Optional[str] = None
+    detected_at: datetime
+
+
+class InvestigateWindow(BaseModel):
+    """The denominators every finding below is measured against."""
+
+    days: int
+    since: datetime
+    until: datetime
+    # When the change record itself begins. A 90-day window over an 8-day
+    # record must not report 82 quiet days nobody was watching.
+    recording_since: Optional[datetime] = None
+    covers_full_window: bool = False
+    condition: Optional[str] = None
+    trials_tracked: int
+    trials_changed: int
+    amendments: int
+    field_changes: int
+
+
+class InvestigateResponse(BaseModel):
+    """Everything Investigate states about the window, in one response —
+    the same shape /watch and /explore take, because these findings are
+    read together and a slip count means something different depending on
+    how many trials changed at all."""
+
+    window: InvestigateWindow
+    dates: List[DateMovement] = []
+    lifecycle: List[LifecycleFinding] = []
+    enrollment: EnrollmentFinding = EnrollmentFinding()
+    # Leads the page. Not because it is the commonest finding — it is the
+    # rarest — but because it is the only one a researcher cannot get from
+    # the registry itself, and the one outside evidence says matters.
+    outcomes: "OutcomeFinding"
+    scope_exits: List[ScopeExit] = []
+    scope_exits_total: int = 0
+
+
+class OutcomeChange(TrialRef):
+    """A change to a trial's registered primary outcome.
+
+    **This is never an accusation, and the wording must stay that way.**
+    Changing a registered endpoint has innocent explanations — a regulator
+    asked, a typo was fixed, wording was standardised — and the record
+    alone cannot say which. CLAUDE.md sec. 2's vocabulary applies exactly
+    as it does to eligibility: what changed, when it changed relative to
+    the trial's own milestones, and that it requires review. No verdict.
+
+    `flags` are facts the record states, listed, not summed. A single
+    confidence number would be the invisible ranking sec. 3 forbids and
+    step 7 was removed for.
+
+    `interpretation` is the stored model reading of the diff (step 7c),
+    present for 5 of the record's outcome changes. **Its absence means
+    three different things** the column cannot separate — the row predates
+    2026-09-03, the model said MEANINGFUL: no, or it was never selected —
+    so absence must never render as "nothing important changed".
+    """
+
+    # The measure names themselves, as the registry wrote them — the
+    # evidence, not a summary of it (sec. 3).
+    measures_added: List[str] = []
+    measures_removed: List[str] = []
+    count_before: int
+    count_after: int
+    # True when the measure names are identical after casefold and
+    # punctuation stripping: the endpoint did not change, its wording did.
+    # NCT03674567 in the live record is exactly this — "Safety and
+    # tolerability" became "Safety and Tolerability" on a trial that has
+    # posted results and is past primary completion, which is the
+    # strongest flag combination available and still not a switch.
+    wording_only: bool = False
+    flags: List[str] = []
+    flag_labels: List[str] = []
+    interpretation: Optional[str] = None
+    detected_at: datetime
+
+
+class OutcomeFinding(BaseModel):
+    """What the window says about registered primary outcomes moving."""
+
+    changes: List[OutcomeChange] = []
+    total: int = 0
+    substantive: int = 0
+    wording_only: int = 0
+    # Substantive changes made after the trial's own primary completion
+    # date — the signal the literature treats as real, because before that
+    # date nobody has seen the endpoint data.
+    after_primary_completion: int = 0
+    unreadable: int = 0
+
+
+InvestigateResponse.model_rebuild()
+
+
+# ============================================================================
+# Investigate — the landscape half (step 9, unit 2b)
+# ============================================================================
+#
+# "What has been done in breast cancer?" is a different question from
+# "what changed this week", and nothing in TrialLens answered it. Explore
+# answers it one trial at a time; Monitor answers it one change at a time.
+# This is the corpus-wide view, sliced by condition.
+
+
+class LandscapeBucket(BaseModel):
+    label: str
+    count: int
+    # Why this bucket cannot be read like its neighbours — "part year so
+    # far", "planned start". A bar chart without these implies a decline
+    # in the current year that is only the calendar.
+    note: Optional[str] = None
+
+
+class LandscapeCategory(BaseModel):
+    """A distribution, with the share the registry never stated kept in it.
+
+    `unstated` is the reason this is a model rather than a dict. 53% of
+    breast-cancer trials report a phase of NA or nothing at all, and a
+    phase chart that quietly drops them describes a different, tidier
+    field than the one that exists (CLAUDE.md sec. 2).
+    """
+
+    buckets: List[LandscapeBucket] = []
+    stated: int = 0
+    unstated: int = 0
+    unstated_label: Optional[str] = None
+
+    @property
+    def total(self) -> int:
+        return self.stated + self.unstated
+
+
+class InterventionUse(BaseModel):
+    name: str
+    type: str
+    trials: int
+
+
+class SponsorActivity(BaseModel):
+    name: str
+    trials: int
+
+
+class LandscapeResponse(BaseModel):
+    """What the tracked corpus looks like for one slice of it.
+
+    Every list carries its own denominator, the same rule Explore's capped
+    lists keep: `interventions_denominator` is the trials that list any
+    intervention at all (4,938 of 5,377 for breast cancer), not the slice
+    size, because a term's reach means nothing against the wrong total.
+    """
+
+    condition: Optional[str] = None
+    trials: int
+    started_per_year: List[LandscapeBucket] = []
+    phases: LandscapeCategory = LandscapeCategory()
+    statuses: LandscapeCategory = LandscapeCategory()
+    enrollment_bands: List[LandscapeBucket] = []
+    enrollment_stated: int = 0
+    interventions: List[InterventionUse] = []
+    interventions_denominator: int = 0
+    sponsors: List[SponsorActivity] = []
+    results_posted: int = 0
