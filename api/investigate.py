@@ -84,6 +84,8 @@ from api.schemas import (
     LandscapeBucket,
     LandscapeCategory,
     LandscapeResponse,
+    LandscapeTrial,
+    LandscapeTrials,
     LifecycleFinding,
     OutcomeFinding,
     SponsorActivity,
@@ -966,9 +968,13 @@ def analyse_outcome_changes(rows, trial_facts=None):
 # Enough to see the shape of a field without turning a chart into a list.
 LANDSCAPE_TERM_CAP = 15
 LANDSCAPE_SPONSOR_CAP = 10
-# Trials before this are a long tail of a few rows a year; the chart says
-# the range it covers rather than implying the field began here.
+# Years before this are a long tail of a few rows each. They are rolled
+# into ONE bucket rather than dropped: cutting them made the first bar look
+# like the beginning of the field, and breast cancer research did not start
+# in 2010 — 153 tracked breast-cancer trials began earlier, the oldest in
+# 1989. Reported 2026-09-04 from real use.
 LANDSCAPE_FIRST_YEAR = 2010
+EARLIER_LABEL = f"Before {LANDSCAPE_FIRST_YEAR}"
 
 _SLICE = """
     EXISTS (SELECT 1 FROM study_conditions sc
@@ -1010,12 +1016,20 @@ def landscape(
             FROM studies s
             WHERE {where} AND s.start_date IS NOT NULL
               AND left(s.start_date, 4) ~ '^[0-9]{{4}}$'
-              AND left(s.start_date, 4)::int >= {LANDSCAPE_FIRST_YEAR}
             GROUP BY 1 ORDER BY 1
         """)
         started_per_year = []
+        earlier = 0
+        earliest_year = None
         for row in year_rows:
             year = int(row["yr"])
+            if year < LANDSCAPE_FIRST_YEAR:
+                # Rolled up, not discarded. The bucket's note names the real
+                # earliest year so the chart cannot imply the field began at
+                # the cut-off.
+                earlier += row["n"]
+                earliest_year = row["yr"] if earliest_year is None else earliest_year
+                continue
             note = None
             if year > this_year:
                 note = "planned start"
@@ -1023,6 +1037,15 @@ def landscape(
                 note = "part year so far"
             started_per_year.append(
                 LandscapeBucket(label=row["yr"], count=row["n"], note=note)
+            )
+        if earlier:
+            started_per_year.insert(
+                0,
+                LandscapeBucket(
+                    label=EARLIER_LABEL,
+                    count=earlier,
+                    note=f"{earlier:,} trials, earliest {earliest_year}",
+                ),
             )
 
         phase_rows = rows(f"""
@@ -1124,4 +1147,74 @@ def landscape(
         interventions_denominator=interventions_denominator,
         sponsors=[SponsorActivity(**r) for r in sponsor_rows],
         results_posted=results_posted,
+    )
+
+
+# How many trials come back behind one landscape bar. Paclitaxel reaches
+# 163 breast-cancer trials and nobody reads past the first screen; the real
+# total travels with the list, so a cap never reads as the whole answer.
+LANDSCAPE_TRIALS_CAP = 50
+
+
+@router.get("/investigate/trials", response_model=LandscapeTrials)
+def landscape_trials(
+    intervention: str = Query(..., description="Canonical intervention term name."),
+    intervention_type: str = Query(
+        ..., description="The term's type (DRUG, DEVICE, BEHAVIORAL, ...). Required: see below."
+    ),
+    condition: Optional[str] = Query(None, description="Restrict to a tracked condition."),
+    conn=Depends(get_readonly_db),
+):
+    """The trials behind one bar of the 'what is being tested' chart.
+
+    Added 2026-09-04: the chart said 163 breast-cancer trials test
+    Paclitaxel and there was no way to ask which ones, which makes the bar
+    a dead end. Reported from real use.
+
+    Matched on the CANONICAL term, so a click on one bar returns the trials
+    filed under every spelling that merged into it (step 8 unit 3) — the
+    same `coalesce(canonical_id, id)` the chart itself counts through.
+
+    **`intervention_type` is required, not optional, because the chart
+    groups by (name, type) and a name alone is not a bar.** "Paclitaxel"
+    exists as a DRUG on 163 breast-cancer trials and as a
+    COMBINATION_PRODUCT on 1; matching the name alone returned 164 for a
+    bar that said 163. A drill-down that disagrees with the chart it came
+    from is worse than no drill-down. Caught before shipping, 2026-09-04.
+    """
+    where = "s.active_in_scope" + (f" AND {_SLICE}" if condition else "")
+    params = {
+        "condition": f"%{condition}%" if condition else None,
+        "intervention": intervention,
+        "intervention_type": intervention_type,
+        "cap": LANDSCAPE_TRIALS_CAP,
+    }
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"""
+            SELECT DISTINCT
+                   s.nct_id, s.brief_title, s.overall_status, s.phase,
+                   s.enrollment_count, s.start_date, s.has_results,
+                   count(*) OVER () AS total
+            FROM studies s
+            JOIN trial_interventions ti ON ti.nct_id = s.nct_id
+            JOIN intervention_terms raw ON raw.id = ti.term_id
+            JOIN intervention_terms canon
+                 ON canon.id = coalesce(raw.canonical_id, raw.id)
+            WHERE {where} AND canon.name = %(intervention)s
+              AND canon.type = %(intervention_type)s
+            ORDER BY s.overall_status, s.nct_id
+            LIMIT %(cap)s
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+
+    return LandscapeTrials(
+        intervention=intervention,
+        condition=condition,
+        trials=[
+            LandscapeTrial(**{k: v for k, v in row.items() if k != "total"}) for row in rows
+        ],
+        total=rows[0]["total"] if rows else 0,
     )

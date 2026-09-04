@@ -263,17 +263,21 @@ else:
         # row count is what the removed ranking layer was good at.
         posted, scientific = recent["results_posted"], recent["scientific"]
         others = scientific - posted
-        lines = []
+        # Clauses without terminal punctuation, joined into ONE sentence.
+        # Two full stops mid-headline read as a stutter — "1 trial published
+        # its results. 10 others changed something scientific." Reported
+        # 2026-09-04 from real use.
+        clauses = []
         if posted:
-            lines.append(
+            clauses.append(
                 f"{posted} trial{'s' if posted != 1 else ''} published "
-                f"{'its' if posted == 1 else 'their'} results."
+                f"{'its' if posted == 1 else 'their'} results"
             )
         if others:
             word = "others" if posted else f"trial{'s' if others != 1 else ''}"
-            lines.append(f"{others} {word} changed something scientific.")
-        if not lines:
-            lines.append("Nothing scientific moved.")
+            clauses.append(f"{others} {word} changed something scientific")
+        headline = ", and ".join(clauses) if clauses else "Nothing scientific moved"
+        lines = [f"{headline}."]
 
         st.markdown(
             f'<div style="font-size:26px;font-weight:700;letter-spacing:-0.01em;'
@@ -359,9 +363,14 @@ else:
             else ""
         )
         offer, action = st.columns([5, 1])
+        # Both halves of this sentence used to say "posted results", so it
+        # read as a circular claim: "751 completed trials have posted
+        # results — out of 1,054 with results published." The real
+        # distinction is status, and it has to be the thing the sentence
+        # says. Reported 2026-09-04 from real use.
         offer.markdown(
-            f"**{completed:,} completed trials have posted results** — out of "
-            f"{watch['trials_with_results']:,} with results published.{invitation}"
+            f"**{watch['trials_with_results']:,} tracked trials have published "
+            f"results** — {completed:,} of them are marked completed.{invitation}"
         )
         if action.button("Browse →", key="browse_results"):
             st.switch_page("pages/1_Discover.py")

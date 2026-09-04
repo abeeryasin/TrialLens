@@ -54,7 +54,8 @@ def _base(df, height):
     )
 
 
-def ranked_bars(rows, label_field, value_field, value_title, color=None, height=None):
+def ranked_bars(rows, label_field, value_field, value_title, color=None,
+                height=None, select_field=None):
     """Horizontal bars, longest first, every bar directly labelled.
 
     The default form for "how many of each" — horizontal because the
@@ -67,6 +68,39 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None, height=
     height = height or max(90, len(df) * (BAR_SIZE + 10))
     order = df[label_field].tolist()
 
+    if select_field:
+        # **Streamlit refuses selections on layered charts** ("Selections
+        # are not yet supported for multi-view charts"), and the value
+        # labels below are a second layer. Rather than lose the numbers to
+        # gain the click, the number moves INTO the category label and the
+        # chart stays a single view. Both, instead of either.
+        df = df.copy()
+        df["_label"] = [
+            f"{name}  ·  {value:,}"
+            for name, value in zip(df[label_field], df[value_field])
+        ]
+        label_order = df["_label"].tolist()
+        return alt.Chart(df).mark_bar(
+            size=BAR_SIZE, cornerRadiusEnd=CORNER
+        ).encode(
+            y=alt.Y("_label:N", sort=label_order, title=None,
+                    axis=alt.Axis(labelColor=INK, labelLimit=300)),
+            x=alt.X(f"{value_field}:Q", title=value_title, axis=alt.Axis(grid=True)),
+            color=alt.value(color or SERIES[0]),
+            tooltip=[c for c in df.columns if c != "_label"],
+        ).add_params(
+            # Named "pick" so the page reads event.selection["pick"]. The
+            # selection carries the ORIGINAL field, not the display label.
+            alt.selection_point(fields=[select_field], name="pick",
+                                on="click", clear="dblclick")
+        ).properties(height=height, background=SURFACE).configure_view(
+            strokeWidth=0
+        ).configure_axis(
+            grid=True, gridColor=GRID, domain=False, tickSize=0,
+            labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11,
+            titleFontSize=11,
+        )
+
     bars = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadiusEnd=CORNER).encode(
         y=alt.Y(f"{label_field}:N", sort=order, title=None,
                 axis=alt.Axis(labelColor=INK, labelLimit=260)),
@@ -74,6 +108,7 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None, height=
         color=alt.value(color or SERIES[0]),
         tooltip=list(df.columns),
     )
+
     labels = alt.Chart(df).mark_text(
         align="left", dx=6, color=INK, fontSize=11
     ).encode(
@@ -205,21 +240,30 @@ def year_bars(rows):
     df = pd.DataFrame(rows)
     if df.empty:
         return None
-    bars = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadiusEnd=CORNER).encode(
-        x=alt.X("year:N", title=None, axis=alt.Axis(labelColor=INK_MUTED, labelAngle=0)),
+    order = df["year"].tolist()
+    # labelAngle=0 collided into "2010201120122013..." at real page width —
+    # eighteen four-digit labels do not fit a 700px axis. Angled, and the
+    # bars widened, so every year stays readable. Reported 2026-09-04.
+    bars = alt.Chart(df).mark_bar(size=BAR_SIZE + 4, cornerRadiusEnd=CORNER).encode(
+        x=alt.X("year:N", title=None, sort=order,
+                axis=alt.Axis(labelColor=INK_MUTED, labelAngle=-45, labelFontSize=10)),
         y=alt.Y("count:Q", title="Trials started"),
         color=alt.Color(
             "kind:N",
             scale=alt.Scale(
-                domain=["Complete year", "Part year so far", "Planned start"],
-                range=[SERIES[0], NEUTRAL, NEUTRAL],
+                domain=["Complete year", "Rolled-up earlier years",
+                        "Part year so far", "Planned start"],
+                range=[SERIES[0], SERIES[2], NEUTRAL, NEUTRAL],
             ),
-            legend=alt.Legend(title=None, orient="top"),
+            legend=alt.Legend(title=None, orient="top", columns=2),
         ),
-        opacity=alt.condition(alt.datum.kind == "Complete year", alt.value(1.0), alt.value(0.55)),
-        tooltip=["year", "count", "kind"],
+        opacity=alt.condition(
+            "datum.kind === 'Complete year' || datum.kind === 'Rolled-up earlier years'",
+            alt.value(1.0), alt.value(0.55),
+        ),
+        tooltip=["year", "count", "kind", "detail"],
     )
-    return bars.properties(height=240, background=SURFACE).configure_view(
+    return bars.properties(height=260, background=SURFACE).configure_view(
         strokeWidth=0
     ).configure_axis(
         grid=True, gridColor=GRID, domain=False, tickSize=0,
@@ -252,4 +296,79 @@ def stacked_split(rows):
     ).configure_axis(
         grid=False, domain=False, tickSize=0,
         labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11,
+    )
+
+
+def ordered_columns(rows, label_field, value_field, value_title, color=None):
+    """A distribution across ordered bands — vertical, left to right.
+
+    Deliberately NOT ranked_bars. Horizontal bars sorted by length read as
+    a league table, so "how big are these trials" rendered that way invited
+    the question "why is 1-49 winning?". Bands have a natural order and the
+    shape of the distribution is the finding, which is what a left-to-right
+    column chart says and a ranking does not. Reported 2026-09-04.
+    """
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return None
+    order = df[label_field].tolist()
+
+    bars = alt.Chart(df).mark_bar(size=42, cornerRadiusEnd=CORNER).encode(
+        x=alt.X(f"{label_field}:N", sort=order, title=value_title,
+                axis=alt.Axis(labelColor=INK, labelAngle=0, labelFontSize=11)),
+        y=alt.Y(f"{value_field}:Q", title="Trials"),
+        color=alt.value(color or SERIES[0]),
+        tooltip=list(df.columns),
+    )
+    labels = alt.Chart(df).mark_text(dy=-8, color=INK, fontSize=11).encode(
+        x=alt.X(f"{label_field}:N", sort=order),
+        y=alt.Y(f"{value_field}:Q"),
+        text=alt.Text(f"{value_field}:Q", format=","),
+    )
+    return (bars + labels).properties(height=260, background=SURFACE).configure_view(
+        strokeWidth=0
+    ).configure_axis(
+        grid=True, gridColor=GRID, domain=False, tickSize=0,
+        labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11, titleFontSize=11,
+    )
+
+
+def lifecycle_bars(rows):
+    """Status movements, anomalies included and coloured as anomalies.
+
+    The first version pulled anomalies OUT of the chart into a banner
+    above it, so the bars silently omitted a category the reader had just
+    been told about and the counts did not add up to anything stated. An
+    anomaly belongs IN the picture, in the reserved status colour, with an
+    icon and a label carrying the meaning so colour is never the only
+    channel. Reported 2026-09-04.
+    """
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return None
+    order = df["movement"].tolist()
+    height = max(120, len(df) * (BAR_SIZE + 16))
+
+    bars = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadiusEnd=CORNER).encode(
+        y=alt.Y("movement:N", sort=order, title=None,
+                axis=alt.Axis(labelColor=INK, labelLimit=320)),
+        x=alt.X("count:Q", title="Trials"),
+        color=alt.Color(
+            "kind:N",
+            scale=alt.Scale(domain=["Ordinary", "Unusual — worth a look"],
+                            range=[SERIES[0], CRITICAL]),
+            legend=alt.Legend(title=None, orient="top"),
+        ),
+        tooltip=["movement", "count", "kind", "examples"],
+    )
+    labels = alt.Chart(df).mark_text(align="left", dx=6, color=INK, fontSize=11).encode(
+        y=alt.Y("movement:N", sort=order),
+        x=alt.X("count:Q"),
+        text=alt.Text("count:Q"),
+    )
+    return (bars + labels).properties(height=height, background=SURFACE).configure_view(
+        strokeWidth=0
+    ).configure_axis(
+        grid=True, gridColor=GRID, domain=False, tickSize=0,
+        labelColor=INK_MUTED, titleColor=INK_MUTED, labelFontSize=11, titleFontSize=11,
     )

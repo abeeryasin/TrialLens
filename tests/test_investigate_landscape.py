@@ -236,11 +236,21 @@ def test_a_named_intervention_matches_an_independent_count(cur, real):
 
 @real_data
 def test_years_are_ordered_and_only_the_current_one_is_partial(real):
-    labels = [b["label"] for b in real["started_per_year"]]
+    """The rollup bucket sorts FIRST and is not a year — it carries the
+    trials that started before the cut-off, so it is excluded from the
+    year ordering rather than parsed as one."""
+    buckets = real["started_per_year"]
+    rollup = [b for b in buckets if b["label"].startswith("Before")]
+    assert len(rollup) <= 1
+    if rollup:
+        assert buckets[0] is buckets[0] and buckets[0]["label"].startswith("Before")
+
+    years = [b for b in buckets if not b["label"].startswith("Before")]
+    labels = [b["label"] for b in years]
     assert labels == sorted(labels)
-    partial = [b for b in real["started_per_year"] if b["note"] == "part year so far"]
+    partial = [b for b in years if b["note"] == "part year so far"]
     assert len(partial) <= 1
-    for bucket in real["started_per_year"]:
+    for bucket in years:
         if int(bucket["label"]) > THIS_YEAR:
             assert bucket["note"] == "planned start"
 
@@ -257,3 +267,123 @@ def test_a_condition_slice_is_smaller_than_the_whole_watch():
     sliced = client.get("/investigate/landscape", params={"condition": "Breast Cancer"}).json()
     assert sliced["trials"] < whole["trials"]
     assert sliced["interventions_denominator"] <= whole["interventions_denominator"]
+
+
+# ============================================================================
+# GET /investigate/trials — the drill-down behind a landscape bar
+# ============================================================================
+
+
+def trial_rows(*rows):
+    return [[{
+        "nct_id": n, "brief_title": t, "overall_status": s, "phase": p,
+        "enrollment_count": e, "start_date": d, "has_results": r, "total": total,
+    } for n, t, s, p, e, d, r, total in rows]]
+
+
+def test_the_drill_down_reports_the_real_total_not_the_page_length(api):
+    """count(*) OVER () runs before LIMIT, so the honest total costs no
+    extra round trip. A list reporting its own length is the step-4 bug."""
+    body = api(trial_rows(
+        ("NCT1", "One", "RECRUITING", "PHASE3", 100, "2020-01-01", False, 163),
+    )).get("/investigate/trials", params={
+        "intervention": "Paclitaxel", "intervention_type": "DRUG"
+    }).json()
+    assert body["total"] == 163
+    assert len(body["trials"]) == 1
+
+
+def test_an_intervention_with_no_trials_is_zero_not_an_error(api):
+    body = api([[]]).get("/investigate/trials", params={
+        "intervention": "Nothing", "intervention_type": "DRUG"
+    }).json()
+    assert body["total"] == 0 and body["trials"] == []
+
+
+@pytest.mark.parametrize("params", [
+    {"intervention": "Paclitaxel"},        # no type
+    {"intervention_type": "DRUG"},          # no name
+    {},
+])
+def test_both_name_and_type_are_required(api, params):
+    """The chart groups by (name, type), so a name alone is not a bar."""
+    assert api([[]]).get("/investigate/trials", params=params).status_code == 422
+
+
+def test_the_type_reaches_the_sql(api):
+    holder = []
+    api([[]], keep=holder).get("/investigate/trials", params={
+        "intervention": "Paclitaxel", "intervention_type": "DRUG"
+    })
+    sql, sent = holder[0].cursor_obj.executed[0]
+    assert "canon.type = %(intervention_type)s" in sql
+    assert sent["intervention_type"] == "DRUG"
+    assert "coalesce(raw.canonical_id, raw.id)" in sql
+
+
+@real_data
+def test_the_drill_down_total_equals_the_bar_it_came_from(real):
+    """The mutation this test exists for.
+
+    Matching the canonical term by NAME alone returned 164 trials for a bar
+    that read 163: "Paclitaxel" is a DRUG on 163 breast-cancer trials and a
+    COMBINATION_PRODUCT on 1. A drill-down that disagrees with the chart it
+    came from is worse than no drill-down. Caught before shipping.
+    """
+    client = TestClient(app)
+    for term in real["interventions"][:3]:
+        found = client.get("/investigate/trials", params={
+            "intervention": term["name"],
+            "intervention_type": term["type"],
+            "condition": "Breast Cancer",
+        })
+        assert found.status_code == 200
+        assert found.json()["total"] == term["trials"], term["name"]
+
+
+@real_data
+def test_every_returned_trial_really_uses_that_intervention(cur, real):
+    top = real["interventions"][0]
+    body = TestClient(app).get("/investigate/trials", params={
+        "intervention": top["name"], "intervention_type": top["type"],
+        "condition": "Breast Cancer",
+    }).json()
+    for trial in body["trials"][:5]:
+        cur.execute(
+            """
+            SELECT count(*) AS n
+            FROM trial_interventions ti
+            JOIN intervention_terms raw ON raw.id = ti.term_id
+            JOIN intervention_terms canon ON canon.id = coalesce(raw.canonical_id, raw.id)
+            WHERE ti.nct_id = %s AND canon.name = %s AND canon.type = %s
+            """,
+            (trial["nct_id"], top["name"], top["type"]),
+        )
+        assert cur.fetchone()["n"] > 0, trial["nct_id"]
+
+
+@real_data
+def test_earlier_years_are_rolled_up_rather_than_cut(cur, real):
+    """153 breast-cancer trials started before 2010, the oldest in 1989.
+    Cutting the axis at 2010 made the first bar look like the start of the
+    field. Reported 2026-09-04."""
+    bucket = next(
+        (b for b in real["started_per_year"] if b["label"].startswith("Before")), None
+    )
+    cur.execute(
+        """
+        SELECT count(*) AS n FROM studies s
+        WHERE s.active_in_scope AND s.start_date IS NOT NULL
+          AND left(s.start_date, 4) ~ '^[0-9]{4}$'
+          AND left(s.start_date, 4)::int < 2010
+          AND EXISTS (SELECT 1 FROM study_conditions sc
+                      WHERE sc.nct_id = s.nct_id AND sc.condition ILIKE %s)
+        """,
+        ("%Breast Cancer%",),
+    )
+    expected = cur.fetchone()["n"]
+    if not expected:
+        pytest.skip("no pre-2010 trials in this slice")
+    assert bucket is not None, "pre-2010 trials exist but no rollup bucket was returned"
+    assert bucket["count"] == expected
+    assert bucket["note"] and "earliest" in bucket["note"]

@@ -10,3 +10,9 @@ pytest
 # HTTP-level tests non-optional — only a real HTTP call exercises request
 # binding and response validation — so their dependency is declared.
 httpx
+
+# Renders an Altair chart to PNG so a chart can be LOOKED AT before
+# shipping, not just reasoned about. Two real chart bugs on 2026-09-04
+# (colliding year labels, a distribution drawn as a ranking) were only
+# visible in the image. Not imported by any test.
+vl-convert-python

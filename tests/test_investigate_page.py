@@ -121,11 +121,18 @@ def render(monkeypatch):
     """Run the page against a stubbed API and return everything it says."""
     import api_client
 
-    def _render(changed=None, field=None, conditions=("Breast Cancer", "Obesity")):
+    def _render(changed=None, field=None, conditions=("Breast Cancer", "Obesity"),
+                recording_since="2026-08-28T12:55:52+00:00", trials=None):
         bodies = {
+            # The page asks /watch FIRST, for how far back the record goes,
+            # so it can refuse to offer a window the record cannot answer.
+            "/watch": {"recording_since": recording_since},
             "/tracked-conditions": list(conditions),
             "/investigate": changed if changed is not None else investigate(),
             "/investigate/landscape": field if field is not None else landscape(),
+            "/investigate/trials": trials if trials is not None else {
+                "intervention": "Paclitaxel", "condition": None, "trials": [], "total": 0,
+            },
         }
 
         def fake_get(path, params=None):
@@ -392,7 +399,7 @@ class TestTheField:
 
     def test_the_enrollment_band_denominator_is_stated(self, render):
         page, _ = render()
-        assert "5,375 of 5,377 state an enrollment figure" in page
+        assert "5,375 of 5,377 state a figure" in page
 
     def test_sponsors_are_lead_only_and_say_so(self, render):
         page, _ = render()
@@ -401,3 +408,124 @@ class TestTheField:
     def test_an_empty_area_says_so(self, render):
         page, _ = render(field=landscape(trials=0))
         assert "Nothing tracked in this area yet" in page
+
+
+# ============================================================================
+# Reported from real use, 2026-09-04
+# ============================================================================
+#
+# Nine things a first real read of this page produced. The ones below are
+# the ones a test can hold; #5 (a status chart appearing to show two bars
+# per status) could not be reproduced from the chart spec at any width and
+# is not asserted here rather than being asserted falsely.
+
+
+class TestWindowIsBoundedByTheRecord:
+    """"How can we show what changed in the last 30 days when we weren't
+    even watching?" The answer was that we cannot, and the selector should
+    never have offered it."""
+
+    def test_no_window_reaches_further_back_than_the_record(self, render):
+        # Record began 2026-08-28; the page must not offer 30 or 90 days.
+        _, app = render()
+        options = app.selectbox[1].options
+        assert not any("30" in o or "90" in o for o in options)
+        assert any(o.startswith("The whole record") for o in options)
+
+    def test_the_record_start_is_stated_before_any_finding(self, render):
+        page, _ = render()
+        assert "started recording changes on" in page
+        assert "2026-08-28" in page
+        assert "no window reaches further back" in page
+
+    def test_a_longer_record_offers_longer_windows(self, render):
+        """The cap follows the data, it is not hardcoded to today's 7 days."""
+        _, app = render(recording_since="2025-01-01T00:00:00+00:00")
+        options = app.selectbox[1].options
+        assert any("30 days" in o for o in options)
+        assert any("90 days" in o for o in options)
+
+    def test_a_missing_record_start_does_not_crash_the_page(self, render):
+        _, app = render(recording_since=None)
+        assert app.selectbox[1].options
+
+
+class TestTheGrowthCurve:
+    """"It's implying that breast cancer trials started in 2010. Is that
+    even true?" It is not — 153 began earlier, the oldest in 1989."""
+
+    def test_earlier_years_are_rolled_up_not_dropped(self, render):
+        page, _ = render(field=landscape(started_per_year=[
+            {"label": "Before 2010", "count": 153, "note": "153 trials, earliest 1989"},
+            {"label": "2025", "count": 899, "note": None},
+        ]))
+        assert "rolls up 153 trials, earliest 1989" in page
+        assert "does not" in page and "imply the field began at the cut-off" in page
+
+    def test_the_chart_says_what_question_it_answers(self, render):
+        page, _ = render()
+        assert "How much of this field is new" in page
+        assert "growth curve of the field" in page
+
+
+class TestClickThrough:
+    """"Can this trial be clickable thru nct id?" The page named trials
+    needing review and gave no way to go read them."""
+
+    def test_a_flagged_trial_offers_a_way_into_it(self, render):
+        _, app = render(investigate(outcomes={
+            "changes": [outcome(nct_id="NCT04276493")], "total": 1, "substantive": 1,
+            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert any(b.key == "open_NCT04276493" for b in app.button)
+
+    def test_opening_a_trial_hands_its_id_to_understand(self, render):
+        _, app = render(investigate(outcomes={
+            "changes": [outcome(nct_id="NCT04276493")], "total": 1, "substantive": 1,
+            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+        }))
+        button = next(b for b in app.button if b.key == "open_NCT04276493")
+        button.click().run()
+        assert app.session_state["selected_nct_id"] == "NCT04276493"
+
+
+class TestInterventionDrillDown:
+    """"If i click on bar of any drug, i will be showed the trials
+    involving that drug?" — now yes, by click or by picker."""
+
+    def test_the_page_says_the_bars_are_clickable(self, render):
+        page, _ = render()
+        assert "Click a bar" in page
+
+    def test_picking_a_drug_lists_its_trials_with_the_real_total(self, render):
+        _, app = render(trials={
+            "intervention": "Paclitaxel", "condition": "Breast Cancer", "total": 163,
+            "trials": [{
+                "nct_id": "NCT00070564", "brief_title": "S0221 Adjuvant",
+                "overall_status": "ACTIVE_NOT_RECRUITING", "phase": "PHASE3",
+                "enrollment_count": 3294, "start_date": "2003-12", "has_results": True,
+            }],
+        })
+        picker = next(s for s in app.selectbox if s.key == "intervention_choice")
+        picker.select("Paclitaxel (Drug)").run()
+        page = "\n".join(
+            v for kind in ("markdown", "caption")
+            for el in getattr(app, kind, [])
+            for v in [getattr(el, "value", None)] if isinstance(v, str)
+        )
+        # The real total, not the length of the capped list.
+        assert "163 tracked trials test Paclitaxel" in page
+        assert "showing the first 1" in page
+
+
+class TestLifecycleChart:
+    """"Where trials moved in their lifecycle — this graph isn't making
+    sense either." It was missing the anomaly it had just warned about."""
+
+    def test_the_chart_explains_what_a_bar_is(self, render):
+        page, _ = render(investigate(lifecycle=[
+            {"kind": "finished", "label": "Finished", "count": 21,
+             "anomaly": False, "trials": []},
+        ]))
+        assert "move a trial made between two registered statuses" in page
+        assert "did not change status is not here at all" in page

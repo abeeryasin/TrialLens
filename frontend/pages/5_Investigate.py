@@ -34,6 +34,8 @@ What this page must keep saying out loud:
     used for eligibility.
   - **Zero is a finding, stated in words.** An empty box reads as a bug.
 """
+from datetime import datetime, timezone
+
 import pandas as pd
 import streamlit as st
 
@@ -54,6 +56,35 @@ try:
 except ApiError:
     tracked_conditions = []
 
+# How far back the change record actually goes. Asked BEFORE the window
+# selector is drawn, because offering "last 90 days" over a 7-day record
+# invites a question the page cannot answer honestly — "how can you show
+# what changed in 30 days when you weren't watching?" was the first thing
+# real use produced (2026-09-04). The options are now bounded by the record.
+try:
+    watch = get("/watch")
+    recording_since = watch.get("recording_since")
+except ApiError:
+    recording_since = None
+
+days_of_record = None
+if recording_since:
+    started = datetime.fromisoformat(recording_since.replace("Z", "+00:00"))
+    days_of_record = max(1, (datetime.now(timezone.utc) - started).days + 1)
+
+if days_of_record:
+    window_options = [d for d in (1, 3, 7, 14, 30, 90) if d < days_of_record]
+    window_options.append(days_of_record)
+else:
+    window_options = [7, 14, 30]
+
+
+def window_label(days):
+    if days_of_record and days == days_of_record:
+        return f"The whole record ({days} days)"
+    return f"Last {days} day{'s' if days != 1 else ''}"
+
+
 controls = st.columns([3, 2])
 with controls[0]:
     condition_choice = st.selectbox(
@@ -61,8 +92,15 @@ with controls[0]:
     )
 with controls[1]:
     window_days = st.selectbox(
-        "Window", [7, 14, 30, 90], index=1,
-        format_func=lambda d: f"Last {d} days",
+        "Window", window_options, index=len(window_options) - 1,
+        format_func=window_label,
+    )
+
+if days_of_record:
+    st.caption(
+        f"TrialLens started recording changes on "
+        f"{recording_since[:10]} — {days_of_record} days ago. Nothing before "
+        "that was watched, so no window reaches further back than this."
     )
 
 condition = None if condition_choice == WHOLE_WATCH else condition_choice
@@ -174,9 +212,17 @@ with changed_tab:
         for change in outcomes["changes"]:
             if change["wording_only"]:
                 continue
-            header = f"**{change['nct_id']}** — {change['brief_title']}"
             with st.container(border=True):
-                st.markdown(header)
+                # The NCT ID was a dead end: the page names the trial that
+                # needs review and gave no way to go read it. Reported
+                # 2026-09-04 from real use. Same session_state + switch_page
+                # mechanism Monitor and Explore already use.
+                head, action = st.columns([6, 1])
+                head.markdown(f"**{change['nct_id']}** — {change['brief_title']}")
+                if action.button("Open →", key=f"open_{change['nct_id']}",
+                                 help="Read this trial in Understand"):
+                    st.session_state["selected_nct_id"] = change["nct_id"]
+                    st.switch_page("pages/2_Understand.py")
                 if change["flags"]:
                     st.markdown(
                         " ".join(f"`{label}`" for label in change["flag_labels"])
@@ -372,13 +418,25 @@ with changed_tab:
                 "with regardless of how few: "
                 + ", ".join(t["nct_id"] for t in finding["trials"])
             )
-        ordinary = [f for f in lifecycle if not f["anomaly"]]
-        chart = charts.ranked_bars(
-            [{"Transition": f["label"], "Trials": f["count"]} for f in ordinary],
-            "Transition", "Trials", "Trials",
-        )
+        # Anomalies stay IN the chart. Pulling them out left the bars
+        # silently missing a category the reader had just been warned
+        # about, so the counts added up to nothing stated — "this graph
+        # isn't making sense" (reported 2026-09-04).
+        chart = charts.lifecycle_bars([{
+            "movement": f["label"],
+            "count": f["count"],
+            "kind": "Unusual — worth a look" if f["anomaly"] else "Ordinary",
+            "examples": ", ".join(
+                f"{t['old_value']} → {t['new_value']}" for t in f["trials"][:3]
+            ) or "—",
+        } for f in lifecycle])
         if chart is not None:
             st.altair_chart(chart, use_container_width=True)
+        st.caption(
+            "Each bar is a move a trial made between two registered statuses "
+            "in this window — hover to see the actual was → now pairs. A trial "
+            "that did not change status is not here at all."
+        )
         with st.expander("Which trials moved"):
             st.dataframe(
                 pd.DataFrame([{
@@ -445,19 +503,35 @@ with field_tab:
         help=f"{land['results_posted']} of {land['trials']} tracked trials",
     )
 
-    st.subheader("When this field's trials started")
-    year_rows = [{
-        "year": b["label"], "count": b["count"],
-        "kind": {"part year so far": "Part year so far",
-                 "planned start": "Planned start"}.get(b["note"], "Complete year"),
-    } for b in land["started_per_year"]]
+    st.subheader("How much of this field is new")
+    # The earlier version cut the axis at 2010 and dropped everything before
+    # it, so the first bar looked like the beginning of the field. It isn't:
+    # 153 tracked breast-cancer trials started before 2010, the oldest in
+    # 1989. Those are now one labelled bucket. Reported 2026-09-04.
+    kinds = {"part year so far": "Part year so far", "planned start": "Planned start"}
+    year_rows = []
+    for b in land["started_per_year"]:
+        kind = kinds.get(b["note"], "Complete year")
+        if b["label"].startswith("Before"):
+            kind = "Rolled-up earlier years"
+        year_rows.append({
+            "year": b["label"], "count": b["count"], "kind": kind,
+            "detail": b["note"] or "a full calendar year",
+        })
     chart = charts.year_bars(year_rows)
     if chart is not None:
         st.altair_chart(chart, use_container_width=True)
+        earlier = next(
+            (b for b in land["started_per_year"] if b["label"].startswith("Before")), None
+        )
         st.caption(
-            "Faded bars are not comparable to the solid ones: the current year "
-            "is not over, and later years are start dates trials have *planned*, "
-            "not history."
+            "How many trials began enrolling each year — the growth curve of "
+            "the field, and whether it is still accelerating. "
+            + (f"The first bar rolls up {earlier['note']}, so the axis does not "
+               "imply the field began at the cut-off. " if earlier else "")
+            + "Faded bars are not comparable to the solid ones: the current "
+            "year is not over, and later years are start dates trials have "
+            "*planned*, not history."
         )
 
     left, right = st.columns(2)
@@ -489,33 +563,97 @@ with field_tab:
             st.altair_chart(chart, use_container_width=True)
 
     st.subheader("What is being tested")
+    intervention_rows = [
+        {"Intervention": f"{i['name']} ({i['type'].title()})", "Trials": i["trials"]}
+        for i in land["interventions"]
+    ]
+    by_label = {row["Intervention"]: term
+                for row, term in zip(intervention_rows, land["interventions"])}
     chart = charts.ranked_bars(
-        [{"Intervention": f"{i['name']} ({i['type'].title()})", "Trials": i["trials"]}
-         for i in land["interventions"]],
-        "Intervention", "Trials", "Trials", color=charts.SERIES[1],
+        intervention_rows, "Intervention", "Trials", "Trials",
+        color=charts.SERIES[1], select_field="Intervention",
     )
+    picked = None
     if chart is not None:
-        st.altair_chart(chart, use_container_width=True)
+        # Click-to-drill. The bar said 163 trials test Paclitaxel and there
+        # was no way to ask which ones, which makes a chart a dead end
+        # (reported 2026-09-04). The selectbox below is not redundancy for
+        # its own sake — chart selection depends on the browser, and the
+        # feature must not be silently dead if a click does not register.
+        event = st.altair_chart(
+            chart, use_container_width=True, on_select="rerun", key="intervention_pick"
+        )
+        selected = (event.selection or {}).get("pick") if event else None
+        if selected:
+            picked = selected[0].get("Intervention")
         st.caption(
             f"Out of **{land['interventions_denominator']:,} trials that list any "
             f"intervention** (of {land['trials']:,} tracked). Spelling variants are "
-            "merged, so one drug is one bar."
+            "merged, so one drug is one bar. **Click a bar** — or pick below — to "
+            "see the trials behind it."
         )
+        choice = st.selectbox(
+            "Show the trials testing", ["—"] + [r["Intervention"] for r in intervention_rows],
+            index=0, key="intervention_choice", label_visibility="collapsed",
+        )
+        if choice != "—":
+            picked = choice
+
+    if picked and picked in by_label:
+        term = by_label[picked]
+        try:
+            # name AND type: the chart groups by both, and matching the name
+            # alone returned 164 trials for a bar reading 163 ("Paclitaxel"
+            # is a DRUG on 163 and a COMBINATION_PRODUCT on 1).
+            found = get("/investigate/trials", params={
+                "intervention": term["name"],
+                "intervention_type": term["type"],
+                **({"condition": condition} if condition else {}),
+            })
+        except ApiError as exc:
+            st.error(f"Couldn't load those trials: {exc}")
+        else:
+            shown = len(found["trials"])
+            st.markdown(
+                f"**{found['total']:,} tracked trial"
+                f"{'s' if found['total'] != 1 else ''} test {term['name']}**"
+                + (f" in {condition}" if condition else "")
+                + (f" — showing the first {shown}." if shown < found["total"] else ".")
+            )
+            st.dataframe(
+                pd.DataFrame([{
+                    "Trial": t["nct_id"],
+                    "Title": t["brief_title"],
+                    "Status": t["overall_status"].replace("_", " ").title(),
+                    "Phase": t["phase"] or "not stated",
+                    "Participants": t["enrollment_count"],
+                    "Started": t["start_date"] or "—",
+                    "Results": "posted" if t["has_results"] else "—",
+                } for t in found["trials"]]),
+                hide_index=True, width="stretch",
+            )
 
     left, right = st.columns(2)
     with left:
-        st.subheader("How big these trials are")
-        chart = charts.ranked_bars(
+        st.subheader("How many participants these trials enrol")
+        # Vertical and left-to-right, not a horizontal ranking. Sorted by
+        # length, this read as a league table and invited "why is 1-49
+        # winning?" — the shape of the distribution is the finding.
+        # Reported 2026-09-04.
+        chart = charts.ordered_columns(
             [{"Participants": b["label"], "Trials": b["count"]}
              for b in land["enrollment_bands"]],
-            "Participants", "Trials", "Trials", color=charts.SERIES[3],
+            "Participants", "Trials", "Participants per trial",
+            color=charts.SERIES[3],
         )
         if chart is not None:
             st.altair_chart(chart, use_container_width=True)
         st.caption(
-            f"{land['enrollment_stated']:,} of {land['trials']:,} state an "
-            "enrollment figure. Bands, not a histogram — enrollment spans single "
-            "digits to five figures, and a linear axis renders the field as one bar."
+            f"How the field's trials are sized: each column is a band, and its "
+            f"height is how many trials enrol that many people. "
+            f"{land['enrollment_stated']:,} of {land['trials']:,} state a figure. "
+            "Bands rather than a histogram — enrollment runs from single digits "
+            "to five figures, and a linear axis renders the whole field as one bar."
         )
 
     with right:

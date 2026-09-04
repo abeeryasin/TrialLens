@@ -151,7 +151,13 @@ class TestTheQuietWeek:
     def test_it_offers_something_to_do(self, render):
         """An absence stated and then left there is still a dead end."""
         page = render(payload())
-        assert "747 completed trials have posted results" in page
+        # Both halves of this sentence used to say "posted results" —
+        # "747 completed trials have posted results — out of 1,050 with
+        # results published" is circular. The distinction it is drawing is
+        # status, so status has to be what it says (reported 2026-09-04).
+        assert "1,050 tracked trials have published results" in page
+        assert "747 of them are marked completed" in page
+        assert "completed trials have posted results" not in page
         assert "A quiet week is when there is time to read them." in page
 
     def test_the_empty_days_are_shown_as_zeros(self, render):
@@ -217,8 +223,12 @@ class TestTheWeekWithNews:
                 last_amendment=amendment(),
             )
         )
-        assert "1 trial published its results." in page
-        assert "13 others changed something scientific." in page
+        # ONE sentence, not two clauses each ending in a full stop. The
+        # earlier "1 trial published its results. 13 others changed
+        # something scientific." read as a stutter in a 26px headline
+        # (reported 2026-09-04 from real use).
+        assert "1 trial published its results, and 13 others changed something scientific." in page
+        assert "results. 13 others" not in page
         assert "Out of 63 amendments across 63 trials in the last 24 hours" in page
         assert "The remaining 49 moved dates, sites, enrolment figures or titles" in page
 
@@ -256,7 +266,13 @@ class TestTheWeekWithNews:
                 last_amendment=amendment(),
             )
         )
-        assert "747 completed trials have posted results" in page
+        # Both halves of this sentence used to say "posted results" —
+        # "747 completed trials have posted results — out of 1,050 with
+        # results published" is circular. The distinction it is drawing is
+        # status, so status has to be what it says (reported 2026-09-04).
+        assert "1,050 tracked trials have published results" in page
+        assert "747 of them are marked completed" in page
+        assert "completed trials have posted results" not in page
         assert "A quiet week is when there is time to read them." not in page
 
 

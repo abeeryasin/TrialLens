@@ -975,3 +975,27 @@ class LandscapeResponse(BaseModel):
     interventions_denominator: int = 0
     sponsors: List[SponsorActivity] = []
     results_posted: int = 0
+
+
+class LandscapeTrial(TrialRef):
+    """One trial behind a landscape bar — what a reader gets for clicking it."""
+
+    overall_status: str
+    phase: Optional[str] = None
+    enrollment_count: Optional[int] = None
+    start_date: Optional[str] = None
+    has_results: Optional[bool] = None
+
+
+class LandscapeTrials(BaseModel):
+    """The trials behind one bar, capped, with its real total.
+
+    Same rule as every other capped list in this project: the total comes
+    from `count(*) OVER ()`, which runs before LIMIT, so the honest number
+    costs no extra round trip and a short list never reads as a complete one.
+    """
+
+    intervention: Optional[str] = None
+    condition: Optional[str] = None
+    trials: List[LandscapeTrial] = []
+    total: int = 0
