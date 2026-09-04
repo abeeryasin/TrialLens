@@ -1,18 +1,21 @@
 # Test-only dependencies. Kept out of requirements.txt so the scheduled
 # Monitor job — which installs that file every 6 hours on GitHub's runners —
 # doesn't pull a test stack it never uses.
+# Pinned alongside requirements.txt on 2026-09-05 — see the header there for
+# why. A dev stack that drifts is a test suite whose result means something
+# different each week, which is the same defect one layer up.
 -r requirements.txt
 
-pytest
+pytest==8.4.2
 
 # Required by fastapi.testclient. Present transitively today (anthropic
 # pulls it in), which is not a promise. CLAUDE.md sec. 7 makes the
 # HTTP-level tests non-optional — only a real HTTP call exercises request
 # binding and response validation — so their dependency is declared.
-httpx
+httpx==0.28.1
 
 # Renders an Altair chart to PNG so a chart can be LOOKED AT before
 # shipping, not just reasoned about. Two real chart bugs on 2026-09-04
 # (colliding year labels, a distribution drawn as a ranking) were only
 # visible in the image. Not imported by any test.
-vl-convert-python
+vl-convert-python==1.9.0.post1

@@ -18,6 +18,7 @@ Also a vehicle for an external engineering course — when the two conflict, cou
 - Never "patient eligibility" — use "potential fit," "potential conflict," "requires review," "insufficient information." The system doesn't know enough about a real person to determine eligibility.
 - No real patient data (PHI) — public, registered study data only.
 - **Never write a live credential into a repo file** — no API keys in code, docs, session notes, or handoff files, even untracked ones. Keys live in `.env.local` (gitignored); repo files get a placeholder name only. A committed key can't be un-committed by rotating it.
+- **Nor into user-visible output.** An error message is output: on 2026-09-05 a misconfigured `API_BASE_URL` put the live database password on a public page, because the message interpolated the raw env var and the raw `requests` exception. Name the host, never the whole address; scrub the raw value out of exception text too (`frontend/api_client.py`).
 - Never invent a study fact, represent an LLM's inference as a source fact, claim a patient is eligible, make a clinical decision, or silently resolve ambiguous eligibility — say so explicitly when evidence is insufficient.
 
 ## 3. Evidence Requirements
@@ -99,6 +100,14 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   and a 2.4 MB design canvas in one session. Stage deliberately.
 - This project's real text runs ~2.61 chars/token, not ~4.0 — re-measure
   any cost estimate rather than trusting an old one.
+- **`requirements.txt` is pinned, and must stay pinned** (with
+  `.python-version`, 3.9.6). It was bare names until 2026-09-05, which let
+  Render's first deploy resolve Python 3.14 + streamlit 1.63 + pandas 3.0
+  while the suite passed on 3.9 + 1.50 + 2.3 — a green suite certifying
+  software nobody was running. Pin the whole closure, not the direct deps:
+  pandas/numpy arrive through streamlit. Classify by resolver
+  (`pip install --dry-run`), never by eye — streamlit requires GitPython,
+  which "obviously dev tooling" got wrong.
 
 **Doesn't travel with a clone**, all gitignored: `.env.local` (DB URLs —
 real-data tests skip cleanly without it), `.ranking_cache/` (orphaned

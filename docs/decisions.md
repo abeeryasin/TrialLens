@@ -3281,3 +3281,97 @@ specifically can't be known until Render assigns the API service's real
 hostname. Deploy itself, the UptimeRobot monitor, and pasting the env vars
 are the user's own dashboard actions — not something this session has
 API/CLI access to do on their behalf.
+
+## 2026-09-05 — First deploy is live, and an error message put a live password on a public page
+
+Both Render services are up: `triallens-api` (FastAPI) and
+`triallens-frontend` (Streamlit), free tier, Oregon. The API was verified
+against the real database from outside the network — `/health`,
+`/tracked-conditions` (`["breast cancer","obesity"]`) and `/watch`
+(11,461 trials, real daily amendment counts) all correct over HTTPS.
+
+**Two false alarms, both worth recording because the diagnosis method
+mattered more than either outcome.**
+
+1. *"The frontend 404s despite Render saying Live."* The distinguishing
+   evidence was a response header, not the status code: a 200 carried
+   `x-render-origin-server: uvicorn` (the app answering) and the 404s
+   carried no such header at all (Render's router answering, with no
+   instance to route to). That separated "app is broken" from "no instance
+   is up right now" without guessing. It resolved on its own — the deploy
+   was still settling — and repeat probes then went 4/4 with a successful
+   WebSocket upgrade (`101 Switching Protocols` on `/_stcore/stream`),
+   which is the thing that actually has to work for Streamlit to render.
+2. *"The backend disappeared from the dashboard."* It was filed under the
+   `My project` group while the frontend was created Ungrouped, because
+   the second creation form has an optional Project field the first one
+   did not surface. Nothing was wrong.
+
+**The real bug: `frontend/api_client.py` leaked a credential into
+user-visible output.** `API_BASE_URL` on the frontend service was set to
+the Postgres connection string instead of the API's URL. `requests` has no
+adapter for `postgresql://`, so it raised — and the old error text
+interpolated *both* `API_BASE_URL` and the raw exception (which carries the
+full request URL), so the live `neondb_owner` password rendered onto a
+publicly reachable page.
+
+The misconfiguration was human and quickly fixed. The defect is this
+project's: **an error message is user-visible output, and user-visible
+output must not carry a credential** (CLAUDE.md sec. 2, which until now had
+been read as being about repo files). Every ingredient was already
+present — the frontend is public by default, env vars are pasted by hand,
+and `requests` puts URLs in exception text — so this was waiting to happen
+rather than unlucky.
+
+Fixed in `api_client.py`, three parts: `_safe_base_url()` reduces the
+address to `scheme://host[:port]`, dropping the userinfo and query where
+secrets live; `_redact()` scrubs the raw value out of exception text, since
+sanitising our own message is not enough when `requests` embeds the URL in
+its; and `_require_http_address()` refuses a non-HTTP address *before* any
+request is attempted, with a message naming the variable to fix. That last
+one converts this exact failure from a confusing leak into a one-line
+instruction.
+
+`tests/test_api_client_redaction.py` holds the line, and was **proven able
+to fail** (sec. 7): reverting `get()` to the pre-fix code failed 3 of its 5
+tests, including the assertion that the password is absent from the
+message. The http-with-userinfo case (`https://user:pass@host`) is covered
+too — credentials in an `http://` URL are still credentials, so the fix
+could not stop at "reject postgres://".
+
+**`requirements.txt` had no version pins — found during this deploy, fixed
+the same day.** One file of bare package names produced **three different
+stacks**: this repo's venv (Python 3.9, streamlit 1.50, pandas 2.3) where
+all 674 tests actually run; GitHub Actions, re-resolving on every scheduled
+run; and Render's first deploy, which resolved **Python 3.14** with
+streamlit 1.63, pandas 3.0 and numpy 2.5. So the suite certified software
+that was not the software running, and — worse than any single wrong
+version — *any rebuild could change production with no commit to point at*,
+which is the hardest class of bug to trace because `git log` shows nothing.
+
+The exposure was not theoretical. pandas 2→3 and numpy 1→2 are major
+releases, and the chart-heavy Investigate/Explore pages are exactly where
+that lands. The `anthropic` SDK matters most: `synthesis_agent.py` and
+`prose_interpreter.py` hand-roll the Messages API tool-use loop against a
+specific response shape, and that is the code that spends real money — a
+silently-upgraded SDK means a paid run that fails after billing.
+
+Fixed by pinning the **full runtime closure** (63 packages), not the seven
+direct ones — pandas and numpy arrive *through* streamlit, so a top-level
+pin would have left the drift untouched. Python itself is pinned in
+`.python-version` (3.9.6, which Render reads; Render supports anything from
+3.7.3 up). `requirements-dev.txt` is pinned too, since a drifting dev stack
+is a suite whose result means something different each week.
+
+**The method mattered more than the diff.** A first pass classified
+GitPython/gitdb/smmap as local git tooling and dropped them —
+`pip install --dry-run` then showed streamlit 1.50 *requires* gitpython, so
+they would have installed anyway but unpinned, quietly preserving the exact
+drift being removed. Classifying dependencies by what they look like is
+guessing; the resolver knows.
+
+Deliberately deferred, and the honest cost of this choice: Python 3.9 is
+past end-of-life, so "deployed == tested" was bought by freezing on an old
+runtime rather than by modernising. The upgrade (3.12+, current libraries,
+re-run the suite, fix what breaks *in front of you*) is real work that
+belongs on a day with room for it, not the evening before a deadline.
