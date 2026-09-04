@@ -39,6 +39,7 @@ from api.amendments import (
     enrollment_context,
     field_aspect,
 )
+from api.conditions import list_tracked_conditions
 from api.database import get_readonly_db
 from api.schemas import AmendedField, WatchAmendment, WatchDay, WatchRecent, WatchStatus
 from api.tracking import TRACKING_FIELDS, field_category
@@ -201,7 +202,7 @@ def watch_status(conn=Depends(get_readonly_db)):
 
     return WatchStatus(
         trials_watched=studies["trials_watched"],
-        conditions=_tracked_conditions(),
+        conditions=_tracked_conditions(conn),
         last_checked_at=studies["last_checked_at"],
         hours_since_check=hours_since_check,
         check_interval_hours=CHECK_INTERVAL_HOURS,
@@ -219,12 +220,8 @@ def watch_status(conn=Depends(get_readonly_db)):
     )
 
 
-def _tracked_conditions() -> List[str]:
-    # Imported here rather than at module scope to avoid a circular import:
-    # api.main imports this router, and the conditions file is read there.
-    from api.main import tracked_conditions
-
-    return tracked_conditions()
+def _tracked_conditions(conn) -> List[str]:
+    return list_tracked_conditions(conn)
 
 
 def _hours_between(then, now) -> Optional[float]:

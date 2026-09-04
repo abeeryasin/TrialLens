@@ -513,3 +513,20 @@ CREATE TABLE IF NOT EXISTS review_queue (
     reviewed_note  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Tracked conditions (step 10, 2026-09-05).
+--
+-- Replaces config/tracked_conditions.json. Adding a condition to watch used
+-- to mean editing a file and redeploying; this table is the real registry
+-- instead, so a researcher can add one through the UI and the next Monitor
+-- run (scripts/run_monitor.py) picks it up without a code change. Seeded
+-- from the file's two real entries by scripts/backfill_tracked_conditions.py,
+-- not by this migration — schema.sql defines structure only elsewhere in
+-- this project, real data population is a separate one-off script.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS tracked_conditions (
+    id         SERIAL PRIMARY KEY,
+    condition  TEXT NOT NULL UNIQUE,
+    added_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

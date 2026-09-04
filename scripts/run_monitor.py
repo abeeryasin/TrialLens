@@ -1,10 +1,16 @@
 """The real Monitor job: run scripts/ingest.py's run_ingest() for every
-condition in config/tracked_conditions.json.
+condition in the tracked_conditions table.
 
 This is what .github/workflows/monitor.yml actually calls on a schedule.
 Tracking a therapeutic area is its own explicit action (see
-docs/decisions.md, 2026-08-26, "Discover vs. Monitor") — this file, not an
-ad-hoc CLI argument, is the real registry of what's being monitored.
+docs/decisions.md, 2026-08-26, "Discover vs. Monitor") — this table, not an
+ad-hoc CLI argument, is the real registry of what's being monitored. Moved
+off config/tracked_conditions.json in step 10 (2026-09-05) so a condition
+can be added through the UI instead of a file edit + redeploy; read directly
+here via the same DATABASE_URL connection this script already opens for its
+own run-record bookkeeping, not over HTTP — consistent with how this script
+already treats its own operational writes (monitor_runs) versus the trial
+data itself, which still goes through FastAPI via run_ingest().
 
 After ingestion, step 7c interprets prose amendments (eligibility_criteria,
 brief_summary, primary_outcomes) in the scheduled job, never in the request
@@ -27,14 +33,13 @@ load_dotenv(ROOT / ".env.local")
 load_dotenv(ROOT / ".env")
 
 from scripts.ingest import run_ingest  # noqa: E402
+from api.conditions import list_tracked_conditions  # noqa: E402
 from api.prose_interpreter import get_prose_amendments, interpret_amendments_batch  # noqa: E402
 from api.cost_budget import (  # noqa: E402
     ROLLING_CEILING_USD as PROSE_ROLLING_CEILING_USD,
     ROLLING_WINDOW_DAYS as PROSE_ROLLING_WINDOW_DAYS,
     rolling_budget_remaining,
 )
-
-CONDITIONS_FILE = ROOT / "config" / "tracked_conditions.json"
 
 # Step 7c budget and limits.
 PROSE_BUDGET_USD = 0.25  # Hard cap for ONE monitor run
@@ -178,9 +183,9 @@ def main():
     # Record this run
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     run_id = create_run_record(conn)
+    conditions = list_tracked_conditions(conn)
     conn.close()
 
-    conditions = json.loads(CONDITIONS_FILE.read_text())
     print(f"Monitor run #{run_id} starting for {len(conditions)} tracked condition(s): {conditions}", flush=True)
 
     # Both figures come from run_ingest itself — the count POST

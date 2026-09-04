@@ -63,7 +63,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **660 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **669 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -72,18 +72,22 @@ copied into three files goes stale in three files.
 one genuinely multi-step judgment in the product ("is this week's movement a
 pattern or a coincidence?"), reading `/investigate` as its tools and filing
 labelled-confidence proposals into `review_queue` for human review. Never a
-verdict, never a summed score (§3). Schema migrated onto the real `dev`
-database, its own weekly `synthesis.yml` cron live. First real run
-(2026-09-04, $0.1099) filed zero proposals — explained, not assumed: real
-monitoring is only ~1 week old, so the agent had nothing yet to call a
-trend, per its own system prompt. Design, build, and that first-run read:
-`docs/decisions.md`, 2026-09-04/05. Steps 10-12 (deployment, ops hardening,
-notifications) untouched.
+verdict, never a summed score (§3). Its own weekly `synthesis.yml` cron
+live. First real run (2026-09-04, $0.1099) filed zero proposals — explained,
+not assumed: real monitoring is only ~1 week old, so the agent had nothing
+yet to call a trend, per its own system prompt. Design, build, and that
+first-run read: `docs/decisions.md`, 2026-09-04/05.
+
+**Step 10 (real deployment) is in progress, started 2026-09-05.** Platform
+is Render (free tier + a free UptimeRobot ping, not a paid always-on tier —
+real budget constraint, see `docs/decisions.md`). The long-flagged Neon
+rename is done (`dev` → `production`), and tracked conditions moved off a
+config file into a real database table with a UI to add one. `render.yaml`
+is written; deploying it and wiring env vars is the user's own dashboard
+work, in progress. Steps 11-12 (ops hardening, notifications) untouched.
 
 Standing gotchas, dated postmortem for each in `docs/decisions.md`:
 
-- The Neon branch named **`dev` is the real live database** (`production`
-  is an empty leftover; `sandbox` rehearses destructive changes).
 - A `JOIN` against `study_conditions` needs **`DISTINCT`** before feeding a
   write — that table is wiped and re-inserted wholesale every batch upsert.
 - **Never `SELECT *` against `studies`** — `raw_json` is 52% of the table.

@@ -28,7 +28,7 @@ from datetime import date
 
 import streamlit as st
 
-from api_client import ApiError, get
+from api_client import ApiError, get, post
 from labels import (
     FIELD_LABELS,
     format_detected_at,
@@ -166,17 +166,47 @@ except ApiError as exc:
 
 conditions = watch["conditions"]
 chips = "".join(tag(c) for c in conditions) if conditions else tag("nothing yet")
-st.markdown(
-    f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
-    f'margin-bottom:20px">'
-    f'<span style="font-size:20px;font-weight:700;letter-spacing:-0.01em;'
-    f'color:{INK}">TrialLens</span>'
-    f'<span style="width:1px;height:14px;background:{RULE}"></span>'
-    f'<span style="font-size:11px;font-weight:600;color:{FAINT};'
-    f'text-transform:uppercase;letter-spacing:0.06em">Watching</span>'
-    f"{chips}</div>",
-    unsafe_allow_html=True,
-)
+header_row, add_control = st.columns([8, 1])
+with header_row:
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
+        f'margin-bottom:20px">'
+        f'<span style="font-size:20px;font-weight:700;letter-spacing:-0.01em;'
+        f'color:{INK}">TrialLens</span>'
+        f'<span style="width:1px;height:14px;background:{RULE}"></span>'
+        f'<span style="font-size:11px;font-weight:600;color:{FAINT};'
+        f'text-transform:uppercase;letter-spacing:0.06em">Watching</span>'
+        f"{chips}</div>",
+        unsafe_allow_html=True,
+    )
+with add_control:
+    # Step 10 (2026-09-05): tracked_conditions moved off a config file into
+    # its own table specifically so this could be a form instead of an edit
+    # + redeploy. A popover keeps it out of the headline's way — this is a
+    # rare action, not something the page should spend visual weight on.
+    with st.popover("+ Add"):
+        new_condition = st.text_input(
+            "Condition", key="new_condition_input",
+            label_visibility="collapsed", placeholder="e.g. melanoma",
+        )
+        if st.button("Track it", key="add_condition_submit"):
+            stripped = new_condition.strip()
+            if not stripped:
+                st.warning("Enter a condition first.")
+            else:
+                try:
+                    post("/tracked-conditions", json_data={"condition": stripped})
+                    st.success(
+                        f"Now tracking ‘{stripped}’. The next Monitor "
+                        "run picks it up — see the schedule in "
+                        "`.github/workflows/monitor.yml`."
+                    )
+                    st.rerun()
+                except ApiError as exc:
+                    if exc.status_code == 409:
+                        st.warning(f"‘{stripped}’ is already tracked.")
+                    else:
+                        st.error(str(exc))
 
 healthy = watch["is_healthy"]
 last_checked = watch["last_checked_at"]

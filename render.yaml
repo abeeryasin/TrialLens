@@ -1,0 +1,44 @@
+# Render Blueprint — step 10 deployment (docs/decisions.md, 2026-09-05).
+#
+# Two persistent services, not one: FastAPI is the only door to the
+# database (CLAUDE.md sec. 5) and Streamlit is a stateful, long-lived
+# WebSocket server — neither fits a serverless platform, which ruled out
+# Vercel (the roadmap's other original candidate). Both stay on Render's
+# free tier; cold starts are mitigated by an external UptimeRobot ping
+# every 5 minutes rather than a paid always-on tier, given real budget
+# constraints.
+#
+# No secret lives in this file (CLAUDE.md sec. 2 — never a live credential
+# in a repo file, even a placeholder). Every `sync: false` var is set once
+# by hand in the Render dashboard after the first deploy.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> point at this repo.
+services:
+  - type: web
+    name: triallens-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_READONLY
+        sync: false
+
+  - type: web
+    name: triallens-frontend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      streamlit run frontend/Home.py
+      --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    envVars:
+      # Set to triallens-api's real Render URL after that service's first
+      # deploy (e.g. https://triallens-api.onrender.com) — not filled in
+      # automatically so this file never has to guess at a hostname Render
+      # only assigns once the service exists.
+      - key: API_BASE_URL
+        sync: false

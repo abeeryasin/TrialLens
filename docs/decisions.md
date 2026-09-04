@@ -3191,3 +3191,93 @@ rather than spent on: next Monday's scheduled run (`synthesis.yml`, real
 cron) will have a full prior week plus this one to compare against, is the
 first run this project didn't have to reason about after the fact, and is
 free to wait for.
+
+## 2026-09-05 — Step 10 starts: hosting platform, cold-start budget, and the Neon rename finally lands
+
+Roadmap's own candidate list for step 10 named "Railway/Vercel." Checked
+rather than assumed: Vercel is a serverless-functions platform, and
+Streamlit is a stateful, long-lived WebSocket server that needs a real
+running container, not a function that spins up per request — ruled out
+before any deploy was attempted, not discovered after one failed.
+
+Real research narrowed it to Render vs. Railway, and the choice took two
+passes because the first one was under-specified:
+
+1. **Render vs. Railway, cost/reliability tradeoff.** Render: free tier is
+   permanent but sleeps after ~15 min idle (30-90s cold start on the next
+   request, worse than a single-service app here — Streamlit's first load
+   calls FastAPI, so a cold Streamlit waking a cold FastAPI can stack to
+   1-2 min). Railway Hobby ($5/mo base, $5 included usage credit): runs
+   24/7 with no sleep by default, billed per-second beyond the credit.
+2. **The real constraint wasn't technical — it's a real budget.** This
+   project has no income behind it; the user is unemployed and named
+   dollars-to-PKR conversion directly as a reason $5-8/mo, though small in
+   absolute terms, is not "trivial money." The fix wasn't picking the
+   cheaper paid tier — it was finding a genuinely free path to the same
+   reliability guarantee: an external UptimeRobot free monitor (5-minute
+   ping interval, personal-use tier, which this project qualifies for)
+   pinging both Render services keeps them from ever sleeping, at $0/mo.
+   **Decided: Render free tier + UptimeRobot**, not Railway.
+
+Why this two-step matters more than the answer: the first framing (pay
+$5-8 vs. pay $14) accepted "always-on costs money" as a given and only
+asked how much. The real fix was outside that frame entirely.
+
+**The Neon branch rename, flagged since 2026-08-29 and deferred twice, was
+done today rather than documented around again.** The branch actually
+serving the live app was named `dev`; the empty leftover was named
+`production`. Renamed: old empty `production` → `production-old-unused`
+first (avoids a name collision), then the real live branch `dev` →
+`production`. Connection strings are endpoint-based, not name-based, so
+nothing else needed to change — verified live, same `DATABASE_URL` still
+connects to the same 11,561-row `studies` table post-rename. `.env.local`'s
+`NEON_BRANCH` (informational only, not read by any code — confirmed by
+grep) updated to `production` to match.
+
+**Tracked conditions moved off `config/tracked_conditions.json` into a
+real `tracked_conditions` table**, the other concrete ask in the step 10
+roadmap row. `db/schema.sql` (table), `api/conditions.py`
+(`list_tracked_conditions(conn)` — a plain function so `api/discover.py`
+and `api/watch.py` can call it with their own already-open connection
+instead of importing a route function outside a request, which is how the
+old JSON-backed version avoided a circular import; `GET`/`POST
+/tracked-conditions`), `scripts/run_monitor.py` (reads the table directly,
+same DATABASE_URL connection it already opens for its own run-record
+bookkeeping — consistent with how that script already splits its own
+writes from the trial-data writes `run_ingest()` sends through FastAPI),
+`scripts/backfill_tracked_conditions.py` (one-off seed, same
+structure-in-schema.sql / data-in-a-script split every other backfill in
+this project follows), a "+ Add" popover on `frontend/Home.py` next to the
+watch chips. `config/tracked_conditions.json` deleted, not left stale.
+
+Verified live, not just by test: applied the schema to the real `dev`→now-
+`production` database, added a real condition over HTTP, confirmed
+`/discover` and `/watch` both picked it up correctly (tracked branch
+returns `source: "tracked"`, no live call; watch's `conditions` list
+included it), then removed the test row. 665→669 tests pass (4 new: the
+popover's render, a successful add, the 409-doesn't-crash case, and the
+blank-input case — via Streamlit's AppTest, `at.text_input(key=...).
+set_value(...)` then `at.button(key=...).click().run()`, the same
+interaction-simulation pattern already used elsewhere in this suite).
+
+Moving `_is_comprehensively_tracked` from a file read to a DB query added
+one query to `GET /discover`'s comprehensively-tracked and incidental-match
+branches — every existing test in `tests/test_discover_endpoint.py` that
+queues a non-empty `local_rows` result had to queue a second result for it
+(the fake DB pops queued results strictly in call order), and
+`tests/test_watch_endpoint.py`'s `results()` helper needed the same
+trailing entry for `_tracked_conditions(conn)`, which fires last in that
+route (called inside the final `WatchStatus(...)` return, after every
+other query in the function). `tests/conftest.py`'s `api` fixture now also
+overrides `get_db`, not just `get_readonly_db`, with the same fake
+connection — the first HTTP-level test in this suite for a write route
+other than `/studies/batch`.
+
+`render.yaml` written: two Render web services (FastAPI, Streamlit), no
+secret in the file (CLAUDE.md sec. 2) — `DATABASE_URL`,
+`DATABASE_URL_READONLY` and `API_BASE_URL` are all `sync: false`, set by
+hand in Render's dashboard after the first deploy, since `API_BASE_URL`
+specifically can't be known until Render assigns the API service's real
+hostname. Deploy itself, the UptimeRobot monitor, and pasting the env vars
+are the user's own dashboard actions — not something this session has
+API/CLI access to do on their behalf.

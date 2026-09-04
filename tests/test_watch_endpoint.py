@@ -84,10 +84,12 @@ def field_row(**overrides):
 
 
 # Query order in api.watch.watch_status: now, studies, monitor_runs, record, daily,
-# recent, then _latest_amendment's head and its fields.
+# recent, then _latest_amendment's head and its fields, then
+# _tracked_conditions(conn) last (it's evaluated inside the WatchStatus(...)
+# return, after everything else in the function has already queried).
 def results(
     studies=None, record=None, daily=None, recent=None, head=None, fields=(),
-    enrollment=None, run="default",
+    enrollment=None, run="default", conditions=("breast cancer", "obesity"),
 ):
     # Use "default" as a sentinel so None can mean "no rows returned"
     if run == "default":
@@ -111,6 +113,7 @@ def results(
         # just after it (see _latest_amendment).
         queued.append(list(fields))
         queued.append([{"count_after": enrollment}])
+    queued.append([[c] for c in conditions])
     return queued
 
 

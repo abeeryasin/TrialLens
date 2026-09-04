@@ -16,7 +16,7 @@ run against the live database.
 import pytest
 from fastapi.testclient import TestClient
 
-from api.database import get_readonly_db
+from api.database import get_db, get_readonly_db
 from api.main import app
 
 
@@ -70,6 +70,10 @@ def api():
         if keep is not None:
             keep.append(fake)
         app.dependency_overrides[get_readonly_db] = lambda: fake
+        # Same fake, same queued-results ordering as get_readonly_db — the
+        # fake ignores SQL either way, so a route using the write connection
+        # (get_db, e.g. POST /tracked-conditions) draws from the same list.
+        app.dependency_overrides[get_db] = lambda: fake
         return TestClient(app)
 
     yield _make

@@ -390,3 +390,63 @@ class TestHonestyAboutItself:
             getattr(e, "value", "") for e in app.main if isinstance(getattr(e, "value", None), str)
         )
         assert "The watch has stopped." not in rendered
+
+
+class TestAddingATrackedCondition:
+    """Step 10 (2026-09-05): the "+ Add" popover next to the watch chips —
+    the researcher-facing side of moving tracked_conditions off a config
+    file. Whether POST /tracked-conditions itself is correct is
+    tests/test_conditions_endpoint.py's job; this covers the page's own
+    reading of a success and of the 409/blank cases it must not crash on."""
+
+    def test_the_control_is_present(self, monkeypatch):
+        import api_client
+
+        monkeypatch.setattr(api_client, "get", lambda path, params=None: payload())
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        assert not app.exception
+        assert app.text_input(key="new_condition_input")
+        assert app.button(key="add_condition_submit")
+
+    def test_adding_a_new_condition_succeeds_and_says_so(self, monkeypatch):
+        import api_client
+
+        monkeypatch.setattr(api_client, "get", lambda path, params=None: payload())
+        monkeypatch.setattr(
+            api_client, "post",
+            lambda path, json_data=None, **kw: {"condition": json_data["condition"]},
+        )
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.text_input(key="new_condition_input").set_value("melanoma")
+        app.button(key="add_condition_submit").click().run()
+        assert not app.exception
+        assert any("Now tracking" in s.value and "melanoma" in s.value for s in app.success)
+
+    def test_an_already_tracked_condition_warns_instead_of_crashing(self, monkeypatch):
+        import api_client
+
+        monkeypatch.setattr(api_client, "get", lambda path, params=None: payload())
+
+        def boom(path, json_data=None, **kw):
+            raise api_client.ApiError(
+                f"API returned 409 for {path}: already tracked", status_code=409
+            )
+
+        monkeypatch.setattr(api_client, "post", boom)
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.text_input(key="new_condition_input").set_value("breast cancer")
+        app.button(key="add_condition_submit").click().run()
+        assert not app.exception
+        assert any("already tracked" in w.value for w in app.warning)
+
+    def test_blank_input_is_rejected_without_calling_the_api(self, monkeypatch):
+        import api_client
+
+        monkeypatch.setattr(api_client, "get", lambda path, params=None: payload())
+        calls = []
+        monkeypatch.setattr(api_client, "post", lambda *a, **kw: calls.append((a, kw)))
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.button(key="add_condition_submit").click().run()
+        assert not app.exception
+        assert calls == []
+        assert any("Enter a condition" in w.value for w in app.warning)

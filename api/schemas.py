@@ -1051,3 +1051,11 @@ class Proposal(BaseModel):
 
 class ProposalList(BaseModel):
     proposals: List[Proposal] = []
+
+
+class AddConditionRequest(BaseModel):
+    condition: str
+
+
+class AddConditionResponse(BaseModel):
+    condition: str

@@ -6,9 +6,9 @@ exist" whether the topic was never fetched or genuinely has none. So this
 route checks our own DB first (exactly the same condition match GET
 /studies uses) and only falls through to a one-time, live ClinicalTrials.gov
 call when that comes back empty. A live result is never written to the
-DB — tracking a topic going forward is its own explicit action
-(config/tracked_conditions.json + the Monitor job), not something a
-read-only ad-hoc question should trigger as a side effect.
+DB — tracking a topic going forward is its own explicit action (the
+tracked_conditions table + the Monitor job), not something a read-only
+ad-hoc question should trigger as a side effect.
 
 Also implements the fix decided 2026-08-28 ("/discover can silently
 under-report an untracked condition"): local rows alone are only proof of
@@ -18,13 +18,12 @@ comorbid-tag row on a trial tracked under "breast cancer" — is real data,
 but not the whole picture, so it gets merged with a live lookup and each
 result is tagged with where it actually came from.
 """
-import json
 from datetime import date
-from pathlib import Path
 
 import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from api.conditions import list_tracked_conditions
 from api.database import get_readonly_db
 from api.schemas import (
     STUDY_DETAIL_COLUMNS,
@@ -37,8 +36,6 @@ from ctgov_client import ACTIVE_STATUSES, extract_fields, fetch_pages, fetch_sin
 
 router = APIRouter(tags=["discover"])
 
-TRACKED_CONDITIONS_PATH = Path(__file__).resolve().parent.parent / "config" / "tracked_conditions.json"
-
 LOCAL_MATCH_SQL = """
     SELECT nct_id, brief_title, overall_status, phase, last_update_post_date
     FROM studies
@@ -48,11 +45,11 @@ LOCAL_MATCH_SQL = """
 """
 
 
-def _is_comprehensively_tracked(condition: str) -> bool:
-    """True only for an exact match against config/tracked_conditions.json.
+def _is_comprehensively_tracked(conn, condition: str) -> bool:
+    """True only for an exact match against the tracked_conditions table.
     A substring hit does NOT count — that's exactly the incidental-match
     case this route has to stay honest about."""
-    tracked = json.loads(TRACKED_CONDITIONS_PATH.read_text())
+    tracked = list_tracked_conditions(conn)
     return condition.strip().lower() in {c.lower() for c in tracked}
 
 
@@ -106,7 +103,7 @@ def discover(
     # Case 2: locally stored, and this condition is one Monitor
     # comprehensively tracks -> the local data really is the complete,
     # current answer. No live call needed.
-    if _is_comprehensively_tracked(condition):
+    if _is_comprehensively_tracked(conn, condition):
         return DiscoverResponse(
             condition=condition,
             total=len(local_rows),

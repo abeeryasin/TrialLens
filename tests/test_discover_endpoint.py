@@ -20,8 +20,15 @@ import pytest
 
 import api.discover as discover_module
 
-TRACKED = "breast cancer"       # in config/tracked_conditions.json
+TRACKED = "breast cancer"       # a real row in the tracked_conditions table
 UNTRACKED = "sarcoidosis"
+
+# Whenever local_rows is non-empty, the route also queries
+# tracked_conditions (_is_comprehensively_tracked) before deciding which
+# branch it's in — every fixture below that queues a non-empty local row
+# must queue this as the next result too, or the fake runs out of queued
+# results at the wrong query.
+TRACKED_CONDITIONS_ROW = [[TRACKED]]
 
 
 def local_row(nct_id="NCT00000001", updated=date(2026, 8, 30)):
@@ -90,7 +97,7 @@ class TestBranchTwoAComprehensivelyTrackedCondition:
         """The whole point of tracking: our own data IS the current answer,
         so a live call would be latency and load for nothing."""
         calls = stub_live([live_study()])
-        body = api([[local_row()]]).get(f"/discover?condition={TRACKED}").json()
+        body = api([[local_row()], TRACKED_CONDITIONS_ROW]).get(f"/discover?condition={TRACKED}").json()
 
         assert calls == [], "a tracked condition must not trigger a live lookup"
         assert body["results"][0]["source"] == "tracked"
@@ -104,7 +111,7 @@ class TestBranchThreeIncidentalLocalRows:
         self, api, stub_live
     ):
         stub_live([live_study()])
-        body = api([[local_row()]]).get(f"/discover?condition={UNTRACKED}").json()
+        body = api([[local_row()], TRACKED_CONDITIONS_ROW]).get(f"/discover?condition={UNTRACKED}").json()
 
         sources = {r["nct_id"]: r["source"] for r in body["results"]}
         assert sources == {"NCT00000001": "tracked", "NCT00000002": "live"}
@@ -116,7 +123,7 @@ class TestBranchThreeIncidentalLocalRows:
         """Stored wins: we hold its history, and showing it twice would
         double-count the result total."""
         stub_live([live_study(nct_id="NCT00000001")])
-        body = api([[local_row(nct_id="NCT00000001")]]).get(
+        body = api([[local_row(nct_id="NCT00000001")], TRACKED_CONDITIONS_ROW]).get(
             f"/discover?condition={UNTRACKED}"
         ).json()
 
@@ -125,7 +132,7 @@ class TestBranchThreeIncidentalLocalRows:
 
     def test_merged_results_are_newest_first(self, api, stub_live):
         stub_live([live_study(nct_id="NEW", updated=date(2026, 9, 1))])
-        body = api([[local_row(nct_id="OLD", updated=date(2020, 1, 1))]]).get(
+        body = api([[local_row(nct_id="OLD", updated=date(2020, 1, 1))], TRACKED_CONDITIONS_ROW]).get(
             f"/discover?condition={UNTRACKED}"
         ).json()
         assert [r["nct_id"] for r in body["results"]] == ["NEW", "OLD"]
@@ -136,7 +143,7 @@ class TestBranchThreeIncidentalLocalRows:
         """Unlike branch 1, there IS something to show — so showing it beats
         a 502. But it must not be presented as the whole picture."""
         stub_live(fail_with=RuntimeError("timeout"))
-        response = api([[local_row()]]).get(f"/discover?condition={UNTRACKED}")
+        response = api([[local_row()], TRACKED_CONDITIONS_ROW]).get(f"/discover?condition={UNTRACKED}")
 
         assert response.status_code == 200
         body = response.json()
@@ -155,7 +162,7 @@ class TestRequestValidation:
     def test_limit_reaches_the_query(self, api, stub_live):
         holder = []
         stub_live([])
-        api([[local_row()]], keep=holder).get(f"/discover?condition={TRACKED}&limit=7")
+        api([[local_row()], TRACKED_CONDITIONS_ROW], keep=holder).get(f"/discover?condition={TRACKED}&limit=7")
         assert any(7 in params for _, params in holder[0].cursor_obj.executed if params)
 
 
@@ -168,10 +175,10 @@ class TestEveryBranchSaysWhichItIs:
         untracked_live = api([[]]).get(f"/discover?condition={UNTRACKED}").json()["note"]
 
         stub_live([live_study()])
-        tracked = api([[local_row()]]).get(f"/discover?condition={TRACKED}").json()["note"]
+        tracked = api([[local_row()], TRACKED_CONDITIONS_ROW]).get(f"/discover?condition={TRACKED}").json()["note"]
 
         stub_live([live_study()])
-        merged = api([[local_row()]]).get(f"/discover?condition={UNTRACKED}").json()["note"]
+        merged = api([[local_row()], TRACKED_CONDITIONS_ROW]).get(f"/discover?condition={UNTRACKED}").json()["note"]
 
         assert len({untracked_live, tracked, merged}) == 3
         assert all(note.strip() for note in (untracked_live, tracked, merged))
