@@ -89,6 +89,7 @@ from api.schemas import (
     LifecycleFinding,
     OutcomeFinding,
     SponsorActivity,
+    StatusTransitionCount,
     ScopeExit,
     StatusMove,
 )
@@ -333,16 +334,30 @@ def analyse_status_moves(rows) -> List[LifecycleFinding]:
         grouped.items(),
         key=lambda item: (item[0][0] not in anomalies, -len(item[1]), item[0][1]),
     )
-    return [
-        LifecycleFinding(
-            kind=key,
-            label=label,
-            count=len(moves),
-            anomaly=key in anomalies,
-            trials=moves[:NAMED_CAP],
+    findings = []
+    for (key, label), moves in ordered:
+        # The literal was -> now counts inside this bucket, commonest
+        # first. Built from every move, not from the capped `trials` list,
+        # so a transition can never be dropped for sorting late.
+        pairs: Dict[Tuple[str, str], int] = defaultdict(int)
+        for move in moves:
+            pairs[(move.old_value, move.new_value)] += 1
+        findings.append(
+            LifecycleFinding(
+                kind=key,
+                label=label,
+                count=len(moves),
+                anomaly=key in anomalies,
+                trials=moves[:NAMED_CAP],
+                transitions=[
+                    StatusTransitionCount(old_value=old, new_value=new, count=n)
+                    for (old, new), n in sorted(
+                        pairs.items(), key=lambda kv: (-kv[1], kv[0])
+                    )
+                ],
+            )
         )
-        for (key, label), moves in ordered
-    ]
+    return findings
 
 
 # ============================================================================

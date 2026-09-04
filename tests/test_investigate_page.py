@@ -349,11 +349,17 @@ class TestLifecycle:
         page, _ = render(investigate(lifecycle=[
             {"kind": "reopened_after_finishing",
              "label": "Reopened after being marked complete", "count": 1,
-             "anomaly": True, "trials": [{"nct_id": "NCT06904365", "brief_title": "T",
-                                          "old_value": "COMPLETED", "new_value": "RECRUITING",
-                                          "detected_at": "2026-09-02T20:10:24Z"}]},
+             "anomaly": True,
+             "transitions": [{"old_value": "COMPLETED", "new_value": "RECRUITING",
+                              "count": 1}],
+             "trials": [{"nct_id": "NCT06904365", "brief_title": "T",
+                         "old_value": "COMPLETED", "new_value": "RECRUITING",
+                         "detected_at": "2026-09-02T20:10:24Z"}]},
             {"kind": "finished", "label": "Finished", "count": 21,
-             "anomaly": False, "trials": []},
+             "anomaly": False,
+             "transitions": [{"old_value": "RECRUITING", "new_value": "COMPLETED",
+                              "count": 21}],
+             "trials": []},
         ]))
         assert "Reopened after being marked complete" in page
         assert "regardless of how few" in page
@@ -524,8 +530,29 @@ class TestLifecycleChart:
 
     def test_the_chart_explains_what_a_bar_is(self, render):
         page, _ = render(investigate(lifecycle=[
-            {"kind": "finished", "label": "Finished", "count": 21,
-             "anomaly": False, "trials": []},
+            {"kind": "finished", "label": "Finished", "count": 21, "anomaly": False,
+             "transitions": [{"old_value": "RECRUITING", "new_value": "COMPLETED",
+                              "count": 21}],
+             "trials": []},
         ]))
-        assert "move a trial made between two registered statuses" in page
+        assert "from what the registry said before to what it says now" in page
         assert "did not change status is not here at all" in page
+
+    def test_every_transition_is_counted_in_the_caption(self, render):
+        """The counts must reconcile with the findings above them. The old
+        chart dropped the anomaly and its total reconciled with nothing."""
+        page, _ = render(investigate(lifecycle=[
+            {"kind": "reopened_after_finishing", "label": "Reopened", "count": 1,
+             "anomaly": True,
+             "transitions": [{"old_value": "COMPLETED", "new_value": "RECRUITING",
+                              "count": 1}],
+             "trials": []},
+            {"kind": "finished", "label": "Finished", "count": 21, "anomaly": False,
+             "transitions": [
+                 {"old_value": "RECRUITING", "new_value": "COMPLETED", "count": 11},
+                 {"old_value": "ACTIVE_NOT_RECRUITING", "new_value": "COMPLETED",
+                  "count": 10},
+             ],
+             "trials": []},
+        ]))
+        assert "22 in total across 3 kinds of move" in page

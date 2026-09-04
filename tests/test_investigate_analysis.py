@@ -634,3 +634,31 @@ def test_no_stored_reading_is_none_not_a_reassuring_sentence():
     selected. None must reach the UI so it can say which it cannot tell."""
     (change,), _ = analyse_outcome_changes([outcome_row(outcomes("A"), outcomes("B"))])
     assert change.interpretation is None
+
+
+def test_a_finding_carries_the_literal_transitions_inside_it():
+    """Bucket names are an abstraction; the chart draws the raw movements.
+    They must be complete — a capped list would silently drop one."""
+    rows = [row("overall_status", "RECRUITING", "COMPLETED", nct_id=f"NCT{i}")
+            for i in range(11)]
+    rows += [row("overall_status", "ACTIVE_NOT_RECRUITING", "COMPLETED",
+                 nct_id=f"NCTB{i}") for i in range(7)]
+    (finding,) = analyse_status_moves(rows)
+
+    assert finding.count == 18
+    assert [(t.old_value, t.new_value, t.count) for t in finding.transitions] == [
+        ("RECRUITING", "COMPLETED", 11),
+        ("ACTIVE_NOT_RECRUITING", "COMPLETED", 7),
+    ]
+    # Every trial is accounted for by the transitions, not just by the total.
+    assert sum(t.count for t in finding.transitions) == finding.count
+
+
+def test_transitions_are_not_capped_by_the_named_trial_list():
+    """`trials` is a reading list capped at 8; `transitions` is the chart's
+    data and must cover all of them."""
+    rows = [row("overall_status", "RECRUITING", "COMPLETED", nct_id=f"NCT{i}")
+            for i in range(30)]
+    (finding,) = analyse_status_moves(rows)
+    assert len(finding.trials) == 8
+    assert sum(t.count for t in finding.transitions) == 30

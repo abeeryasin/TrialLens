@@ -418,24 +418,40 @@ with changed_tab:
                 "with regardless of how few: "
                 + ", ".join(t["nct_id"] for t in finding["trials"])
             )
+        # **Bars are literal transitions now, not bucket names.** Labelling
+        # them "Finished" / "Closed to new participants, still running"
+        # made the reader decode an abstraction before they could see what
+        # happened; "Recruiting → Completed" needs no decoding. Reported
+        # 2026-09-04 ("difficult to understand, and inaccurate" — the
+        # inaccuracy was the axis dropping labels, fixed in charts.py).
+        #
         # Anomalies stay IN the chart. Pulling them out left the bars
-        # silently missing a category the reader had just been warned
-        # about, so the counts added up to nothing stated — "this graph
-        # isn't making sense" (reported 2026-09-04).
-        chart = charts.lifecycle_bars([{
-            "movement": f["label"],
-            "count": f["count"],
-            "kind": "Unusual — worth a look" if f["anomaly"] else "Ordinary",
-            "examples": ", ".join(
-                f"{t['old_value']} → {t['new_value']}" for t in f["trials"][:3]
-            ) or "—",
-        } for f in lifecycle])
+        # silently missing a category the reader had just been warned about.
+        def say(status):
+            return status.replace("_", " ").capitalize()
+
+        movements = [
+            {
+                "movement": f"{say(t['old_value'])}  →  {say(t['new_value'])}",
+                "count": t["count"],
+                "kind": "Unusual — worth a look" if f["anomaly"] else "Ordinary",
+                "examples": f["label"],
+            }
+            for f in lifecycle
+            for t in f["transitions"]
+        ]
+        # Anomalies first, then commonest — the same order the findings use.
+        movements.sort(key=lambda m: (m["kind"] == "Ordinary", -m["count"]))
+        chart = charts.lifecycle_bars(movements)
         if chart is not None:
             st.altair_chart(chart, use_container_width=True)
+        total_moves = sum(m["count"] for m in movements)
         st.caption(
-            "Each bar is a move a trial made between two registered statuses "
-            "in this window — hover to see the actual was → now pairs. A trial "
-            "that did not change status is not here at all."
+            f"Each bar is one status change, from what the registry said "
+            f"before to what it says now — {total_moves} in total across "
+            f"{len(movements)} kind{'s' if len(movements) != 1 else ''} of move. "
+            "Hover for what the move means. A trial that did not change "
+            "status is not here at all."
         )
         with st.expander("Which trials moved"):
             st.dataframe(

@@ -751,12 +751,30 @@ class StatusMove(TrialRef):
     detected_at: datetime
 
 
+class StatusTransitionCount(BaseModel):
+    """One literal was -> now movement, and how many trials made it.
+
+    The registry's own words, not a bucket name. Added 2026-09-04: the
+    chart labelled bars with the semantic grouping ("Finished", "Closed to
+    new participants, still running") and a reader could not tell what had
+    actually happened — "this graph isn't making sense" was the verdict on
+    real use. RECRUITING -> COMPLETED needs no interpreting.
+    """
+
+    old_value: str
+    new_value: str
+    count: int
+
+
 class LifecycleFinding(BaseModel):
     """Status transitions that mean the same thing, counted together."""
 
     kind: str
     label: str
     count: int
+    # The literal movements inside this bucket. NOT capped: these are the
+    # chart's bars now, and a capped list would silently drop a transition.
+    transitions: List[StatusTransitionCount] = []
     # Anomalies sort first regardless of count and are flagged for the UI.
     # COMPLETED -> RECRUITING happened once in the first eight days; a
     # synthesis that averages away the one surprising row in the record has

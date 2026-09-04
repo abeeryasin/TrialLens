@@ -40,6 +40,25 @@ GOOD = "#0ca30c"
 BAR_SIZE = 18
 CORNER = 4
 
+# Every row must keep its own label, and this is not cosmetic.
+#
+# Vega-Lite thins axis labels when it decides they will not fit, and a
+# thinned CATEGORICAL axis does not degrade — it lies. The status chart
+# drew eight bars and kept four labels, so "Terminated" sat against the
+# bar for Enrolling By Invitation and the chart reported 78 terminated
+# breast-cancer trials when the real figure is 237. Reported 2026-09-04
+# from real use, after two earlier attempts to reproduce it at export size
+# failed: the export renders every label, and only Streamlit's own theme
+# tightens the spacing enough to trigger the thinning.
+#
+# labelOverlap=False forces every label to render. The per-row height
+# below is what keeps that from becoming a pile-up.
+LABEL_EVERY_ROW = {"labelOverlap": False}
+
+# Vertical room per row on a horizontal bar chart. 28px was tight enough
+# for the theme to start dropping labels; 34 leaves the margin.
+ROW_HEIGHT = BAR_SIZE + 16
+
 
 def _base(df, height):
     return (
@@ -65,7 +84,7 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None,
     df = pd.DataFrame(rows)
     if df.empty:
         return None
-    height = height or max(90, len(df) * (BAR_SIZE + 10))
+    height = height or max(90, len(df) * ROW_HEIGHT)
     order = df[label_field].tolist()
 
     if select_field:
@@ -84,7 +103,7 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None,
             size=BAR_SIZE, cornerRadiusEnd=CORNER
         ).encode(
             y=alt.Y("_label:N", sort=label_order, title=None,
-                    axis=alt.Axis(labelColor=INK, labelLimit=300)),
+                    axis=alt.Axis(labelColor=INK, labelLimit=300, **LABEL_EVERY_ROW)),
             x=alt.X(f"{value_field}:Q", title=value_title, axis=alt.Axis(grid=True)),
             color=alt.value(color or SERIES[0]),
             tooltip=[c for c in df.columns if c != "_label"],
@@ -103,7 +122,7 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None,
 
     bars = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadiusEnd=CORNER).encode(
         y=alt.Y(f"{label_field}:N", sort=order, title=None,
-                axis=alt.Axis(labelColor=INK, labelLimit=260)),
+                axis=alt.Axis(labelColor=INK, labelLimit=260, **LABEL_EVERY_ROW)),
         x=alt.X(f"{value_field}:Q", title=value_title, axis=alt.Axis(grid=True)),
         color=alt.value(color or SERIES[0]),
         tooltip=list(df.columns),
@@ -112,6 +131,10 @@ def ranked_bars(rows, label_field, value_field, value_title, color=None,
     labels = alt.Chart(df).mark_text(
         align="left", dx=6, color=INK, fontSize=11
     ).encode(
+        # No axis property here at all. Setting axis=None removed the
+        # shared axis outright when Vega-Lite resolved the layers,
+        # leaving a chart with no labels — worse than the thinning it
+        # was meant to fix. Silence lets the bar layer's config govern.
         y=alt.Y(f"{label_field}:N", sort=order),
         x=alt.X(f"{value_field}:Q"),
         text=alt.Text(f"{value_field}:Q", format=","),
@@ -139,7 +162,8 @@ def diverging_dates(rows):
         lambda r: r["count"] if r["direction"] == "Pushed later" else -r["count"], axis=1
     )
     chart = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadius=CORNER).encode(
-        y=alt.Y("field:N", title=None, sort=None, axis=alt.Axis(labelColor=INK, labelLimit=200)),
+        y=alt.Y("field:N", title=None, sort=None,
+                axis=alt.Axis(labelColor=INK, labelLimit=200, **LABEL_EVERY_ROW)),
         x=alt.X("signed:Q", title="← pulled earlier    ·    pushed later →",
                 axis=alt.Axis(format="+d")),
         color=alt.Color(
@@ -195,7 +219,8 @@ def target_vs_actual(rows, threshold=0.85):
     height = max(120, len(df) * (BAR_SIZE + 12))
 
     connector = alt.Chart(df).mark_rule(strokeWidth=2, color="#c8c7c2").encode(
-        y=alt.Y("label:N", sort=order, title=None, axis=alt.Axis(labelColor=INK, labelLimit=240)),
+        y=alt.Y("label:N", sort=order, title=None,
+                axis=alt.Axis(labelColor=INK, labelLimit=240, **LABEL_EVERY_ROW)),
         x=alt.X("target:Q", title="Participants"),
         x2="actual:Q",
     )
@@ -246,7 +271,8 @@ def year_bars(rows):
     # bars widened, so every year stays readable. Reported 2026-09-04.
     bars = alt.Chart(df).mark_bar(size=BAR_SIZE + 4, cornerRadiusEnd=CORNER).encode(
         x=alt.X("year:N", title=None, sort=order,
-                axis=alt.Axis(labelColor=INK_MUTED, labelAngle=-45, labelFontSize=10)),
+                axis=alt.Axis(labelColor=INK_MUTED, labelAngle=-45, labelFontSize=10,
+                              **LABEL_EVERY_ROW)),
         y=alt.Y("count:Q", title="Trials started"),
         color=alt.Color(
             "kind:N",
@@ -315,7 +341,8 @@ def ordered_columns(rows, label_field, value_field, value_title, color=None):
 
     bars = alt.Chart(df).mark_bar(size=42, cornerRadiusEnd=CORNER).encode(
         x=alt.X(f"{label_field}:N", sort=order, title=value_title,
-                axis=alt.Axis(labelColor=INK, labelAngle=0, labelFontSize=11)),
+                axis=alt.Axis(labelColor=INK, labelAngle=0, labelFontSize=11,
+                              **LABEL_EVERY_ROW)),
         y=alt.Y(f"{value_field}:Q", title="Trials"),
         color=alt.value(color or SERIES[0]),
         tooltip=list(df.columns),
@@ -347,11 +374,11 @@ def lifecycle_bars(rows):
     if df.empty:
         return None
     order = df["movement"].tolist()
-    height = max(120, len(df) * (BAR_SIZE + 16))
+    height = max(120, len(df) * ROW_HEIGHT)
 
     bars = alt.Chart(df).mark_bar(size=BAR_SIZE, cornerRadiusEnd=CORNER).encode(
         y=alt.Y("movement:N", sort=order, title=None,
-                axis=alt.Axis(labelColor=INK, labelLimit=320)),
+                axis=alt.Axis(labelColor=INK, labelLimit=320, **LABEL_EVERY_ROW)),
         x=alt.X("count:Q", title="Trials"),
         color=alt.Color(
             "kind:N",
