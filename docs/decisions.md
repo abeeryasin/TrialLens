@@ -3625,3 +3625,74 @@ are on file in total. `docs/verify_ranking_results.md` stays unanswered for
 the ranking layer specifically — that layer is deleted — but the underlying
 question it asked is now answered for Investigate: the output is worth a
 clinician's time, and roughly half of what it surfaces they would act on.
+
+## 2026-09-07 — All twelve substantive outcome flags, judged by a clinician
+
+Extending the four judgments recorded earlier the same day: the user has now
+read and called **every substantive primary-outcome change on file** — 12 of
+12. (Corrected count: 22 changes total, 12 substantive, 10 reformatting-only.
+An earlier entry said "nine remain", which was wrong; the page lists only 8
+of the 12, so four had never been displayed to anyone.)
+
+**Significant — 9:** NCT04276493 (two outcomes merged into one, window
+extended), NCT04570956 (purpose statement replaced by a Ki67 endpoint, 48
+months → 4 weeks), NCT03244722 (5 outcomes → 3, three dropped and one added,
+time frames stretched), NCT05864144 (title annotated "Part C was never
+initiated" — judged significant because *a researcher needs to know a trial
+did not start something it said it would*), NCT05756166 (title corrected to
+match its own description, but observation window narrowed 2 years → 13
+months after results), NCT05838417 (the "reactions to mammography **harms**"
+outcome deleted while the "benefits" half survived), NCT06400472 (drug
+renamed, cycle length 21 → "21 or 28" days, windows 48 → 60 months, and an
+outcome added), NCT05846789 (one word: "tocilizumab" → "tocilizumab
+**biosimilar**"), NCT05868226 (three outcomes gained scope qualifiers
+restricting which arms they apply to).
+
+**Dismissed — 3:** NCT05872620 (entry fleshed out at results posting),
+NCT04315233 (terminology, description equivalent), NCT06803888 ("mean
+percentage weight loss" → "mean percentage **total body** weight loss").
+
+**9 of 12 were worth a researcher's attention.** The flag is not noisy. That
+is the first measured answer to the question `verify_ranking_results.md`
+asked and never got, and it argues against loosening the filter's bias.
+
+**Two judgments corrected the agent's own reading**, which is the point of
+having a clinician do this:
+
+- NCT05756166 — the agent leaned toward dismissing the narrowed window as
+  registry housekeeping, reasoning that a DLT period is protocol-defined and
+  short. The user overruled: narrowing an observation window *after results
+  are known* is concerning on its face, whatever the protocol says.
+- NCT05864144 — the agent read "Part C was never initiated" as a harmless
+  annotation. The user read it as exactly the kind of thing a researcher
+  must know, because it records that a planned arm never happened.
+
+**Three blind spots in how the flag is computed**, all surfaced by these
+readings rather than by tests:
+
+1. **Time frames are ignored.** The comparison uses measure names only, so a
+   trial that kept every endpoint name and halved its observation window
+   would not be flagged at all. A false negative, and the more serious kind:
+   a false positive costs a reviewer seconds, a false negative is never seen.
+2. **Descriptions are ignored**, where the meaning often lives — the reason
+   two dismissals were dismissible is that the old description already said
+   what the new title says.
+3. **The 10 reformatting-only changes are hidden from the page entirely**
+   (`if change["wording_only"]: continue`), counted but not listable. The
+   filter is therefore trusted rather than auditable, and nobody has ever
+   read them.
+
+**Agreed order of work, and why it is not the obvious one.** Time frames
+first, descriptions second. Fixing descriptions first looks appealing — it
+reduces false positives — but would have auto-dismissed NCT05756166, whose
+descriptions are identical on both sides and which the user judged
+significant precisely because of its time frame. A description match may
+only ever de-escalate *when the time frame is also unchanged*, and never as a
+categorical rule (per the user's caveat on NCT04315233: "some changes in
+terminology are significant"). The default bias stays timid.
+
+**Also agreed: stop sending reformatting-only records to the weekly agent.**
+The user's reasoning is cost — the agent pays tokens to read changes the
+system has already decided are not worth attention. Kept as a count rather
+than dropped, so the agent still knows they happened without paying to read
+them, and does not silently inherit a filter that has known blind spots.
