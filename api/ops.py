@@ -173,7 +173,7 @@ def _read_job(cur, spec: JobSpec, now) -> OpsJob:
     # counts over the observation window.
     cur.execute(
         f"""
-        SELECT id, status, error, started_at, completed_at,
+        SELECT id, status, error, skipped_reason, started_at, completed_at,
                {spec.work_column} AS work_done
         FROM {spec.table}
         ORDER BY started_at DESC
@@ -228,6 +228,12 @@ def _read_job(cur, spec: JobSpec, now) -> OpsJob:
         # guard; this one covers rows written before that existed, or by
         # anything else that ever learns to write this column.
         last_error=scrub(last["error"]) if last and last["error"] else None,
+        # Work the run declined to do because the paid-call ceiling was
+        # spent. Distinct from `error` on purpose: nothing broke.
+        last_skipped_reason=(
+            scrub(last["skipped_reason"]) if last and last["skipped_reason"]
+            else None
+        ),
         last_work_done=counts["last_work_done"],
         work_label=spec.work_label,
         consecutive_failures=_failure_streak(recent),
@@ -377,6 +383,28 @@ def build_alerts(jobs: List[OpsJob], budget: OpsBudget,
                 job=job.name,
             ))
 
+        if job.last_skipped_reason:
+            # CRITICAL, where a merely-exhausted budget is only a warning.
+            # The difference is whether the guard is holding or has started
+            # costing something: "no budget left" is the guard working, while
+            # "no budget left AND a real week went unexamined" means the
+            # system has quietly stopped doing what it claims. Only the second
+            # is worth failing a build for.
+            #
+            # Self-clearing by construction — it reads the LATEST run, so the
+            # first run that completes its work without skipping removes it.
+            alerts.append(OpsAlert(
+                code="work_skipped",
+                severity=CRITICAL,
+                title=f"The {job.name} job's last run could not do its work",
+                detail=(
+                    f"{job.last_skipped_reason}. The run itself completed and "
+                    "nothing is broken — but the work did not happen, which "
+                    "from the outside looks exactly like a quiet week."
+                ),
+                job=job.name,
+            ))
+
         if spec.zero_work_is_a_fault and job.last_work_done == 0:
             alerts.append(OpsAlert(
                 code="job_did_nothing",
@@ -411,9 +439,9 @@ def build_alerts(jobs: List[OpsJob], budget: OpsBudget,
             detail=(
                 f"${budget.spent_usd:.4f} of ${budget.ceiling_usd:.2f} used in "
                 f"the last {budget.window_days} days. Paid calls are being "
-                "skipped — the guard is working, but prose interpretation and "
-                "synthesis are off until the window rolls or the ceiling is "
-                "raised deliberately."
+                "skipped — the guard is working. On its own this is not an "
+                "alarm; if it actually costs a run its work, that run records "
+                "why and `work_skipped` escalates it."
             ),
         ))
 

@@ -47,6 +47,7 @@ def job(name="monitor", **overrides):
         "hours_since_completion": 1.5,
         "last_status": "completed",
         "last_error": None,
+        "last_skipped_reason": None,
         "last_work_done": 11416 if name == "monitor" else 0,
         "work_label": "trials checked" if name == "monitor" else "proposals filed",
         "consecutive_failures": 0,
@@ -161,6 +162,28 @@ def test_more_runs_than_slots_is_explained_rather_than_left_odd(monkeypatch):
     """17 of 13 looks like a bug until you know workflow_dispatch exists."""
     at = run(status())
     assert "cannot tell a scheduled run from one started by hand" in text_of(at)
+
+
+def test_a_run_blocked_by_the_budget_says_so_next_to_its_numbers(monkeypatch):
+    """Otherwise the block reads as an ordinary quiet run: completed, no
+    error, zero work — which is exactly what a healthy quiet week looks
+    like."""
+    at = run(status(
+        alerts=[{
+            "code": "work_skipped", "severity": "critical",
+            "title": "The monitor job's last run could not do its work",
+            "detail": "budget: 14 prose amendment(s) not interpreted.",
+            "job": "monitor",
+        }],
+        jobs=[
+            job("monitor", last_skipped_reason="budget: 14 prose amendment(s) not interpreted"),
+            job("synthesis"),
+        ],
+    ))
+    body = text_of(at)
+    assert "did not do its work" in body
+    assert "14 prose amendment" in body
+    assert "need attention" in body
 
 
 def test_the_budget_is_shown_as_a_real_position(monkeypatch):

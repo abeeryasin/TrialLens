@@ -140,7 +140,7 @@ def test_spend_survives_a_failure_after_the_money_is_gone(monkeypatch):
         ),
     )
 
-    spend, error = run_monitor.run_prose_interpretation()
+    spend, error, _skipped = run_monitor.run_prose_interpretation()
     assert spend == pytest.approx(0.42), (
         "spend was lost on the error path — the rolling ceiling would never "
         "see this money"
@@ -171,10 +171,45 @@ def test_nothing_is_called_once_the_ceiling_is_reached(monkeypatch):
         lambda *a, **k: called.append("PAID CALL") or ([], 0.0),
     )
 
-    spend, error = run_monitor.run_prose_interpretation()
+    spend, error, skipped = run_monitor.run_prose_interpretation()
     assert spend == 0.0
-    assert called == [], f"work happened past an exhausted ceiling: {called}"
+    # The invariant is that no PAID call happens, not that nothing happens.
+    # Since 2026-09-07 the refusal path deliberately runs one free SELECT
+    # first, to count the amendments it is giving up — without that, a
+    # budget-blocked run is indistinguishable from a quiet one and the guard
+    # protecting the wallet produces the exact silent-success shape step 11
+    # exists to eliminate.
+    assert "PAID CALL" not in called, f"money spent past the ceiling: {called}"
     # Refusing to spend past the ceiling is the guard working, not a fault:
     # it must not be recorded as an error, or GET /ops/status would report a
     # degraded run every time the budget did its job.
     assert error is None
+    # Nothing was waiting, so nothing was lost, so nothing is escalated.
+    assert skipped is None
+
+
+def test_a_ceiling_that_costs_real_work_says_so(monkeypatch):
+    """The other half of the same branch. An exhausted ceiling with prose
+    amendments actually waiting has taken something away, and the run record
+    has to carry that — it is the difference between a build that passes and
+    one that fails (api/ops.py, work_skipped)."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub/stub")
+    monkeypatch.setattr(run_monitor.psycopg2, "connect", lambda *a, **k: StubConn(0))
+    monkeypatch.setattr(run_monitor, "rolling_budget_remaining", lambda conn: 0.0)
+    monkeypatch.setattr(
+        run_monitor, "get_prose_amendments",
+        lambda conn, hours_ago: [{"id": i} for i in range(14)],
+    )
+    paid = []
+    monkeypatch.setattr(
+        run_monitor, "interpret_amendments_batch",
+        lambda *a, **k: paid.append("PAID CALL") or ([], 0.0),
+    )
+
+    spend, error, skipped = run_monitor.run_prose_interpretation()
+    assert spend == 0.0
+    assert paid == [], "a paid call was made past an exhausted ceiling"
+    assert error is None, "a working guard must not be recorded as a fault"
+    assert skipped and "14" in skipped, (
+        f"the run does not record what the ceiling cost it: {skipped!r}"
+    )

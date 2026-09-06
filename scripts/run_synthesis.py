@@ -59,7 +59,7 @@ def create_run_record(conn):
 
 
 def update_run_record(conn, run_id, proposals_created, spend_usd,
-                      status="completed", error=None):
+                      status="completed", error=None, skipped_reason=None):
     """Close the run record, including why it ended badly if it did.
 
     `error` added in step 11 (2026-09-06). This script already re-raised on
@@ -72,10 +72,12 @@ def update_run_record(conn, run_id, proposals_created, spend_usd,
             """
             UPDATE synthesis_runs
             SET completed_at = now(), status = %s,
-                proposals_created = %s, spend_usd = %s, error = %s
+                proposals_created = %s, spend_usd = %s, error = %s,
+                skipped_reason = %s
             WHERE id = %s
             """,
-            (status, proposals_created, spend_usd, error, run_id),
+            (status, proposals_created, spend_usd, error, skipped_reason,
+             run_id),
         )
     conn.commit()
 
@@ -120,12 +122,24 @@ def main():
             "made. See api/cost_budget.py.",
             flush=True,
         )
-        # Deliberately writes NO `error`. A ceiling that refuses a call is
-        # the guard working, and filing that as an error would make
-        # GET /ops/status report a degraded run every week the budget is
-        # spent — on top of the budget_exhausted alert already saying it. One
-        # fact, one alert; `error` stays reserved for something going wrong.
-        update_run_record(conn, run_id, proposals_created=0, spend_usd=0.0)
+        # Still writes NO `error` — a ceiling that refuses a call is the
+        # guard working, not a fault, and filing it as an error would report
+        # a degraded run every week the guard did its job.
+        #
+        # But it DOES write skipped_reason (2026-09-07). Unlike the monitor,
+        # there is no "nothing to do" case here: the weekly agent always has
+        # a window to read, so a budget skip always means a real week went
+        # unexamined. Without this the run closes as 'completed' with zero
+        # proposals — identical to a week the agent looked at and correctly
+        # found nothing, which is the one reading it must never be confused
+        # with.
+        update_run_record(
+            conn, run_id, proposals_created=0, spend_usd=0.0,
+            skipped_reason=(
+                "budget: the weekly synthesis run made no call — the shared "
+                "30-day ceiling is spent, so this week was never examined"
+            ),
+        )
         conn.close()
         return
 

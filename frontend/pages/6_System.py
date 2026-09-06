@@ -117,6 +117,15 @@ for job in status.get("jobs", []):
             "scheduled run from one started by hand."
         )
 
+    if job.get("last_skipped_reason"):
+        # Stated inside the job's own block as well as in the alert list at
+        # the top. The alert says the system stopped doing its job; this says
+        # which job and what it gave up, next to the numbers that otherwise
+        # look like an ordinary quiet run.
+        st.warning(
+            f"**This run did not do its work.** {job['last_skipped_reason']}."
+        )
+
     if job.get("last_error"):
         with st.expander("The last error this job recorded"):
             st.code(job["last_error"])

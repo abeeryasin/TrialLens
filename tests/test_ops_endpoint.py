@@ -34,6 +34,7 @@ def run_row(**overrides):
         "id": 17,
         "status": "completed",
         "error": None,
+        "skipped_reason": None,
         "started_at": NOW - timedelta(hours=2),
         "completed_at": NOW - timedelta(hours=1, minutes=50),
         "work_done": 11416,
@@ -170,6 +171,7 @@ def job(name="monitor", **overrides):
         "stale_after_hours": 12 if name == "monitor" else 336,
         "hours_since_completion": 1.5,
         "last_status": "completed",
+        "last_skipped_reason": None,
         "last_work_done": 11416 if name == "monitor" else 0,
         "work_label": "trials checked" if name == "monitor" else "proposals filed",
         "consecutive_failures": 0,
@@ -284,6 +286,34 @@ def test_an_exhausted_budget_is_a_warning_not_a_failure():
     assert spent and spent[0].severity == WARNING
 
 
+def test_a_budget_that_actually_cost_a_run_its_work_IS_critical():
+    """The distinction option 3 exists for: "no budget left" is the guard
+    holding; "no budget left and a real week went unexamined" is the system
+    quietly not doing what it claims."""
+    alerts = build_alerts(
+        both_jobs(last_skipped_reason="budget: 14 prose amendment(s) not interpreted"),
+        budget(spent=1.0), ["breast cancer"],
+    )
+    skipped = [a for a in alerts if a.code == "work_skipped"]
+    assert skipped and skipped[0].severity == CRITICAL
+    assert "14 prose amendment" in skipped[0].detail
+
+
+def test_an_exhausted_budget_that_cost_nothing_stays_a_warning():
+    """A ceiling spent during a week with no prose amendments waiting has
+    taken nothing away — there is nothing to escalate."""
+    alerts = build_alerts(both_jobs(), budget(spent=1.0), ["breast cancer"])
+    assert "work_skipped" not in codes(alerts)
+    assert not any(a.severity == CRITICAL for a in alerts)
+
+
+def test_the_skip_alert_clears_itself_on_the_next_good_run():
+    """It reads the LATEST run, so a run that completes its work removes it —
+    no manual acknowledgement, no alert that outlives its cause."""
+    alerts = build_alerts(both_jobs(last_skipped_reason=None), budget(), ["x"])
+    assert "work_skipped" not in codes(alerts)
+
+
 def test_criticals_are_listed_first():
     alerts = build_alerts(
         both_jobs(stuck_runs=1, hours_since_completion=19.4),
@@ -291,6 +321,19 @@ def test_criticals_are_listed_first():
     )
     severities = [a.severity for a in alerts]
     assert severities == sorted(severities, key=lambda s: 0 if s == CRITICAL else 1)
+
+
+def test_a_skipped_run_fails_the_build_where_a_spent_budget_alone_does_not():
+    """End to end through the severity split: the same exhausted budget
+    produces a passing build or a failing one depending on whether it
+    actually cost a run its work."""
+    quiet = build_alerts(both_jobs(), budget(spent=1.0), ["x"])
+    costly = build_alerts(
+        both_jobs(last_skipped_reason="budget: this week was never examined"),
+        budget(spent=1.0), ["x"],
+    )
+    assert not any(a.severity == CRITICAL for a in quiet)
+    assert any(a.severity == CRITICAL for a in costly)
 
 
 def test_alerts_are_a_list_of_named_conditions_never_a_score():

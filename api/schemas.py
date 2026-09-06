@@ -877,6 +877,21 @@ class InvestigateResponse(BaseModel):
     scope_exits_total: int = 0
 
 
+class OutcomeWindowChange(BaseModel):
+    """One outcome's observation window, before and after.
+
+    The measure name is carried so a reader knows WHICH endpoint's window
+    moved on a trial that registers several. Both values are the registry's
+    own free text ("12 months", "Week 39", "up to 2 years") and are shown
+    as written — see OutcomeChange.window_changes for why no direction is
+    computed from them.
+    """
+
+    measure: str
+    before: str
+    after: str
+
+
 class OutcomeChange(TrialRef):
     """A change to a trial's registered primary outcome.
 
@@ -904,12 +919,24 @@ class OutcomeChange(TrialRef):
     measures_removed: List[str] = []
     count_before: int
     count_after: int
+    # Observation windows that moved while the measure name stayed the
+    # same. Added 2026-09-07: `wording_only` was decided on names alone, so
+    # a shortened follow-up was filed as reformatting and hidden. Two real
+    # cases were found this way — NCT05112185 (12 months to 10) and
+    # NCT07654972 (follow-up Week 39 to Week 33).
+    #
+    # Before and after are the registry's own strings, never parsed into a
+    # duration or a direction. "Week 39" -> "Week 33" is obvious to a
+    # reader and a guess to a parser, and inventing "shortened by 6 weeks"
+    # from free text is the kind of derived claim sec. 3 rules out.
+    window_changes: List["OutcomeWindowChange"] = []
     # True when the measure names are identical after casefold and
-    # punctuation stripping: the endpoint did not change, its wording did.
-    # NCT03674567 in the live record is exactly this — "Safety and
-    # tolerability" became "Safety and Tolerability" on a trial that has
-    # posted results and is past primary completion, which is the
-    # strongest flag combination available and still not a switch.
+    # punctuation stripping AND no observation window moved: the endpoint
+    # did not change, its wording did. NCT03674567 in the live record is
+    # exactly this — "Safety and tolerability" became "Safety and
+    # Tolerability" on a trial that has posted results and is past primary
+    # completion, which is the strongest flag combination available and
+    # still not a switch.
     wording_only: bool = False
     flags: List[str] = []
     flag_labels: List[str] = []
@@ -1113,6 +1140,7 @@ class OpsJob(BaseModel):
     hours_since_completion: Optional[float] = None
     last_status: Optional[str] = None
     last_error: Optional[str] = None
+    last_skipped_reason: Optional[str] = None
     last_work_done: Optional[int] = None
     work_label: str
     consecutive_failures: int = 0

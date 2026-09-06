@@ -556,3 +556,27 @@ CREATE TABLE IF NOT EXISTS tracked_conditions (
 -- exactly that path.
 ALTER TABLE monitor_runs ADD COLUMN IF NOT EXISTS error TEXT;
 ALTER TABLE synthesis_runs ADD COLUMN IF NOT EXISTS error TEXT;
+
+-- ---------------------------------------------------------------------------
+-- Step 11 follow-on (2026-09-07): the budget guard's own blind spot.
+--
+-- `error` (above) records a run that broke. This records a run that worked
+-- correctly and *did less than its job* because the shared paid-call ceiling
+-- was already spent. Those are genuinely different states and must not share
+-- a column: an exhausted budget refusing a call is the guard working, and
+-- filing it as an error would report a degraded run every week the guard did
+-- its job.
+--
+-- Why it needs its own column at all. Until now a budget-skipped run was
+-- **indistinguishable from a quiet one** — both close as 'completed' with
+-- zero spend and no error. So the guard that protects the wallet produced
+-- exactly the shape this whole step exists to eliminate: a green run that
+-- quietly did nothing. GET /ops/status can now tell "nothing to do" from
+-- "something to do, and no budget left to do it with", and escalates only
+-- the second.
+--
+-- NULL means nothing was skipped. A monitor run with no prose amendments
+-- waiting writes NULL even when the budget is spent, because nothing was
+-- actually lost.
+ALTER TABLE monitor_runs ADD COLUMN IF NOT EXISTS skipped_reason TEXT;
+ALTER TABLE synthesis_runs ADD COLUMN IF NOT EXISTS skipped_reason TEXT;

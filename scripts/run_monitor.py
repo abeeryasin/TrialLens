@@ -35,6 +35,14 @@ load_dotenv(ROOT / ".env")
 from scripts.ingest import run_ingest  # noqa: E402
 from api.conditions import list_tracked_conditions  # noqa: E402
 from api.safe_errors import describe  # noqa: E402
+from collections import namedtuple  # noqa: E402
+
+# What run_prose_interpretation reports back. Three separate facts that
+# must not be collapsed: money that left the account, something that
+# broke, and work the budget guard refused to do. The third is not the
+# second — a ceiling declining a call is correct behaviour — but it is
+# also not nothing, which is the whole point of recording it.
+ProseOutcome = namedtuple('ProseOutcome', 'spend error skipped_reason')
 from api.prose_interpreter import get_prose_amendments, interpret_amendments_batch  # noqa: E402
 from api.cost_budget import (  # noqa: E402
     ROLLING_CEILING_USD as PROSE_ROLLING_CEILING_USD,
@@ -77,7 +85,8 @@ def create_run_record(conn):
 
 
 def update_run_record(conn, run_id, trials_checked, changes_detected,
-                      prose_spend_usd=0.0, status="completed", error=None):
+                      prose_spend_usd=0.0, status="completed", error=None,
+                      skipped_reason=None):
     """Update a monitor_runs record with results.
 
     `error` is what makes a DEGRADED run visible (step 11, 2026-09-06): the
@@ -94,11 +103,11 @@ def update_run_record(conn, run_id, trials_checked, changes_detected,
             UPDATE monitor_runs
             SET completed_at = now(), status = %s,
                 trials_checked = %s, changes_detected = %s,
-                prose_spend_usd = %s, error = %s
+                prose_spend_usd = %s, error = %s, skipped_reason = %s
             WHERE id = %s
             """,
             (status, trials_checked, changes_detected, prose_spend_usd,
-             error, run_id),
+             error, skipped_reason, run_id),
         )
     conn.commit()
 
@@ -127,25 +136,42 @@ def run_prose_interpretation():
 
         remaining = rolling_budget_remaining(conn)
         if remaining <= 0:
+            # Count what is being given up before returning. This SELECT is
+            # free and makes no paid call, and without it a budget-blocked run
+            # is INDISTINGUISHABLE from a quiet one — both close as
+            # 'completed' with zero spend and no error. That is the guard
+            # protecting the wallet while producing exactly the silent-success
+            # shape step 11 exists to eliminate.
+            blocked = len(get_prose_amendments(conn, hours_ago=6))
             print(
                 f"  SKIPPED: the last {PROSE_ROLLING_WINDOW_DAYS} days already "
                 f"spent the ${PROSE_ROLLING_CEILING_USD:.2f} ceiling. No call "
-                "made. Raise PROSE_ROLLING_CEILING_USD deliberately if this is "
-                "wrong — it is not supposed to be routine.",
+                f"made; {blocked} prose amendment(s) went uninterpreted. Raise "
+                "PROSE_ROLLING_CEILING_USD deliberately if this is wrong — it "
+                "is not supposed to be routine.",
                 flush=True,
             )
             conn.close()
             # Not an error: the ceiling refusing a call is the guard doing
-            # exactly its job. GET /ops/status reports an exhausted budget
-            # from the budget itself, not by mislabelling this run.
-            return 0.0, None
+            # exactly its job. But if there was real work waiting, say so —
+            # "the guard is holding" and "the guard is now costing us
+            # interpretations" are different facts, and only the second is
+            # worth waking someone for. With nothing waiting, nothing was
+            # lost, so nothing is recorded.
+            reason = (
+                f"budget: {blocked} prose amendment(s) not interpreted — the "
+                f"${PROSE_ROLLING_CEILING_USD:.2f}/"
+                f"{PROSE_ROLLING_WINDOW_DAYS}-day ceiling is spent"
+                if blocked else None
+            )
+            return ProseOutcome(0.0, None, reason)
 
         amendments = get_prose_amendments(conn, hours_ago=6)
 
         if not amendments:
             print("  No prose amendments detected in last 6 hours.", flush=True)
             conn.close()
-            return 0.0, None
+            return ProseOutcome(0.0, None, None)
 
         # The tighter of the two caps. Without the min(), a single run could
         # spend its full per-run budget straight through a ceiling that had
@@ -189,7 +215,7 @@ def run_prose_interpretation():
             f"processed, {stored} interpretations stored",
             flush=True,
         )
-        return spend, None
+        return ProseOutcome(spend, None, None)
     except Exception as e:
         # Don't fail the whole monitor job if prose interpretation fails —
         # but DO return whatever was already spent. Returning 0.0 here is how
@@ -201,7 +227,7 @@ def run_prose_interpretation():
         # and an exception is free to quote either.
         detail = describe(e)
         print(f"  ERROR in step 7c after ${spend:.4f} spent: {detail}", flush=True)
-        return spend, detail
+        return ProseOutcome(spend, detail, None)
 
 
 def main():
@@ -226,7 +252,8 @@ def main():
         total_trials_checked += len(result.nct_ids)
         total_changes += result.changes
 
-    total_spend, prose_error = run_prose_interpretation()
+    prose = run_prose_interpretation()
+    total_spend = prose.spend
 
     # Close the run record. Nothing marks it 'failed' on the way out: if this
     # script dies earlier, the row simply stays 'running', /watch keeps
@@ -234,7 +261,8 @@ def main():
     # fires — which is the honest outcome for a run that did not finish.
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     update_run_record(conn, run_id, total_trials_checked, total_changes,
-                      prose_spend_usd=total_spend, error=prose_error)
+                      prose_spend_usd=total_spend, error=prose.error,
+                      skipped_reason=prose.skipped_reason)
     conn.close()
 
     print(f"\nMonitor run #{run_id} complete.", flush=True)
@@ -242,10 +270,12 @@ def main():
     print(f"  Changes detected: {total_changes}", flush=True)
     if total_spend > 0:
         print(f"  Total spend on step 7c: ${total_spend:.4f}", flush=True)
-    if prose_error:
+    if prose.error:
         # Said out loud at the end too. A degraded run is easy to miss when
         # the only sign of it is one line 200 lines up a log.
-        print(f"  DEGRADED — the run finished, but: {prose_error}", flush=True)
+        print(f"  DEGRADED — the run finished, but: {prose.error}", flush=True)
+    if prose.skipped_reason:
+        print(f"  WORK SKIPPED — {prose.skipped_reason}", flush=True)
 
 
 if __name__ == "__main__":
