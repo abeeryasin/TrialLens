@@ -3515,3 +3515,47 @@ No uptime pinging of the deployed Render services (that is UptimeRobot's
 job, step 10's remaining item), no alert history table, no paging. This step
 is about the jobs that write data and spend money, which are the ones whose
 failures are silent.
+
+## 2026-09-06 — Step 10's last item: the uptime monitor that reported a false outage
+
+The keep-warm pings are live (UptimeRobot free tier, 5-minute interval, two
+monitors, $0), closing step 10. The Neon `Default` flag was also moved off
+`production-old-unused`; the live database was verified unaffected —
+`studies` still at 11,561 rows through all three connection strings, and
+the deployed API still reading and writing (409 on a duplicate condition).
+
+**The part worth recording.** The API monitor reported **Down for its entire
+existence** while the service was demonstrably up and answering in 0.4s.
+Not an outage and not a false alarm exactly — a protocol mismatch:
+
+- UptimeRobot's HTTP monitors send **HEAD** by default (cheaper: headers, no
+  body). Keyword monitors send **GET**.
+- FastAPI's `@app.get("/health")` answers GET and returns **405** to HEAD.
+- Any non-2xx reads as down, so the monitor had never once succeeded.
+
+Streamlit's `/_stcore/health` accepts HEAD, so the frontend monitor was fine
+throughout — which is why only one of the two was red, a useful asymmetry
+that pointed at the request method rather than at either service.
+
+Two premium-only fixes were dead ends on the free plan (setting the HTTP
+method to GET; adding 405 to the accepted status codes). The free fix is to
+use a **keyword monitor** instead — it sends GET, and checking that the body
+contains `ok` is a *stronger* check than HEAD anyway: a HEAD monitor only
+proves something answered, while this proves the app answered correctly. An
+empty 200 or a Cloudflare error page would pass the first and fail the
+second.
+
+**The keep-warm still worked the whole time it was reporting down.** A failed
+HEAD request still reaches the container and resets its idle timer, so the
+service never slept — the 0.4s response times prove it. The monitor's
+*reporting* was broken; its actual job was not. Worth separating those two
+before treating a red dashboard as an outage.
+
+**Diagnostic note, general.** The same session localised an earlier
+intermittent 404 by reading a response header rather than the status code:
+200s carried `x-render-origin-server: uvicorn` (the app answering) and 404s
+carried no such header (the platform's router answering, with nothing to
+route to). When a failure could come from any layer, find what identifies
+*which layer produced it* — a header, an error format, a body shape. A
+plain-text `Not Found` body versus FastAPI's JSON `{"detail": "Not Found"}`
+separates a Starlette default from a real route the same way.
