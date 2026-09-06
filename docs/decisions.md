@@ -3375,3 +3375,143 @@ past end-of-life, so "deployed == tested" was bought by freezing on an old
 runtime rather than by modernising. The upgrade (3.12+, current libraries,
 re-run the suite, fix what breaks *in front of you*) is real work that
 belongs on a day with room for it, not the evening before a deadline.
+
+## 2026-09-06 — Step 11: the jobs nobody watches get watched
+
+TrialLens has two unattended processes. The 6-hourly monitor cron ingests,
+diffs, and pays for AI calls; the weekly synthesis agent pays for more and
+files proposals. Between them they hold a database credential, an API key,
+and a budget. Their entire health surface was `GET /watch`'s
+`last_checked_at` — which sees one timestamp from one of the two jobs — and
+GitHub Actions logs, which expire and which nobody reads on a good day.
+
+The gap that mattered is not "a job crashed". A crash is loud: the workflow
+goes red and GitHub emails. **The gap is a job that finishes green while
+doing nothing**, and this project has been in that state twice:
+
+  * step 7c stored zero interpretations for a day while spending $0.168,
+    because a Postgres syntax error was caught by a broad `except`, printed,
+    and dropped (2026-09-03); and
+  * a `LIKE '__%'` cleanup emptied `tracked_conditions` (2026-09-05) — had
+    it gone unnoticed for one cycle, the cron would have run, checked zero
+    trials, and closed a perfectly clean run record.
+
+Neither is visible in a status column that only knows 'completed' and
+'failed'.
+
+### `monitor_runs.error` / `synthesis_runs.error` — the third state
+
+A run can now say **"finished, but part of me broke"**. `status` stays
+'completed' when the ingest genuinely completed; the error sits beside it,
+and `GET /ops/status` names the combination (`run_degraded`) rather than
+folding it into either success or failure. `run_prose_interpretation()`
+returns `(spend, error)` instead of a bare float — the same lesson as
+2026-09-03, one step further: the money surviving the exception was not
+enough, the *reason* has to survive too.
+
+The budget-skip path deliberately writes **no** error. A ceiling refusing a
+call is the guard working, and recording it as an error would report a
+degraded run every week the budget did its job, on top of the
+`budget_exhausted` alert already saying it. One fact, one alert.
+
+### `api/safe_errors.py` — the 2026-09-05 leak's second door
+
+That incident went config → exception text → public page, and was fixed in
+`frontend/api_client.py` for the frontend's own HTTP errors. This step opens
+a different route to the same place: a cron catches an exception, writes it
+to a database column, an endpoint reads it back, and a page prints it — and
+the cron is exactly the process holding `DATABASE_URL` and
+`ANTHROPIC_API_KEY`.
+
+`scrub()` is belt-and-braces on purpose: exact replacement of the secret
+*values* this process holds (cannot be defeated by an unexpected message
+format), plus redaction by *shape* — a `user:password@host` userinfo block,
+an `sk-ant-` key — which is what catches the credential this process did not
+know it had. Truncation last, because an error column is not a log.
+Scrubbed again on the way out of `/ops/status`, for rows written before the
+guard existed.
+
+Mutation-checked, both directions: removing the shape rules kills 3 of the
+12 tests, removing the exact-value replacement kills 1.
+
+### `GET /ops/status` — deterministic, and a list, never a score
+
+Every question here has one correct answer computable from two tables, so
+there is no AI in it (sec. 5). And **the verdict is a list of named
+conditions each carrying its own measurement, never a summed health index**
+(sec. 3) — "two alerts" is not twice as bad as one, and a stale monitor and
+an exhausted budget are different problems with different responses.
+`is_healthy` means "no critical alert", not a threshold on a number.
+
+Severity is split so the alarm keeps meaning something: a stale *monitor* is
+critical (TrialLens's central claim has stopped being true), a stale
+*synthesis agent* is a warning (a missed week of advisory output). Zero
+trials checked is critical; **zero proposals filed is not a fault at all** —
+the first real synthesis run filed zero because it had one week of history,
+and an agent that finds nothing and says so is working (2026-09-05).
+
+Every rule is an incident, not ops boilerplate: `job_did_nothing` and
+`no_tracked_conditions` from the wiped registry, `run_degraded` from step
+7c, `run_stuck` from `run_monitor.py` deliberately leaving a dying run's row
+as 'running', `budget_exhausted` because a guard that silently stops
+guarding looks exactly like a guard with nothing to do.
+
+### The escalation is the workflow going red
+
+`scripts/check_ops_health.py` runs as the last step of `monitor.yml`, reads
+`/ops/status` over HTTP (it holds no database credential of its own), and
+**exits non-zero on a critical alert**. GitHub's own failure notification is
+then the alarm: no email provider, no account, no extra secret, nothing new
+that can itself break. Step 12's Resend digest is a product feature for a
+researcher; wiring an ops alarm through it would have made an outage depend
+on the notification system that outage might have taken down.
+
+Warnings do not fail the job. A red build for something nobody must act on
+today is how red builds stop meaning anything. An unreachable API *is*
+critical — a check that returns "fine, I couldn't check" is a green tick
+attached to no evidence.
+
+### What live data corrected
+
+The endpoint answered on the first call against the real database, and
+immediately corrected an assumption written into a comment ten minutes
+earlier. The expectation was that GitHub's best-effort scheduler skips
+slots, so runs would trail the schedule. The record says the opposite:
+**17 monitor runs against 13 scheduled slots** in the same window, because
+`monitor_runs` cannot tell a `schedule` run from a `workflow_dispatch` one
+and several were dispatched by hand while debugging. `runs_in_window`
+exceeding `expected_runs_in_window` is therefore normal, and the page says
+so rather than leaving a reader to think something is broken.
+
+The denominator itself needed the same honesty the capped lists already
+have: measured from the job's **first run**, not from the window's start.
+The synthesis agent is one week old against a 28-day window, and dividing
+window by cadence reported "1 of 4" — a 75% miss rate invented entirely out
+of history that never existed. `monitor_runs` itself only starts
+2026-09-02.
+
+### A test that was passing for the wrong reason
+
+Adding the error half of the contract immediately caught one:
+`test_nothing_is_called_once_the_ceiling_is_reached` was passing *through*
+the exception path. `StubConn` had no `close()`, so the ceiling-refusal
+branch raised `AttributeError`, the broad `except` swallowed it, and the old
+`== 0.0` assertion accepted the error path's return value as proof the
+refusal worked. The claim happened to hold; the code being exercised was not
+the code under test. Once the function also returns *why* it stopped,
+"returned 0.0" and "returned 0.0 because it crashed" stop looking the same.
+
+### A mutation-testing gotcha, worth remembering
+
+Mutating a file and restoring it inside the same shell command produced a
+run where the restored, correct code appeared to fail — long enough to
+nearly "fix" working code. **Diff the restored file against the backup
+before believing a post-restore result.** The mutation evidence itself was
+sound; the restore was not.
+
+### What is deliberately not here
+
+No uptime pinging of the deployed Render services (that is UptimeRobot's
+job, step 10's remaining item), no alert history table, no paging. This step
+is about the jobs that write data and spend money, which are the ones whose
+failures are silent.

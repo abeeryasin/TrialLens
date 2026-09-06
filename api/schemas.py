@@ -1059,3 +1059,76 @@ class AddConditionRequest(BaseModel):
 
 class AddConditionResponse(BaseModel):
     condition: str
+
+
+class OpsAlert(BaseModel):
+    """One named thing that is wrong, with the evidence for it.
+
+    A list of these is the whole health verdict — there is no score, and
+    nothing is summed (sec. 3, and the step-7 removal). "Two alerts" is not
+    twice as bad as one; a stale monitor and an exhausted budget are
+    different problems with different responses, and adding them together
+    would produce a number that means nothing.
+
+    `detail` states the measurement, not a mood: "last completed run was
+    19.4h ago; the cadence is 6h" rather than "the monitor looks unwell".
+    """
+
+    code: str
+    severity: str  # 'critical' | 'warning'
+    title: str
+    detail: str
+    job: Optional[str] = None
+
+
+class OpsJob(BaseModel):
+    """One unattended job's record — what it did, and when it last did it."""
+
+    name: str
+    cadence_hours: int
+    stale_after_hours: int
+    last_started_at: Optional[datetime] = None
+    last_completed_at: Optional[datetime] = None
+    hours_since_completion: Optional[float] = None
+    last_status: Optional[str] = None
+    last_error: Optional[str] = None
+    last_work_done: Optional[int] = None
+    work_label: str
+    consecutive_failures: int = 0
+    window_hours: int
+    runs_in_window: int = 0
+    expected_runs_in_window: int = 0
+    failed_in_window: int = 0
+    degraded_in_window: int = 0
+    stuck_runs: int = 0
+
+
+class OpsBudget(BaseModel):
+    """The shared paid-call ceiling, as an observable number rather than a
+    guard nobody can see. Both scheduled jobs draw from this one window
+    (api/cost_budget.py), so it is reported once, not per job."""
+
+    window_days: int
+    ceiling_usd: float
+    spent_usd: float
+    remaining_usd: float
+    share_used: float
+
+
+class OpsStatus(BaseModel):
+    """Whether the autonomous half of TrialLens is doing its job.
+
+    Separate from GET /watch on purpose. /watch answers a researcher's
+    question ("is the watch still running, and what moved?") and its health
+    flag is a by-product of that. This answers an operator's ("are the
+    unattended jobs healthy, what did they last do, and what is the money
+    doing?") and covers the weekly synthesis agent, which /watch does not
+    look at at all.
+    """
+
+    checked_at: datetime
+    is_healthy: bool
+    alerts: List[OpsAlert] = []
+    jobs: List[OpsJob] = []
+    budget: OpsBudget
+    tracked_conditions: int = 0

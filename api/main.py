@@ -12,6 +12,7 @@ from api.conditions import router as conditions_router
 from api.discover import router as discover_router
 from api.explore import router as explore_router
 from api.investigate import router as investigate_router
+from api.ops import router as ops_router
 from api.studies import router as studies_router
 from api.synthesis import router as synthesis_router
 from api.watch import router as watch_router
@@ -25,6 +26,7 @@ app.include_router(explore_router)
 app.include_router(investigate_router)
 app.include_router(synthesis_router)
 app.include_router(conditions_router)
+app.include_router(ops_router)
 
 
 @app.get("/health")

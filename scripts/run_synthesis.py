@@ -34,6 +34,7 @@ load_dotenv(ROOT / ".env")
 
 from api.synthesis_agent import run_synthesis  # noqa: E402
 from api.cost_budget import rolling_budget_remaining  # noqa: E402
+from api.safe_errors import describe  # noqa: E402
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 WINDOW_DAYS = 7
@@ -57,16 +58,24 @@ def create_run_record(conn):
     return run_id
 
 
-def update_run_record(conn, run_id, proposals_created, spend_usd, status="completed"):
+def update_run_record(conn, run_id, proposals_created, spend_usd,
+                      status="completed", error=None):
+    """Close the run record, including why it ended badly if it did.
+
+    `error` added in step 11 (2026-09-06). This script already re-raised on
+    failure so GitHub Actions would go red, but a red workflow is a
+    notification, not a record: the run row said 'failed' with no reason, and
+    the log holding the reason expires. GET /ops/status reads this column.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             UPDATE synthesis_runs
             SET completed_at = now(), status = %s,
-                proposals_created = %s, spend_usd = %s
+                proposals_created = %s, spend_usd = %s, error = %s
             WHERE id = %s
             """,
-            (status, proposals_created, spend_usd, run_id),
+            (status, proposals_created, spend_usd, error, run_id),
         )
     conn.commit()
 
@@ -111,6 +120,11 @@ def main():
             "made. See api/cost_budget.py.",
             flush=True,
         )
+        # Deliberately writes NO `error`. A ceiling that refuses a call is
+        # the guard working, and filing that as an error would make
+        # GET /ops/status report a degraded run every week the budget is
+        # spent — on top of the budget_exhausted alert already saying it. One
+        # fact, one alert; `error` stays reserved for something going wrong.
         update_run_record(conn, run_id, proposals_created=0, spend_usd=0.0)
         conn.close()
         return
@@ -140,9 +154,14 @@ def main():
         # already paid for once (docs/decisions.md, 2026-09-03: an except
         # that returned 0.0 made a real failed spend invisible to the
         # ceiling that is supposed to bound it).
-        print(f"  ERROR after ${spend:.4f} spent: {exc}", flush=True)
+        # Scrubbed before storage: this row is read back out through
+        # GET /ops/status and printed on a page, and this process holds both
+        # a database URL and an API key (api/safe_errors.py).
+        detail = describe(exc)
+        print(f"  ERROR after ${spend:.4f} spent: {detail}", flush=True)
         update_run_record(
-            conn, run_id, proposals_created=0, spend_usd=spend, status="failed"
+            conn, run_id, proposals_created=0, spend_usd=spend, status="failed",
+            error=detail,
         )
         conn.close()
         raise

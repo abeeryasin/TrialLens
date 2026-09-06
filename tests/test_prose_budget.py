@@ -43,6 +43,22 @@ class StubConn:
     def cursor(self):
         return self.cur
 
+    def close(self):
+        """Present so the ceiling-refusal path can run to its end.
+
+        Without it, `run_prose_interpretation` raised AttributeError on
+        `conn.close()`, the broad except swallowed it, and the old
+        `== 0.0` assertion below accepted the error path's return value as
+        proof the refusal worked. The claim held for the wrong reason. Found
+        2026-09-06 by step 11's error contract: once the function also
+        returns *why* it stopped, "returned 0.0" and "returned 0.0 because
+        it crashed" stop looking the same.
+
+        Deliberately NOT given a commit() —
+        test_spend_survives_a_failure_after_the_money_is_gone needs a real
+        failure after money is spent, and that is how it gets one.
+        """
+
 
 def remaining_after(spent):
     return run_monitor.rolling_budget_remaining(StubConn(spent))
@@ -124,10 +140,18 @@ def test_spend_survives_a_failure_after_the_money_is_gone(monkeypatch):
         ),
     )
 
-    spend = run_monitor.run_prose_interpretation()
+    spend, error = run_monitor.run_prose_interpretation()
     assert spend == pytest.approx(0.42), (
         "spend was lost on the error path — the rolling ceiling would never "
         "see this money"
+    )
+    # Step 11 (2026-09-06): the reason has to survive too, not just the
+    # money. A run that pays for interpretations and then fails to store them
+    # closed as a clean 'completed' for a whole day in step 7c, with the
+    # explanation only in an expiring Actions log.
+    assert error, "the failure left no record on the run"
+    assert "AttributeError" in error or "commit" in error, (
+        f"the recorded reason does not describe what happened: {error!r}"
     )
 
 
@@ -147,5 +171,10 @@ def test_nothing_is_called_once_the_ceiling_is_reached(monkeypatch):
         lambda *a, **k: called.append("PAID CALL") or ([], 0.0),
     )
 
-    assert run_monitor.run_prose_interpretation() == 0.0
+    spend, error = run_monitor.run_prose_interpretation()
+    assert spend == 0.0
     assert called == [], f"work happened past an exhausted ceiling: {called}"
+    # Refusing to spend past the ceiling is the guard working, not a fault:
+    # it must not be recorded as an error, or GET /ops/status would report a
+    # degraded run every time the budget did its job.
+    assert error is None

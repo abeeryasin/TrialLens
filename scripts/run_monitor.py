@@ -34,6 +34,7 @@ load_dotenv(ROOT / ".env")
 
 from scripts.ingest import run_ingest  # noqa: E402
 from api.conditions import list_tracked_conditions  # noqa: E402
+from api.safe_errors import describe  # noqa: E402
 from api.prose_interpreter import get_prose_amendments, interpret_amendments_batch  # noqa: E402
 from api.cost_budget import (  # noqa: E402
     ROLLING_CEILING_USD as PROSE_ROLLING_CEILING_USD,
@@ -76,18 +77,28 @@ def create_run_record(conn):
 
 
 def update_run_record(conn, run_id, trials_checked, changes_detected,
-                      prose_spend_usd=0.0, status="completed"):
-    """Update a monitor_runs record with results."""
+                      prose_spend_usd=0.0, status="completed", error=None):
+    """Update a monitor_runs record with results.
+
+    `error` is what makes a DEGRADED run visible (step 11, 2026-09-06): the
+    ingest can succeed while step 7c fails inside its own except clause, and
+    until this column existed that run closed as a clean 'completed' with the
+    reason only in a GitHub Actions log that expires. Status still says
+    'completed', because the ingest genuinely did complete — the error sits
+    beside it, and GET /ops/status names the combination as its own state
+    rather than folding it into either success or failure.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             UPDATE monitor_runs
             SET completed_at = now(), status = %s,
                 trials_checked = %s, changes_detected = %s,
-                prose_spend_usd = %s
+                prose_spend_usd = %s, error = %s
             WHERE id = %s
             """,
-            (status, trials_checked, changes_detected, prose_spend_usd, run_id),
+            (status, trials_checked, changes_detected, prose_spend_usd,
+             error, run_id),
         )
     conn.commit()
 
@@ -98,6 +109,12 @@ def run_prose_interpretation():
     Runs in the scheduled job only, never in request path.
     Respects both cost and call limits to prevent runaway spend.
     Stores interpretations in study_changes.prose_interpretation (JSONB).
+
+    Returns (spend, error): the money that actually left the account, and a
+    scrubbed description of whatever was caught, or None. Both halves are
+    written to the run record. Returning only the spend is what let step 7c
+    run broken for a day — the money was accounted for, the reason it bought
+    nothing was printed and thrown away.
     """
     print("\nStep 7c: Interpreting prose amendments...", flush=True)
     # Declared OUTSIDE the try on purpose. The except below used to return a
@@ -118,14 +135,17 @@ def run_prose_interpretation():
                 flush=True,
             )
             conn.close()
-            return 0.0
+            # Not an error: the ceiling refusing a call is the guard doing
+            # exactly its job. GET /ops/status reports an exhausted budget
+            # from the budget itself, not by mislabelling this run.
+            return 0.0, None
 
         amendments = get_prose_amendments(conn, hours_ago=6)
 
         if not amendments:
             print("  No prose amendments detected in last 6 hours.", flush=True)
             conn.close()
-            return 0.0
+            return 0.0, None
 
         # The tighter of the two caps. Without the min(), a single run could
         # spend its full per-run budget straight through a ceiling that had
@@ -169,14 +189,19 @@ def run_prose_interpretation():
             f"processed, {stored} interpretations stored",
             flush=True,
         )
-        return spend
+        return spend, None
     except Exception as e:
         # Don't fail the whole monitor job if prose interpretation fails —
         # but DO return whatever was already spent. Returning 0.0 here is how
         # a guard silently stops guarding: the money leaves the account and
         # the rolling window never learns about it.
-        print(f"  ERROR in step 7c after ${spend:.4f} spent: {e}", flush=True)
-        return spend
+        # describe() scrubs before this reaches a database column that an
+        # endpoint reads back onto a page (api/safe_errors.py). The
+        # environment this runs in holds DATABASE_URL and ANTHROPIC_API_KEY,
+        # and an exception is free to quote either.
+        detail = describe(e)
+        print(f"  ERROR in step 7c after ${spend:.4f} spent: {detail}", flush=True)
+        return spend, detail
 
 
 def main():
@@ -201,7 +226,7 @@ def main():
         total_trials_checked += len(result.nct_ids)
         total_changes += result.changes
 
-    total_spend = run_prose_interpretation()
+    total_spend, prose_error = run_prose_interpretation()
 
     # Close the run record. Nothing marks it 'failed' on the way out: if this
     # script dies earlier, the row simply stays 'running', /watch keeps
@@ -209,7 +234,7 @@ def main():
     # fires — which is the honest outcome for a run that did not finish.
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     update_run_record(conn, run_id, total_trials_checked, total_changes,
-                      prose_spend_usd=total_spend)
+                      prose_spend_usd=total_spend, error=prose_error)
     conn.close()
 
     print(f"\nMonitor run #{run_id} complete.", flush=True)
@@ -217,6 +242,10 @@ def main():
     print(f"  Changes detected: {total_changes}", flush=True)
     if total_spend > 0:
         print(f"  Total spend on step 7c: ${total_spend:.4f}", flush=True)
+    if prose_error:
+        # Said out loud at the end too. A degraded run is easy to miss when
+        # the only sign of it is one line 200 lines up a log.
+        print(f"  DEGRADED — the run finished, but: {prose_error}", flush=True)
 
 
 if __name__ == "__main__":

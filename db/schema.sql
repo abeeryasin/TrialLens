@@ -530,3 +530,29 @@ CREATE TABLE IF NOT EXISTS tracked_conditions (
     condition  TEXT NOT NULL UNIQUE,
     added_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ---------------------------------------------------------------------------
+-- Step 11 (autonomous-ops hardening, 2026-09-06).
+--
+-- A run could already say it succeeded or failed. It could not say
+-- "finished, but part of me broke" — and that is the state this project has
+-- actually been in twice. run_monitor.run_prose_interpretation() catches
+-- every exception on purpose (a failed AI call must not cost the ingest its
+-- run record), so a monitor run whose step 7c died still closed as
+-- 'completed' with the reason printed only into a GitHub Actions log that
+-- expires. That is how step 7c spent $0.168 for a day while storing zero
+-- rows: the Postgres syntax error was caught, printed, and never recorded
+-- anywhere a query could find it.
+--
+-- `error` is that record. NULL means nothing was caught. A row with
+-- status='completed' AND error IS NOT NULL is a DEGRADED run, which
+-- GET /ops/status names as its own condition rather than folding into
+-- either 'completed' or 'failed'.
+--
+-- The text is scrubbed before it is written (api/safe_errors.py). An
+-- exception message can carry a connection string or a key, this column is
+-- read back out through the API onto a page, and CLAUDE.md sec. 2 says an
+-- error message is user-visible output — the 2026-09-05 leak came through
+-- exactly that path.
+ALTER TABLE monitor_runs ADD COLUMN IF NOT EXISTS error TEXT;
+ALTER TABLE synthesis_runs ADD COLUMN IF NOT EXISTS error TEXT;

@@ -125,6 +125,22 @@ jobs:
           pip install -r requirements-dev.txt
           pytest tests/ -q -rs
 
+      # Escalation (step 11, 2026-09-06). Everything above can pass while
+      # the system is quietly not working: an emptied tracked_conditions
+      # table produces a green run that checks zero trials, and a step 7c
+      # failure is caught by design and only printed. This step reads
+      # GET /ops/status and FAILS THE JOB on a critical alert, so GitHub's
+      # own failure notification becomes the alarm — no email provider, no
+      # extra secret, no new thing that can itself break.
+      #
+      # `if: always()` because a failed ingest is exactly when the health
+      # verdict matters. Warnings do not fail it (scripts/check_ops_health.py).
+      - name: Check autonomous-ops health, and escalate if it is bad
+        if: always()
+        env:
+          API_BASE_URL: http://127.0.0.1:8000
+        run: python scripts/check_ops_health.py
+
       - name: Show API log on failure
         if: failure()
         run: cat api.log

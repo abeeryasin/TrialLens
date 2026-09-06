@@ -64,7 +64,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **669 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **728 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -87,8 +87,24 @@ page, not just by curl. The long-flagged Neon rename is done (`dev` →
 `production`), tracked conditions moved off a config file into a database
 table with a UI to add one, and the dependency stack is pinned so deployed
 equals tested. Remaining: the UptimeRobot keep-warm ping, and Neon's
-`Default` flag still points at `production-old-unused`. Steps 11-12 (ops
-hardening, notifications) untouched.
+`Default` flag still points at `production-old-unused`. Step 12
+(notifications) untouched.
+
+**Step 11 (autonomous-ops hardening) is done, 2026-09-06.** The two
+unattended jobs — the 6-hourly monitor cron and the weekly synthesis agent —
+now have a health surface, an honest run record, and an escalation that
+fires without a human looking. The gap was never "a job crashed" (that is
+loud); it was **a job that finishes green while doing nothing**, which this
+project has been in twice. `GET /ops/status` (deterministic per §5, a list
+of named alerts each carrying its measurement, never a summed score per §3),
+`monitor_runs.error` / `synthesis_runs.error` for the third state
+("finished, but part of me broke"), `api/safe_errors.py` scrubbing
+credentials out of an exception before it reaches a database column a page
+prints, `scripts/check_ops_health.py` failing `monitor.yml` on a critical
+alert so GitHub's own notification is the alarm, and
+`frontend/pages/6_System.py`. Every alert rule is a real incident from this
+project's own history. Design, and what live data corrected on the first
+call: `docs/decisions.md`, 2026-09-06.
 
 Standing gotchas, dated postmortem for each in `docs/decisions.md`:
 
@@ -107,6 +123,10 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   `tracked_conditions` registry while cleaning up one probe row (restored
   within seconds; the cron that reads it was ~70 min away). Same class as
   the over-broad test cleanup of 2026-08-27. Use `WHERE x IN (...)`.
+- **When mutation-testing, diff the restored file against the backup
+  before believing the result.** Mutating and restoring inside one shell
+  command produced a run where correct, restored code appeared to fail —
+  long enough to nearly "fix" working code (2026-09-06).
 - This project's real text runs ~2.61 chars/token, not ~4.0 — re-measure
   any cost estimate rather than trusting an old one.
 - **`requirements.txt` is pinned, and must stay pinned** (with
