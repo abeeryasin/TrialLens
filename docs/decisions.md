@@ -3696,3 +3696,56 @@ The user's reasoning is cost — the agent pays tokens to read changes the
 system has already decided are not worth attention. Kept as a count rather
 than dropped, so the agent still knows they happened without paying to read
 them, and does not silently inherit a filter that has known blind spots.
+
+## 2026-09-07 — Fixing the two gaps the clinician review found
+
+Parts 1 and 2 of the agreed order (see the judgment entry above). Part 3,
+surfacing description diffs, is deliberately left for a later session — it
+needs design, not a patch, and the reasoning for that is recorded there.
+
+**1. Observation windows are now compared.** `outcome_windows()` reads
+`time_frame` per outcome, keyed by the NORMALISED measure name so a window
+is still compared across a pure re-capitalisation of its own measure.
+`wording_only` becomes `not added and not removed and not window_changes`,
+which is the whole correction: a trial that kept every endpoint name and
+shortened its follow-up used to be filed as reformatting and then
+suppressed from the page by that classification.
+
+Measured against the live record, the reclassification is exactly the two
+cases the review found and nothing else: **wording_only 10 → 8,
+substantive 12 → 14.** NCT05112185 (12 months → 10) and NCT07654972
+(follow-up Week 39 → Week 33) move from hidden to visible. Three changes
+that were already substantive gained window detail on their cards
+(NCT04276493, NCT03244722, NCT06400472).
+
+**No direction is computed.** `before` and `after` are the registry's own
+strings. "Week 39 → Week 33" is obvious to a reader and a guess to a
+parser — CT.gov time frames are free text ("12 months", "up to 2 years",
+"Baseline, 6-months, and 10-months after the start of the study"), and
+deriving "shortened by six weeks" from that would be a computed claim about
+a study fact of exactly the kind sec. 3 rules out. The reviewer reads both
+values and judges.
+
+**2. The reformatting bucket is collapsed, not hidden.** The page's
+`if change["wording_only"]: continue` was the reason four real changes were
+invisible, so it is replaced by an expander listing them with their flags.
+The filter is now auditable rather than trusted. The caption states the
+remaining limitation in plain words — a description can still have changed
+under a name that did not, and this page cannot see that yet — so the
+expander does not read as a guarantee.
+
+**Proven able to fail** (sec. 7): reverting the classification to
+`not added and not removed` fails
+`test_a_moved_window_under_an_unchanged_name_is_substantive`. Four new
+tests, all built from real records rather than invented ones, including two
+guards against over-correcting — capitalisation with an untouched window
+must still de-escalate, and a window on a newly ADDED measure must not be
+reported as "moved" when the addition is already reported.
+
+**What this does not fix, stated so it is not mistaken for done.** The four
+hidden changes the review found were two windows (fixed here), one
+comparative endpoint becoming descriptive (NCT06635980), and one changed
+analysis method (NCT07160530). **Both of the latter live in descriptions
+and remain invisible.** They are now at least listed in the expander rather
+than absent, so a reader can reach them, but the page still cannot tell you
+that anything moved inside them.

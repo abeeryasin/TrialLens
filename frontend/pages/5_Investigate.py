@@ -212,9 +212,15 @@ with changed_tab:
                 "list of outcomes and are counted here rather than dropped."
             )
 
-        for change in outcomes["changes"]:
-            if change["wording_only"]:
-                continue
+        # Reformatting-only changes are COLLAPSED, never skipped (2026-09-07).
+        # `continue` used to drop them from the page entirely, leaving the
+        # filter trusted rather than checkable — and when a clinician finally
+        # read the hidden ten, four of them were real: two shortened
+        # observation windows, one dropped between-arm comparison, one
+        # changed analysis method. A reader could not have found those,
+        # because the page never showed them. Same rule as every other
+        # capped list here: say what was set aside, and let it be opened.
+        for change in [c for c in outcomes["changes"] if not c["wording_only"]]:
             with st.container(border=True):
                 # The NCT ID was a dead end: the page names the trial that
                 # needs review and gave no way to go read it. Reported
@@ -251,6 +257,14 @@ with changed_tab:
                     st.markdown("**Now listed**")
                     for measure in change["measures_added"]:
                         st.markdown(f"- {measure}")
+                if change.get("window_changes"):
+                    # Shown as the registry wrote them. "Week 39 → Week 33"
+                    # is plain to a reader; computing "shortened by 6 weeks"
+                    # from free text would be a derived claim, and the
+                    # direction is exactly what a reviewer should judge.
+                    st.markdown("**Observation window moved**")
+                    for w in change["window_changes"]:
+                        st.markdown(f"- {w['measure']}  \n  `{w['before']}` → `{w['after']}`")
 
                 if change["interpretation"]:
                     st.info(
@@ -264,6 +278,29 @@ with changed_tab:
                         "No AI reading stored for this change — which does not "
                         "mean it is unimportant; readings only exist for changes "
                         "seen since 2026-09-03."
+                    )
+
+        reformatting = [c for c in outcomes["changes"] if c["wording_only"]]
+        if reformatting:
+            with st.expander(
+                f"{len(reformatting)} change"
+                f"{'s' if len(reformatting) != 1 else ''} the filter judged "
+                "reformatting only — open to check"
+            ):
+                st.caption(
+                    "The endpoint name is identical after casefolding and "
+                    "punctuation, and no observation window moved. Listed "
+                    "rather than hidden so the filter can be checked: a "
+                    "description can still have changed underneath a name "
+                    "that did not, and this page cannot yet see that."
+                )
+                for change in reformatting:
+                    st.markdown(
+                        f"**{change['nct_id']}** — {change['brief_title']}  \n"
+                        f"{change['count_before']} → {change['count_after']} primary "
+                        f"{plural(change['count_after'], 'outcome')}"
+                        + (f" · `{'` `'.join(change['flag_labels'])}`"
+                           if change["flag_labels"] else "")
                     )
 
     st.divider()

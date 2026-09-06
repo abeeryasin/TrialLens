@@ -699,3 +699,66 @@ def test_transitions_are_not_capped_by_the_named_trial_list():
     (finding,) = analyse_status_moves(rows)
     assert len(finding.trials) == 8
     assert sum(t.count for t in finding.transitions) == 30
+
+
+# ---------------------------------------------------------------------------
+# Observation windows (2026-09-07). Added after a clinician read every
+# outcome change on file and found the comparison was blind to time frames:
+# a trial could keep every endpoint name identical, shorten its follow-up,
+# and be filed as reformatting — then suppressed from the page by that
+# classification. Both cases below are real records, not invented ones.
+# ---------------------------------------------------------------------------
+
+def windowed(*pairs):
+    """primary_outcomes JSON from (measure, time_frame) pairs."""
+    return json.dumps([{"measure": m, "time_frame": t} for m, t in pairs])
+
+
+class TestAShortenedWindowIsNotReformatting:
+    def test_a_moved_window_under_an_unchanged_name_is_substantive(self):
+        """NCT05112185, real: the measure differed only by capitalisation
+        ('BMI z-score' -> 'BMI Z-score') while the window moved 12 months to
+        10. Before this it was filed wording_only and hidden from the page."""
+        changes, summary = analyse_outcome_changes([outcome_row(
+            windowed(("Change in BMI z-score", "Baseline, 6-months, and 12-months")),
+            windowed(("Change in BMI Z-score", "Baseline, 6-months, and 10-months")),
+        )])
+        assert summary["wording_only"] == 0, (
+            "a shortened observation window is not a change of wording"
+        )
+        assert summary["substantive"] == 1
+        assert changes[0].wording_only is False
+
+    def test_the_window_is_reported_as_written_not_parsed(self):
+        """NCT07654972, real. 'Week 39' -> 'Week 33' is plain to a reader;
+        deriving 'shortened by 6 weeks' from free text would be a computed
+        claim about a study fact, which sec. 3 rules out."""
+        changes, _ = analyse_outcome_changes([outcome_row(
+            windowed(("Body weight", "Baseline through end of the Follow-up (Week 39)")),
+            windowed(("Body weight", "Baseline through end of the Follow-up (Week 33)")),
+        )])
+        [moved] = changes[0].window_changes
+        assert moved.before.endswith("(Week 39)")
+        assert moved.after.endswith("(Week 33)")
+        assert moved.measure == "Body weight"
+
+    def test_an_unchanged_window_under_a_renamed_measure_stays_reformatting(self):
+        """The guard against over-correcting: capitalisation alone, with the
+        window untouched, must still de-escalate. NCT03674567, real."""
+        changes, summary = analyse_outcome_changes([outcome_row(
+            windowed(("Safety and tolerability of FLX475", "2 years")),
+            windowed(("Safety and Tolerability of FLX475", "2 years")),
+        )])
+        assert summary["wording_only"] == 1
+        assert changes[0].window_changes == []
+
+    def test_a_window_on_an_added_measure_is_not_double_reported(self):
+        """An added or removed measure already appears in measures_added /
+        measures_removed. Reporting its window as 'moved' as well would
+        count one event twice."""
+        changes, _ = analyse_outcome_changes([outcome_row(
+            windowed(("Overall survival", "5 years")),
+            windowed(("Overall survival", "5 years"), ("Progression-free survival", "2 years")),
+        )])
+        assert changes[0].measures_added == ["Progression-free survival"]
+        assert changes[0].window_changes == []

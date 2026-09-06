@@ -859,6 +859,41 @@ def outcome_measures(value):
     return measures
 
 
+def outcome_windows(value):
+    """{normalised measure name: time_frame} for a stored value, or None.
+
+    Added 2026-09-07, after a clinician read every outcome change on file
+    and found the comparison was blind to this. Until now `wording_only`
+    was decided on measure NAMES alone, so a trial could keep every
+    endpoint name identical, shorten its observation window, and be filed
+    as reformatting — hidden from the page entirely. That is not
+    hypothetical: NCT05112185 moved 12 months to 10, and NCT07654972 moved
+    follow-up from Week 39 to Week 33, both invisible.
+
+    A false negative is the worse failure here. A false positive costs a
+    reviewer seconds; a change nobody is shown is never reviewed at all.
+
+    Keyed by the NORMALISED name so a window is still compared across a
+    pure re-capitalisation of its own measure.
+    """
+    if value is None:
+        return None
+    parsed = value
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(parsed, list):
+        return None
+    windows = {}
+    for item in parsed:
+        if isinstance(item, dict):
+            key = normalise_measure(str(item.get("measure") or ""))
+            windows[key] = str(item.get("time_frame") or "")
+    return windows
+
+
 # Each flag is a fact the record states, paired with the sentence a reader
 # sees. No weights, no total, no score — sec. 3 forbids a ranking whose
 # reasoning is invisible, and step 7 was removed for exactly that.
@@ -920,7 +955,7 @@ def analyse_outcome_changes(rows, trial_facts=None):
     a much more useful sentence than "3 outcome changes", and dropping the
     five would also hide the fact that the normalisation is doing work.
     """
-    from api.schemas import OutcomeChange  # local: avoids a schema import cycle
+    from api.schemas import OutcomeChange, OutcomeWindowChange  # local: avoids a schema import cycle
 
     trial_facts = trial_facts or {}
     changes: List[OutcomeChange] = []
@@ -939,7 +974,27 @@ def analyse_outcome_changes(rows, trial_facts=None):
         after_map = {normalise_measure(m): m for m in after}
         added = [after_map[k] for k in after_map if k and k not in before_map]
         removed = [before_map[k] for k in before_map if k and k not in after_map]
-        wording_only = not added and not removed
+
+        # Windows are compared only for measures that survived the change.
+        # A measure that was added or removed already shows up above, and
+        # reporting its window as "moved" would double-count one event.
+        before_windows = outcome_windows(row["old_value"]) or {}
+        after_windows = outcome_windows(row["new_value"]) or {}
+        window_changes = [
+            OutcomeWindowChange(
+                measure=after_map[key], before=before_windows[key], after=after_windows[key]
+            )
+            for key in after_map
+            if key
+            and key in before_map
+            and before_windows.get(key, "") != after_windows.get(key, "")
+        ]
+
+        # A moved window is NOT reformatting, which is the whole correction
+        # here: until 2026-09-07 this read `not added and not removed`, so a
+        # shortened follow-up under an unchanged name was filed as wording
+        # and then suppressed from the page by it.
+        wording_only = not added and not removed and not window_changes
 
         interpretation = row.get("prose_interpretation")
         if isinstance(interpretation, dict):
@@ -954,6 +1009,7 @@ def analyse_outcome_changes(rows, trial_facts=None):
                 measures_removed=removed,
                 count_before=len(before),
                 count_after=len(after),
+                window_changes=window_changes,
                 wording_only=wording_only,
                 flags=flags,
                 flag_labels=[FLAG_LABELS[f] for f in flags],
