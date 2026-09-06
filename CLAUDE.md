@@ -86,9 +86,13 @@ database the 6-hour cron writes to. Verified by a human loading the real
 page, not just by curl. The long-flagged Neon rename is done (`dev` →
 `production`), tracked conditions moved off a config file into a database
 table with a UI to add one, and the dependency stack is pinned so deployed
-equals tested. Remaining: the UptimeRobot keep-warm ping, and Neon's
-`Default` flag still points at `production-old-unused`. Step 12
-(notifications) untouched.
+equals tested. **Neon's `Default` flag moved onto `production` on
+2026-09-06**, so a tool that picks the default branch (the Neon MCP,
+`neonctl` with no branch argument) no longer lands on an empty database.
+The branch these URLs actually reach is `br-fancy-bird-ay7zb0sb` — an
+identifier, not a credential, and the thing to compare against if the flag
+is ever in doubt. Remaining on step 10: the UptimeRobot keep-warm ping.
+Step 12 (notifications) untouched.
 
 **Step 11 (autonomous-ops hardening) is done, 2026-09-06.** The two
 unattended jobs — the 6-hourly monitor cron and the weekly synthesis agent —
