@@ -74,7 +74,10 @@ one genuinely multi-step judgment in the product ("is this week's movement a
 pattern or a coincidence?"), reading `/investigate` as its tools and filing
 labelled-confidence proposals into `review_queue` for human review. Never a
 verdict, never a summed score (§3). Its own weekly `synthesis.yml` cron
-live. First real run (2026-09-04, $0.1099) filed zero proposals — explained,
+live, and **the review UI it files into is built as of 2026-09-06** —
+`POST /synthesis/proposals/{id}/review` plus `frontend/pages/7_Review.py`,
+so the "a human decides" half of the design finally exists somewhere a
+human can reach. First real run (2026-09-04, $0.1099) filed zero proposals — explained,
 not assumed: real monitoring is only ~1 week old, so the agent had nothing
 yet to call a trend, per its own system prompt. Design, build, and that
 first-run read: `docs/decisions.md`, 2026-09-04/05.
@@ -127,6 +130,13 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   `tracked_conditions` registry while cleaning up one probe row (restored
   within seconds; the cron that reads it was ~70 min away). Same class as
   the over-broad test cleanup of 2026-08-27. Use `WHERE x IN (...)`.
+- **`pkill -f <pattern>` matches your own command line too.** On
+  2026-09-06 `pkill -f "port 8011"` killed the backgrounded shell running
+  the test suite, because that shell's command string also contained the
+  pattern — the run died at exit 144 with zero output and read as a test
+  failure. Same class as the `LIKE '__%'` incident below: a pattern
+  matching more than the one thing you pictured. Match on something only
+  the target has, or kill by PID.
 - **When mutation-testing, diff the restored file against the backup
   before believing the result.** Mutating and restoring inside one shell
   command produced a run where correct, restored code appeared to fail —

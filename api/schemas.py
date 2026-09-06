@@ -1047,10 +1047,31 @@ class Proposal(BaseModel):
     summary: str
     confidence: str
     status: str
+    reviewed_at: Optional[datetime] = None
+    reviewed_note: Optional[str] = None
+    # Off by default, and that default is load-bearing. The agent reads this
+    # same endpoint every week (get_recent_proposals) to avoid re-filing a
+    # story it already told, and it pays by the token for everything it
+    # reads. Evidence is the largest field on the row, so shipping it
+    # unconditionally would raise the cost of every future agent run to serve
+    # a page the agent never looks at.
+    evidence: Optional[Dict[str, Any]] = None
 
 
 class ProposalList(BaseModel):
     proposals: List[Proposal] = []
+
+
+class ReviewDecision(BaseModel):
+    """A human's verdict on one proposal.
+
+    The agent proposes; a person decides — this is the only place that
+    second half happens, and it is a human action through the UI, never
+    something the agent or a script can do for itself.
+    """
+
+    decision: str  # 'accepted' | 'dismissed'
+    note: Optional[str] = None
 
 
 class AddConditionRequest(BaseModel):
