@@ -3559,3 +3559,69 @@ route to). When a failure could come from any layer, find what identifies
 *which layer produced it* — a header, an error format, a body shape. A
 plain-text `Not Found` body versus FastAPI's JSON `{"detail": "Not Found"}`
 separates a Starlette default from a real route the same way.
+
+## 2026-09-07 — The first clinician judgments of real TrialLens output
+
+Since the ranking layer was removed on 2026-09-01 this project has carried
+an unanswered question, written into `docs/verify_ranking_results.md` and
+repeated in the roadmap: **no clinician had ever judged a real TrialLens
+output.** Every claim that a flag is useful was second-hand — literature,
+reasoning, or the agent's own say-so.
+
+Four flags have now been read and judged by the user, a clinician, on live
+deployed output. Their words, their calls:
+
+| Trial | Judgment |
+|---|---|
+| NCT05872620 | **Dismiss** — endpoint unchanged; entry fleshed out when results were posted |
+| NCT04315233 | **Dismiss** — "change in terminology, with similar description" |
+| NCT04276493 | **Significant** — "outcomes were merged, time frame extended" |
+| NCT04570956 | **Significant** — substantial change |
+
+Two of four dismissed. On a sample of four that is not a false-positive
+rate and must not be quoted as one; it is the first real evidence that the
+flag surfaces both kinds.
+
+**The most useful finding is a caveat the user attached unprompted, and it
+is the thing most likely to be misapplied later.** On NCT04315233 they
+dismissed the flag *and* immediately ruled out generalising it: *"i would
+dismiss but not make it a pattern i.e. some changes in terminology are
+significant unlike this one."* So "terminology change → dismiss" is exactly
+the rule that must NOT be written. What made this instance dismissible was
+narrower: the **old description already stated what the new title says** —
+old measure "MTD of ribociclib and belinostat combination" with description
+"incidence of DLTs during the defined DLT period", new measure "Rate of Dose
+Limiting Toxicity (DLT)". The meaning was recoverable from the record on
+both sides; only the label moved.
+
+That points at a real defect in how the flag is computed: **it compares
+measure NAMES and ignores descriptions.** The description is where the
+meaning lives, and in at least one judged case the name moved while the
+description did not. A future improvement is to compare the pair, not the
+title — and per the caveat above, that can only ever DE-escalate a specific
+case, never auto-dismiss a category.
+
+**What the two "significant" calls have in common** is also informative, and
+neither is a wording question: NCT04276493 **merged two primary outcomes
+into one** (3 → 2) and extended its window ~41 → ~42 months; NCT04570956
+replaced a purpose statement sitting in the measure field with a specific
+Ki67 endpoint and moved the time frame from 48 months to 4 weeks. Both
+changed the *shape* of what is measured, not its label. The current
+normalisation correctly leaves both flagged.
+
+**Method note.** Before these judgments the agent asserted that ~31% of
+surviving flags matched the first dismissed case, from a heuristic written
+on the spot (does the measure text normalise identically; did the
+description grow by >50 characters). Reading the three cases it selected
+showed none of them was that pattern — they were three different things.
+The claim was withdrawn before the user acted on it. Recorded because it is
+the second time in two days a general claim was made ahead of the evidence
+(see 2026-09-05 on dependency drift): the heuristic produced a number,
+and a number reads as a measurement even when it is a guess with arithmetic
+attached.
+
+**Still open.** Nine flags remain unjudged, and 22 primary-outcome changes
+are on file in total. `docs/verify_ranking_results.md` stays unanswered for
+the ranking layer specifically — that layer is deleted — but the underlying
+question it asked is now answered for Investigate: the output is worth a
+clinician's time, and roughly half of what it surfaces they would act on.
