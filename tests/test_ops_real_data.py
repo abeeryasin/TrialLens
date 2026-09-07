@@ -23,6 +23,8 @@ import os
 import psycopg2
 import psycopg2.extras
 import pytest
+
+from api.ops import JOBS
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -69,7 +71,10 @@ def test_the_endpoint_answers_at_all_against_the_real_schema(status):
     """Covers the migration as much as the route: the read-only role has to
     be able to SELECT the `error` column added on 2026-09-06, and a
     table-level grant is the only reason it can."""
-    assert {j["name"] for j in status["jobs"]} == {"monitor", "synthesis"}
+    assert {j["name"] for j in status["jobs"]} == {s.name for s in JOBS}
+    assert "digest" in {s.name for s in JOBS}, (
+        "the digest is the third unattended job and needs the same surface"
+    )
 
 
 def test_the_run_counts_match_a_direct_count(status, db):

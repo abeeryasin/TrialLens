@@ -127,6 +127,27 @@ JOBS = [
         # finds nothing and says so is working.
         zero_work_is_a_fault=False,
     ),
+    JobSpec(
+        name="digest",
+        table="digest_runs",
+        work_column="changes_reported",
+        work_label="outcome changes mailed",
+        # Weekdays only, so the gap Friday -> Monday is 72 hours by design.
+        # Staleness has to clear that or the alarm fires every Monday
+        # morning about a job that ran exactly as intended.
+        cadence_hours=24,
+        stale_after_hours=96,
+        # A missed digest costs a notification. The watch itself is
+        # unaffected, and every change it would have named is still on the
+        # Monitor page — so this is a warning, not the alarm that fails the
+        # workflow. Same rule the synthesis job follows.
+        stale_severity=WARNING,
+        # A day with no substantive outcome change is a real and common
+        # result — 5 of the record's first 10 days had none — and the mail
+        # still went out saying so. Counting that as a fault would fire an
+        # alert on half of all correct runs.
+        zero_work_is_a_fault=False,
+    ),
 ]
 
 router = APIRouter(tags=["ops"])

@@ -38,7 +38,14 @@ from labels import (
 st.set_page_config(page_title="Understand — TrialLens", page_icon="📄")
 st.title("Understand")
 
-default_nct_id = st.session_state.get("selected_nct_id", "")
+# session_state first (a click from Discover/Monitor/Investigate), then the
+# URL. The query param is what makes a link in the daily digest land on the
+# trial it names — without it every mail could only say "go and search for
+# this", which is most of a digest's value gone (step 12, 2026-09-07).
+default_nct_id = (
+    st.session_state.get("selected_nct_id")
+    or st.query_params.get("nct_id", "")
+)
 nct_id = st.text_input("NCT ID", value=default_nct_id, placeholder="e.g. NCT00070564").strip().upper()
 
 if not nct_id:

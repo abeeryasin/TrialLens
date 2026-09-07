@@ -202,3 +202,58 @@ def test_an_interpretation_is_not_presented_as_the_registry_speaking(render):
     rendered in the same register as the trial's own recorded values."""
     page, _ = render(history(change("primary_outcomes", REAL_SUMMARY)))
     assert "AI reading" in page
+
+
+# ---------------------------------------------------------------------------
+# The query-param entry point (step 12, 2026-09-07). Every link in the daily
+# digest carries ?nct_id=..., and without this the mail could only say "go
+# and search for this" — most of a digest's value gone.
+# ---------------------------------------------------------------------------
+
+def _stub_api(monkeypatch, nct_id):
+    import api_client
+
+    def fake_get(path, params=None):
+        if path.endswith("/amendments"):
+            return {"nct_id": nct_id, "amendments": [], "total_changes": 0}
+        if path.endswith("/changes"):
+            return {"nct_id": nct_id, "changes": []}
+        body = study()
+        body["nct_id"] = nct_id
+        return body
+
+    monkeypatch.setattr(api_client, "get", fake_get)
+
+
+def test_a_link_from_the_digest_opens_the_trial_it_names(monkeypatch):
+    """No session_state — this is a cold arrival from an email client."""
+    _stub_api(monkeypatch, "NCT04276493")
+    app = AppTest.from_file(PAGE, default_timeout=30)
+    app.query_params["nct_id"] = "NCT04276493"
+    app.run()
+    assert not app.exception, [e.value for e in app.exception]
+    assert app.text_input[0].value == "NCT04276493"
+    assert "Pick a trial from Discover" not in "\n".join(
+        str(getattr(c, "value", "")) for c in app.caption
+    ), "it must not stop at the empty-state prompt"
+
+
+def test_a_click_inside_the_app_still_wins_over_a_stale_url(monkeypatch):
+    """session_state is set by Discover/Monitor/Investigate click-through and
+    reflects what the user just did; the query param may be left over from
+    however they arrived."""
+    _stub_api(monkeypatch, "NCT06635980")
+    app = AppTest.from_file(PAGE, default_timeout=30)
+    app.query_params["nct_id"] = "NCT99999999"
+    app.session_state["selected_nct_id"] = "NCT06635980"
+    app.run()
+    assert not app.exception, [e.value for e in app.exception]
+    assert app.text_input[0].value == "NCT06635980"
+
+
+def test_no_id_anywhere_still_shows_the_empty_state(monkeypatch):
+    _stub_api(monkeypatch, "NCT04276493")
+    app = AppTest.from_file(PAGE, default_timeout=30)
+    app.run()
+    assert not app.exception, [e.value for e in app.exception]
+    assert app.text_input[0].value == ""

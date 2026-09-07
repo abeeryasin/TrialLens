@@ -226,32 +226,40 @@ def main():
         flush=True,
     )
 
-    spend = 0.0
-    proposals = []
-    try:
-        proposals, spend = run_synthesis(
-            API_BASE_URL,
-            days=WINDOW_DAYS,
-            max_cost_usd=budget,
-            max_turns=SYNTHESIS_MAX_TURNS,
-        )
-    except Exception as exc:
-        # Whatever was spent before the failure must still reach the run
-        # record — the same accounting-hole lesson step 7c's except clause
-        # already paid for once (docs/decisions.md, 2026-09-03: an except
-        # that returned 0.0 made a real failed spend invisible to the
-        # ceiling that is supposed to bound it).
-        # Scrubbed before storage: this row is read back out through
-        # GET /ops/status and printed on a page, and this process holds both
-        # a database URL and an API key (api/safe_errors.py).
-        detail = describe(exc)
-        print(f"  ERROR after ${spend:.4f} spent: {detail}", flush=True)
+    # run_synthesis RETURNS its error rather than raising it, so whatever was
+    # spent before a failure reaches the record. The previous shape — a
+    # `try` around `proposals, spend = ...` with an `except` that logged
+    # `spend` — could not work: the tuple never binds when the callee raises,
+    # so `spend` stayed 0.0. On 2026-09-07 that recorded "$0.0000 spent" for
+    # a run that had made five paid calls, hiding real money from the
+    # rolling ceiling meant to bound it. The comment there claimed the
+    # opposite of what the code did.
+    proposals, spend, error = run_synthesis(
+        API_BASE_URL,
+        days=WINDOW_DAYS,
+        max_cost_usd=budget,
+        max_turns=SYNTHESIS_MAX_TURNS,
+    )
+
+    if error:
+        # The spend is banked FIRST, then the job goes red. Both matter:
+        # GitHub's own notification is this project's escalation channel
+        # (scripts/check_ops_health.py), and the ceiling only bounds what it
+        # can see. `error` is already scrubbed (api/safe_errors.describe) —
+        # this row is read back through GET /ops/status onto a page, and this
+        # process holds both a database URL and an API key.
+        print(f"  ERROR after ${spend:.4f} spent: {error}", flush=True)
+        stored = write_proposals(conn, run_id, proposals, window_since, window_until)
+        if stored:
+            # Proposals filed before the failure are real work and are kept.
+            # Discarding them would spend the money twice.
+            print(f"  Kept {stored} proposal(s) filed before the failure.", flush=True)
         update_run_record(
-            conn, run_id, proposals_created=0, spend_usd=spend, status="failed",
-            error=detail,
+            conn, run_id, proposals_created=stored, spend_usd=spend,
+            status="failed", error=error,
         )
         conn.close()
-        raise
+        sys.exit(1)
 
     stored = write_proposals(conn, run_id, proposals, window_since, window_until)
     update_run_record(conn, run_id, proposals_created=stored, spend_usd=spend)

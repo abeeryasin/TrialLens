@@ -40,6 +40,8 @@ from typing import Optional
 import requests
 from anthropic import Anthropic
 
+from api.safe_errors import describe
+
 MODEL = "claude-haiku-4-5-20251001"
 MAX_TURNS = 10
 
@@ -322,8 +324,8 @@ def run_synthesis(
     condition: Optional[str] = None,
     max_cost_usd: float = 0.25,
     max_turns: int = MAX_TURNS,
-) -> tuple[list[dict], float]:
-    """Run one weekly synthesis pass. Returns (proposals, spend_usd).
+) -> tuple[list[dict], float, Optional[str]]:
+    """Run one weekly synthesis pass. Returns (proposals, spend_usd, error).
 
     Each proposal: {finding_type, summary, confidence, evidence}. This
     function never writes to the database — the caller
@@ -331,10 +333,27 @@ def run_synthesis(
     to review_queue, the same split api/prose_interpreter.py's
     interpret_amendments_batch takes from scripts/run_monitor.py's writes.
 
-    Raises: ValueError if ANTHROPIC_API_KEY is not set.
+    **It returns its error instead of raising it, and that is the fix for a
+    real incident** (2026-09-07). The caller's `except` was written to record
+    partial spend on a failure and could not: `proposals, spend = ...` never
+    binds when the callee raises, so `spend` stayed at its initialised 0.0.
+    The scheduled run that day made five paid calls, died on the sixth, and
+    recorded "$0.0000 spent" — money the rolling 30-day ceiling is supposed
+    to bound, invisible to it. That is the exact accounting hole step 7c
+    already paid for once (docs/decisions.md, 2026-09-03), reopened by a
+    comment that described the intent while the code did the opposite.
+
+    Returning `(spend, error)` is the shape `run_prose_interpretation()`
+    already uses for the same reason, so the two paid paths now fail the
+    same way. The caller still fails the workflow — GitHub's notification is
+    the alarm — but it does so AFTER the spend is on file.
+
+    Raises: ValueError if ANTHROPIC_API_KEY is not set. That one is a
+    misconfiguration found before any call, so there is no spend to lose.
     """
     proposals: list = []
     spend = 0.0
+    error: Optional[str] = None
     client = _client()
 
     task = f"Run this week's synthesis pass. The current window is the last {days} days"
@@ -347,42 +366,68 @@ def run_synthesis(
     )
     messages = [{"role": "user", "content": task}]
 
-    for _ in range(max_turns):
-        if spend + COST_ESTIMATE_PER_TURN_USD > max_cost_usd:
-            print(
-                f"  Stopping: another turn could exceed the ${max_cost_usd:.2f} "
-                "run budget.",
-                flush=True,
-            )
-            break
-
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1024,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=messages,
-        )
-        spend += _call_cost_usd(response.usage)
-        messages.append({"role": "assistant", "content": response.content})
-
-        if response.stop_reason != "tool_use":
-            break
-
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            try:
-                result = _execute_tool(
-                    api_base_url, block.name, block.input, days, proposals
+    try:
+        for _ in range(max_turns):
+            if spend + COST_ESTIMATE_PER_TURN_USD > max_cost_usd:
+                print(
+                    f"  Stopping: another turn could exceed the ${max_cost_usd:.2f} "
+                    "run budget.",
+                    flush=True,
                 )
-                content = json.dumps(result)
-            except Exception as exc:  # noqa: BLE001 — reported to the model, not raised
-                content = json.dumps({"error": str(exc)})
-            tool_results.append(
-                {"type": "tool_result", "tool_use_id": block.id, "content": content}
-            )
-        messages.append({"role": "user", "content": tool_results})
+                break
 
-    return proposals, spend
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages,
+            )
+            spend += _call_cost_usd(response.usage)
+            messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason != "tool_use":
+                break
+
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                try:
+                    result = _execute_tool(
+                        api_base_url, block.name, block.input, days, proposals
+                    )
+                    content = json.dumps(result)
+                except Exception as exc:  # noqa: BLE001 — reported to the model, not raised
+                    content = json.dumps({"error": str(exc)})
+                tool_results.append(
+                    {"type": "tool_result", "tool_use_id": block.id, "content": content}
+                )
+
+            # An empty list here would be sent as a user message with no
+            # content, which the API rejects outright — and did, on
+            # 2026-09-07: "messages.8: user messages must have non-empty
+            # content" killed a scheduled run on its sixth turn after five
+            # paid calls. stop_reason said tool_use and no tool_use block
+            # came back with it.
+            #
+            # Stopping is the only correct move: there is nothing to reply
+            # with, and appending an empty turn cannot become valid later.
+            # Recorded as an error rather than a quiet break, because a run
+            # that ends here and files nothing is otherwise indistinguishable
+            # from a week the agent examined and correctly found quiet.
+            if not tool_results:
+                error = (
+                    "the model returned stop_reason='tool_use' with no "
+                    f"tool_use block (content types: "
+                    f"{sorted({b.type for b in response.content}) or 'none'}); "
+                    "stopped rather than send an empty message"
+                )
+                print(f"  ANOMALY: {error}", flush=True)
+                break
+
+            messages.append({"role": "user", "content": tool_results})
+    except Exception as exc:  # noqa: BLE001 — returned, so the spend survives
+        error = describe(exc)
+
+    return proposals, spend, error

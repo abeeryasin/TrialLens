@@ -4035,3 +4035,179 @@ definitions) measures **1,918 tokens**, so a breakpoint placed there — the
 obvious placement — would have cached *nothing*, silently, with no error and
 a bigger bill. Caching only becomes available once the conversation has
 grown past the minimum. Deferred, not rejected.
+
+## 2026-09-07 — Step 12: the digest, and the two things a researcher asked for
+
+The last unbuilt step. Deterministic throughout (sec. 5): which changes
+happened, how many, and what the record states about each all have exactly
+one correct answer, and formatting a list of facts is not a
+language-understanding problem.
+
+**The external-service risk I had warned about mostly evaporated, for a
+reason worth recording.** Resend's docs say plainly that *"You must add and
+verify at least one domain to send emails with Resend"* — which for a
+project with no domain reads as a blocker. It is not: the shared
+`onboarding@resend.dev` sender needs no DNS at all, and its one restriction
+is that it *"can only send emails to the email address associated with your
+Resend account."* For most products that restriction is fatal. TrialLens is
+one researcher's tool and the digest goes to that researcher, who **is** the
+account owner — so the restriction is a perfect fit rather than a
+limitation. No domain purchase, no DNS records, no deliverability tuning.
+Free tier is 3,000/month and 100/day against a usage of about 20.
+
+If TrialLens ever mails a second person, `DEFAULT_FROM` in
+`scripts/send_digest.py` is the single line that has to change, and it will
+fail loudly with a 403 rather than silently not arrive.
+
+**What leads, chosen by measuring.** Substantive primary-outcome changes,
+named individually; everything else as counts. Two reasons, both numbers:
+
+  - It is the finding outside evidence says matters and the only one a
+    clinician has scored — 9 of 12 worth a researcher's attention.
+  - It is the only finding at a readable volume. Over the record's first ten
+    days a weekday carries **65-136 changed trials**, which nobody will read,
+    against **0-5 substantive outcome changes**, which is a morning's worth.
+
+**Two corrections from the user, mid-build.**
+
+*"Don't need empty email."* A mail that says nothing happened teaches the
+reader to skim, and then the one that matters is skimmed too — the same
+argument `scripts/check_ops_health.py` already makes about a workflow that
+goes red for things nobody must act on. `compose()` now returns
+`has_content`, and an empty window closes the run as **completed with a
+`skipped_reason`**, advancing the window because there was genuinely nothing
+in it. Deliberately *not* defined as "no outcome change": a window with 68
+trials updated, 36 timeline moves and 13 status changes has plenty to say,
+it just has no endpoint change to lead with.
+
+*"Sat-sun remove from email."* Weekends carry 1-7 changed trials against a
+weekday's 65-136, and have never yet carried a single primary-outcome
+change. The obvious implementation is wrong, and the trap is worth writing
+down: a rolling "everything since the last digest" window **cannot** exclude
+the weekend, because "since Friday 07:00" necessarily contains it — and
+clipping the start to Monday 00:00 would silently drop everything filed
+after Friday breakfast, a whole working day.
+
+So the window is **one whole weekday**, not a rolling 24 hours. Tue-Fri
+report the previous calendar day; **Monday reports Friday.** The weekend is
+the only thing that ever goes missing, and a test asserts that across a run
+of weekdays each one is covered exactly once. `/investigate` needed no new
+parameter — `days=1` with `as_of` at the day boundary already expresses it.
+
+**The run record, because this is the third unattended job.** `digest_runs`
+mirrors `monitor_runs` and `synthesis_runs`, and `GET /ops/status` gets a
+third `JobSpec`. Two settings are not copied blindly: `stale_after_hours` is
+**96, not 48**, because the Friday-to-Monday gap is 72 hours by design and a
+tighter threshold would fire an alert every Monday morning about a job that
+ran exactly as intended; and `zero_work_is_a_fault` is **False**, because 5
+of the record's first 10 days had no substantive outcome change and
+counting that as a fault would alert on half of all correct runs.
+
+A failed run does **not** advance `covered_until`, so a failed Tuesday is
+caught up by Wednesday rather than mailed to nobody. That recovery window
+can span a weekend, which is the one place weekend rows are allowed
+through — two quiet days in a catch-up mail cost far less than a working day
+that reached no inbox.
+
+**Three details that are not incidental:**
+
+- **The per-trial link goes to ClinicalTrials.gov**, not to TrialLens: it is
+  the source of every fact in the mail (sec. 4), needs no login, and will
+  outlive any URL of ours. The TrialLens links are for the aggregate views,
+  which are the things CT.gov cannot show.
+- **`frontend/pages/2_Understand.py` now reads `nct_id` off the query
+  string.** Three lines, and without them every mail could only say "go and
+  search for this" — most of a digest's value gone.
+- **No SDK.** `requirements.txt` is a pinned 63-package closure, and adding
+  a dependency for one JSON POST would mean re-pinning the whole thing.
+  `requests` is already in it.
+
+**Sec. 2 applies at least as strictly here as on the page**, because an
+email is read in an inbox, away from anything that explains itself. The
+subject line is held to it too — "3 primary-outcome changes to review"
+states what is waiting, where "3 trials changed their endpoints after
+results" would be an accusation in a notification bar. The standing caveat
+travels with every mail, and seven forbidden words are asserted absent from
+subject, text and HTML.
+
+**One real defect the live dry run found**, which no fixture would have:
+NCT06400472 renamed its drug and touched every endpoint it registers,
+producing **12 bullet lines** for what a reader would call one change. Capped
+at 6 — with the remainder counted in the line that follows, never silently
+truncated, because a silently shortened list is the cap fault found earlier
+today in a new place. Summarising the twelve into "the drug was renamed"
+would be an interpretation of a study fact, which sec. 2 does not allow.
+
+Composition is **52 free tests** — no network, no database, no Resend
+account, no email sent — which is the same free-test-first rule sec. 7
+states for paid model calls, applied to an external service.
+
+## 2026-09-07 — The weekly agent died on a real schedule, and took its receipts with it
+
+Run #2 of `synthesis.yml` failed at 13:04 UTC. Two distinct bugs, neither
+introduced today — the workflow ran commit `33cd03f`, since the day's work
+was still local. The second is much the worse of the two.
+
+**Bug 1 — an empty user message.**
+
+    messages.8: user messages must have non-empty content
+
+The tool-use loop only builds `tool_results` when `stop_reason == "tool_use"`,
+which should guarantee at least one `tool_use` block. On the sixth turn the
+model returned that stop reason with **no tool_use block**, so the list was
+empty, and `messages.append({"role": "user", "content": []})` produced a
+request the API rejects outright.
+
+Fixed by refusing to send it: an empty tool-result list can never become
+valid on a later turn, so the loop stops. It stops with an **error**, not
+quietly — a run that ends here files nothing, which is otherwise
+indistinguishable from a week the agent examined and correctly found quiet,
+and that ambiguity is precisely what step 11 exists to remove. The recorded
+message names the content types that did come back, so a recurrence explains
+itself rather than needing this investigation again.
+
+**Bug 2 — the spend went missing, and a comment said it could not.**
+
+    ERROR after $0.0000 spent: BadRequestError: Error code: 400 ...
+
+Five paid calls had already been made. The caller looked like this:
+
+```python
+spend = 0.0
+try:
+    proposals, spend = run_synthesis(...)
+except Exception as exc:
+    # Whatever was spent before the failure must still reach the run record
+    print(f"  ERROR after ${spend:.4f} spent: ...")
+```
+
+**The comment is right and the code cannot do it.** `proposals, spend = ...`
+never binds when the callee raises, so `spend` is still its initialised
+`0.0`. Real money — five Haiku calls over a growing conversation — was
+recorded as zero against the rolling $1.00/30-day ceiling that exists to
+bound it.
+
+This is the *same* accounting hole as 2026-09-03, when an `except` returning
+`0.0` hid a real failed spend. It was written up, the lesson was stated in a
+comment at the new site, and the new site had it anyway. **A comment
+describing an invariant is not the invariant.** The tell in the log was the
+number, not the exception: `$0.0000` after five calls is arithmetically
+impossible.
+
+Fixed by changing the contract: `run_synthesis()` now returns
+`(proposals, spend, error)` and catches its own exception, which is the shape
+`run_prose_interpretation()` already uses for the same reason — so both paid
+paths now fail identically. The caller banks the spend, keeps any proposals
+filed before the failure (discarding them would spend the money twice), and
+*then* exits non-zero so GitHub's notification still fires.
+
+**Proven able to fail.** Reverting the guard reproduces the empty-message
+crash; setting `spend = 0.0` in the handler reproduces the false receipt.
+Five new tests, including one asserting the literal string `"0.0000"` never
+appears as a post-failure spend, because that number is what exposed this.
+
+**What this says about the ops surface.** `/ops/status` would have shown the
+failed run — the alarm worked. What it could not show was that the run had
+*cost* something, because the row said $0.00. A health surface that reads
+its own job's self-report inherits that report's bugs, and there is no
+independent check on spend short of the provider's own billing.

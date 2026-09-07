@@ -86,7 +86,7 @@ class TestAQuietWeek:
     def test_no_proposals_is_a_valid_outcome(self, monkeypatch):
         _install(monkeypatch, [ENDS_TURN])
         _install_get(monkeypatch, lambda path, params: {})
-        proposals, spend = sa.run_synthesis("http://x", max_cost_usd=1.0)
+        proposals, spend, _ = sa.run_synthesis("http://x", max_cost_usd=1.0)
         assert proposals == []
         assert spend > 0
 
@@ -111,7 +111,7 @@ class TestProposeFinding:
         _install(monkeypatch, [tool_call, ENDS_TURN])
         get_calls = _install_get(monkeypatch, lambda path, params: {})
 
-        proposals, spend = sa.run_synthesis("http://x", max_cost_usd=1.0)
+        proposals, spend, _ = sa.run_synthesis("http://x", max_cost_usd=1.0)
 
         assert proposals == [
             {
@@ -138,7 +138,7 @@ class TestProposeFinding:
         _install(monkeypatch, [two_findings, ENDS_TURN])
         _install_get(monkeypatch, lambda path, params: {})
 
-        proposals, _ = sa.run_synthesis("http://x", max_cost_usd=1.0)
+        proposals, _, _ = sa.run_synthesis("http://x", max_cost_usd=1.0)
         assert len(proposals) == 2
         assert {p["finding_type"] for p in proposals} == {"a", "b"}
 
@@ -257,7 +257,7 @@ class TestBudgetAndTurnCaps:
         client = _install(monkeypatch, [ENDS_TURN])
         _install_get(monkeypatch, lambda path, params: {})
 
-        proposals, spend = sa.run_synthesis(
+        proposals, spend, _ = sa.run_synthesis(
             "http://x", max_cost_usd=sa.COST_ESTIMATE_PER_TURN_USD / 2
         )
 
@@ -279,6 +279,99 @@ class TestBudgetAndTurnCaps:
         assert len(client.calls) == 2
 
 
+class TestTheTwoBugsThatKilledARealRun:
+    """Both from the scheduled run of 2026-09-07 (run #2), which failed on
+    its sixth turn after five paid calls and recorded "$0.0000 spent"."""
+
+    def test_a_tool_use_stop_with_no_tool_block_stops_instead_of_crashing(self, monkeypatch):
+        """The live failure: `messages.8: user messages must have non-empty
+        content`. stop_reason said tool_use and no tool_use block came with
+        it, so the loop appended a user message whose content was [] — which
+        the API rejects outright, and which cannot become valid later."""
+        anomaly = _FakeResponse([_Text("thinking about it")], "tool_use")
+        client = _install(monkeypatch, [anomaly])
+        _install_get(monkeypatch, lambda path, params: {})
+
+        proposals, spend, error = sa.run_synthesis("http://x", max_cost_usd=1.0)
+
+        assert error and "no tool_use block" in error
+        assert len(client.calls) == 1, "it must not send the invalid follow-up"
+        for call in client.calls:
+            for message in call["messages"]:
+                assert message["content"] != [], "an empty user message is never valid"
+
+    def test_the_anomaly_is_an_error_not_a_quiet_week(self, monkeypatch):
+        """A run that stops here files nothing — which is indistinguishable
+        from a week the agent examined and correctly found quiet, unless the
+        reason is recorded. That ambiguity is what step 11 exists to remove."""
+        _install(monkeypatch, [_FakeResponse([_Text("hm")], "tool_use")])
+        _install_get(monkeypatch, lambda path, params: {})
+        proposals, _, error = sa.run_synthesis("http://x", max_cost_usd=1.0)
+        assert proposals == []
+        assert error is not None
+
+    def test_spend_before_a_failure_is_returned_not_lost(self, monkeypatch):
+        """The costlier bug. The caller's `except` logged `spend` from a
+        tuple unpack that never happened, so a real spend was recorded as
+        $0.0000 and the rolling 30-day ceiling could not see it — the exact
+        accounting hole step 7c already paid for once."""
+        paid = _FakeResponse(
+            [_ToolUse("t1", "get_window", {"weeks_ago": 0})], "tool_use",
+            usage=_FakeUsage(input_tokens=40_000, output_tokens=1_000),
+        )
+
+        class _Exploding(_FakeMessages):
+            def create(self, **kwargs):
+                if self._outer.calls:
+                    raise RuntimeError("upstream fell over")
+                return super().create(**kwargs)
+
+        client = _install(monkeypatch, [paid])
+        client.messages = _Exploding(client)
+        _install_get(monkeypatch, lambda path, params: {})
+
+        _, spend, error = sa.run_synthesis("http://x", max_cost_usd=1.0)
+
+        assert spend > 0, "the money spent before the failure must survive it"
+        assert error and "upstream fell over" in error
+
+    def test_a_failure_never_reports_zero_spend_after_a_paid_call(self, monkeypatch):
+        """Stated as its own assertion because the log line that exposed
+        this read 'ERROR after $0.0000 spent' — the number, not the
+        exception, was the tell."""
+        paid = _FakeResponse(
+            [_ToolUse("t1", "get_window", {"weeks_ago": 0})], "tool_use",
+            usage=_FakeUsage(input_tokens=12_000, output_tokens=500),
+        )
+
+        class _Exploding(_FakeMessages):
+            def create(self, **kwargs):
+                if self._outer.calls:
+                    raise RuntimeError("boom")
+                return super().create(**kwargs)
+
+        client = _install(monkeypatch, [paid])
+        client.messages = _Exploding(client)
+        _install_get(monkeypatch, lambda path, params: {})
+        _, spend, _ = sa.run_synthesis("http://x", max_cost_usd=1.0)
+        assert f"{spend:.4f}" != "0.0000"
+
+    def test_an_error_is_scrubbed_before_it_is_returned(self, monkeypatch):
+        """It lands in a database column that GET /ops/status prints on a
+        page, and this process holds an API key (api/safe_errors.py)."""
+        class _Exploding(_FakeMessages):
+            def create(self, **kwargs):
+                raise RuntimeError(
+                    "connection failed: postgresql://user:hunter2@db.example/x"
+                )
+
+        client = _install(monkeypatch, [])
+        client.messages = _Exploding(client)
+        _install_get(monkeypatch, lambda path, params: {})
+        _, _, error = sa.run_synthesis("http://x", max_cost_usd=1.0)
+        assert "hunter2" not in error
+
+
 class TestBilling:
     def test_cost_comes_from_real_token_counts(self, monkeypatch):
         """$1.00/MTok in, $5.00/MTok out — same rate as api/prose_interpreter.py."""
@@ -288,7 +381,7 @@ class TestBilling:
         )
         _install(monkeypatch, [response])
         _install_get(monkeypatch, lambda path, params: {})
-        _, spend = sa.run_synthesis("http://x", max_cost_usd=100.0)
+        _, spend, _ = sa.run_synthesis("http://x", max_cost_usd=100.0)
         assert spend == pytest.approx(6.00)
 
     def test_spend_accumulates_across_turns(self, monkeypatch):
@@ -298,7 +391,7 @@ class TestBilling:
         )
         _install(monkeypatch, [cheap, ENDS_TURN])
         _install_get(monkeypatch, lambda path, params: {})
-        _, spend = sa.run_synthesis("http://x", max_cost_usd=1.0)
+        _, spend, _ = sa.run_synthesis("http://x", max_cost_usd=1.0)
         per_call = (1000 * 1.00 + 100 * 5.00) / 1_000_000
         assert spend == pytest.approx(per_call * 2)
 

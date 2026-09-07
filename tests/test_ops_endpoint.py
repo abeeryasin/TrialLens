@@ -19,7 +19,7 @@ Run: PYTHONPATH=. python3 -m pytest tests/test_ops_endpoint.py -v
 """
 from datetime import datetime, timedelta, timezone
 
-from api.ops import CRITICAL, WARNING, build_alerts
+from api.ops import CRITICAL, JOBS, WARNING, build_alerts
 from api.schemas import OpsBudget, OpsJob
 
 NOW = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
@@ -59,35 +59,55 @@ def counts_row(**overrides):
 
 def healthy_results(monitor_recent=None, monitor_counts=None,
                     synthesis_recent=None, synthesis_counts=None,
+                    digest_recent=None, digest_counts=None,
                     spend=0.1479, conditions=(("breast cancer",), ("melanoma",))):
-    """The seven results the route draws, in the order it draws them."""
-    return [
-        [{"now": NOW}],
-        monitor_recent if monitor_recent is not None else [run_row()],
-        [monitor_counts or counts_row()],
-        synthesis_recent if synthesis_recent is not None else [
-            run_row(id=1, work_done=0)
-        ],
-        [synthesis_counts or counts_row(last_work_done=0, runs_in_window=1)],
-        [(spend,)],
-        list(conditions),
-    ]
+    """The results the route draws, in the order it draws them.
+
+    Two per job in api.ops.JOBS — a recent-runs list and a counts row —
+    bracketed by the clock, the spend and the tracked conditions. Built from
+    JOBS rather than hardcoded to a count: adding the digest job on
+    2026-09-07 shifted every later result by two and turned the spend tuple
+    into a run row, which surfaced as seven identical "tuple indices must be
+    integers" failures rather than as anything naming the cause.
+    """
+    per_job = {
+        "monitor": (
+            monitor_recent if monitor_recent is not None else [run_row()],
+            [monitor_counts or counts_row()],
+        ),
+        "synthesis": (
+            synthesis_recent if synthesis_recent is not None else [run_row(id=1, work_done=0)],
+            [synthesis_counts or counts_row(last_work_done=0, runs_in_window=1)],
+        ),
+        "digest": (
+            digest_recent if digest_recent is not None else [run_row(id=1, work_done=3)],
+            [digest_counts or counts_row(last_work_done=3, runs_in_window=5)],
+        ),
+    }
+    results = [[{"now": NOW}]]
+    for spec in JOBS:
+        recent, counts = per_job[spec.name]
+        results += [recent, counts]
+    results += [[(spend,)], list(conditions)]
+    return results
 
 
 def test_a_healthy_system_reports_healthy_with_no_alerts(api):
     body = api(healthy_results()).get("/ops/status").json()
     assert body["is_healthy"] is True
     assert body["alerts"] == []
-    assert [j["name"] for j in body["jobs"]] == ["monitor", "synthesis"]
+    assert [j["name"] for j in body["jobs"]] == [s.name for s in JOBS]
     assert body["tracked_conditions"] == 2
 
 
-def test_both_scheduled_jobs_are_covered_not_just_the_monitor(api):
-    """GET /watch sees the monitor only. The synthesis agent spends money on
-    its own schedule and had no health surface at all before this."""
+def test_every_scheduled_job_is_covered_not_just_the_monitor(api):
+    """GET /watch sees the monitor only. The other two spend money or send
+    mail on their own schedules and had no health surface at all before
+    this. Asserted against JOBS rather than a literal list, so a fourth
+    unattended job cannot be added without appearing here."""
     body = api(healthy_results()).get("/ops/status").json()
-    names = {j["name"] for j in body["jobs"]}
-    assert names == {"monitor", "synthesis"}
+    assert {j["name"] for j in body["jobs"]} == {s.name for s in JOBS}
+    assert {"monitor", "synthesis", "digest"} <= {s.name for s in JOBS}
 
 
 def test_the_budget_is_reported_as_a_real_position(api):

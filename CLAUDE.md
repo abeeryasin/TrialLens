@@ -64,7 +64,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **809 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **869 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -147,6 +147,26 @@ alert so GitHub's own notification is the alarm, and
 project's own history. Design, and what live data corrected on the first
 call: `docs/decisions.md`, 2026-09-06.
 
+**Step 12 (notifications) is built as of 2026-09-07** — the last step on the
+table. `api/digest.py` composes, `scripts/send_digest.py` sends, `digest_runs`
+records, and a weekday `digest.yml` cron fires it; `/ops/status` gets a third
+job. **No domain was needed**: Resend's shared `onboarding@resend.dev` sender
+needs no DNS, and its one restriction — it delivers only to the account
+owner's own address — is exactly this product's shape. The mail leads with
+substantive primary-outcome changes named individually (0-5 a day) over
+counts for everything else (65-136 trials a day). **Weekends are dropped and
+an empty window sends nothing**, which forced whole-weekday windows rather
+than a rolling 24 hours — Monday reports Friday. 52 free tests cover
+composition with no account and no mail sent. **Remaining: `RESEND_API_KEY`
+and `DIGEST_TO` in `.env.local` plus as repo secrets, and one live send.**
+
+**Two live bugs in the weekly agent, found and fixed 2026-09-07** when its
+scheduled run failed for real. `run_synthesis()` now returns
+`(proposals, spend, error)` instead of raising, so a partial spend reaches
+the run record; and a `stop_reason == "tool_use"` with no `tool_use` block
+stops the loop with a recorded error instead of sending an empty user
+message the API rejects.
+
 Standing gotchas, dated postmortem for each in `docs/decisions.md`:
 
 - A `JOIN` against `study_conditions` needs **`DISTINCT`** before feeding a
@@ -171,6 +191,20 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   failure. Same class as the `LIKE '__%'` incident below: a pattern
   matching more than the one thing you pictured. Match on something only
   the target has, or kill by PID.
+- **A comment describing an invariant is not the invariant.** On
+  2026-09-07 the weekly agent's caller carried an accurate comment — "whatever
+  was spent before the failure must still reach the run record", citing the
+  2026-09-03 postmortem — above code that could not do it: `proposals, spend
+  = f()` never binds when `f` raises, so a run that made five paid calls
+  recorded `$0.0000`. The same accounting hole, written up once, restated in
+  a comment, and reopened at the new site. **The tell was the number, not the
+  exception.** Where a value must survive an exception, return it — don't
+  assign it from a call that may not return.
+- **A rolling window cannot exclude a weekend.** "Everything since the last
+  run" necessarily spans Saturday and Sunday on a Monday, and clipping its
+  start to Monday 00:00 silently drops everything filed after Friday
+  breakfast. If a cadence needs to skip days, the window has to be whole
+  days, not elapsed time (step 12, 2026-09-07).
 - **A number that can never bind is a lie in the code.** The summary
   route's first draft carried `SUMMARY_ID_CAP = 20` over lists already
   capped at 8 upstream — unreachable, and harmless only by luck. Same shape

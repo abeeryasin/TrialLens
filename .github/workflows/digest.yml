@@ -1,0 +1,80 @@
+name: Daily digest
+
+# Weekdays only, 07:00 UTC — its own workflow for the same reason
+# synthesis.yml is (docs/decisions.md, 2026-09-05): monitor.yml runs every 6
+# hours and folding a once-a-day step into it means three of every four runs
+# pay a conditional check for something that does not fire, with a failure in
+# the new step risking the run record /watch reads last_checked_at from.
+#
+# `1-5` is Monday to Friday. Measured over the record's first ten days,
+# weekends carry 1-7 changed trials against a weekday's 65-136 — sponsors
+# file updates on working days — and have never carried a single
+# primary-outcome change, so they are dropped entirely rather than rolled
+# into Monday.
+#
+# Each run reports ONE WHOLE WEEKDAY: Tue-Fri report the previous calendar
+# day, Monday reports Friday. Whole days rather than a rolling 24 hours is
+# what makes the skip safe — "everything since Friday 07:00" necessarily
+# contains the weekend, and clipping it to Monday 00:00 would silently drop
+# a working day of Friday. See scripts/send_digest.py's weekday_window().
+#
+# 07:00 UTC lands before a UK working day and after the 06:00 monitor tick,
+# so the mail describes a record the cron has just refreshed. The previous
+# day is complete by then, which a rolling window could not guarantee.
+on:
+  schedule:
+    - cron: "0 7 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Same ephemeral API as monitor.yml and synthesis.yml — the digest
+      # reads its window through FastAPI, keeping "the only door" true, and
+      # holds a database credential only for its own run record.
+      - name: Start FastAPI (this job only, torn down when it ends)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_READONLY: ${{ secrets.DATABASE_URL_READONLY }}
+        run: |
+          nohup python -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
+          for i in $(seq 1 15); do
+            if curl -sf http://127.0.0.1:8000/health > /dev/null; then
+              echo "API is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API never became healthy"
+          cat api.log
+          exit 1
+
+      # RESEND_API_KEY and DIGEST_TO are required, not optional: a digest
+      # job that cannot send has nothing else useful to do, so it should
+      # fail loudly rather than record a green run that mailed nobody —
+      # which is the exact failure mode step 11 was built to surface.
+      #
+      # Neither value is ever echoed. scripts/send_digest.py names a missing
+      # variable but never prints one, because a CI log is a repo file with
+      # extra steps (CLAUDE.md sec. 2).
+      - name: Send the digest
+        env:
+          API_BASE_URL: http://127.0.0.1:8000
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
+        run: python scripts/send_digest.py
+
+      - name: Show API log on failure
+        if: failure()
+        run: cat api.log

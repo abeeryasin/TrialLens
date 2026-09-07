@@ -580,3 +580,36 @@ ALTER TABLE synthesis_runs ADD COLUMN IF NOT EXISTS error TEXT;
 -- actually lost.
 ALTER TABLE monitor_runs ADD COLUMN IF NOT EXISTS skipped_reason TEXT;
 ALTER TABLE synthesis_runs ADD COLUMN IF NOT EXISTS skipped_reason TEXT;
+
+-- ---------------------------------------------------------------------------
+-- digest_runs (step 12, 2026-09-07) — the third unattended job's run record.
+--
+-- Same shape as monitor_runs and synthesis_runs, and for the same reason
+-- step 11 gave: a job nobody watches needs somewhere to say it ran. Without
+-- this the daily digest would be the one scheduled job with no health
+-- surface, which is precisely the gap step 11 closed for the other two.
+--
+-- `covered_since` / `covered_until` are load-bearing, not decoration. The
+-- digest reports changes since the LAST DIGEST THAT ACTUALLY SENT, which is
+-- how a Monday email covers the weekend without any weekday arithmetic, and
+-- how a failed Tuesday run is picked up by Wednesday's rather than losing a
+-- day silently. Reading the window off the record instead of off the
+-- calendar is the difference between the two.
+CREATE TABLE IF NOT EXISTS digest_runs (
+    id               SERIAL PRIMARY KEY,
+    started_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at     TIMESTAMPTZ,
+    status           TEXT NOT NULL DEFAULT 'running',
+    covered_since    TIMESTAMPTZ,
+    covered_until    TIMESTAMPTZ,
+    changes_reported INTEGER,
+    -- Same third state as the other two jobs: "finished, but part of me
+    -- broke". Scrubbed before storage (api/safe_errors.py) — this process
+    -- holds a database URL AND a Resend API key, and an error message is
+    -- user-visible output the moment /ops/status prints it.
+    error            TEXT,
+    skipped_reason   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_digest_runs_completed
+    ON digest_runs (completed_at DESC);
