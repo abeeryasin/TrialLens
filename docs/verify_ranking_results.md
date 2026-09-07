@@ -23,9 +23,12 @@ run once, "the ranking works" is an assumption.
 A clinician is the domain expert this is waiting on. It takes about
 fifteen minutes and costs nothing beyond a ranking run already paid for.
 
-**Answered for Investigate, 2026-09-07.** A clinician judged all 12
-substantive primary-outcome changes on file and called 9 of them worth a
-researcher's attention. The method below is what that reading followed; see
+**Partly answered for Investigate, 2026-09-07.** The author — a doctor —
+judged all 12 substantive primary-outcome changes on file and called 9 of
+them worth a researcher's attention. That is self-assessment, not the
+independent reading this protocol was written for, and the gap it leaves is
+the one that matters: someone who did not build TrialLens has still never
+graded its output. The method below is what that reading followed; see
 `docs/decisions.md`, 2026-09-07.
 
 ---

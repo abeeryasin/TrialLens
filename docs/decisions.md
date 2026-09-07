@@ -1228,6 +1228,12 @@ question: **no clinician had ever judged a real TrialLens output.** Four flags
 were read and called — two dismissed, two significant. On a sample of four that
 is not a false-positive rate and must not be quoted as one.
 
+**The clinician is the author of this project**, which is the limit on what
+these judgments establish. Domain expertise in the person building the thing
+is worth something — it caught three real defects the tests did not — but it
+is not independent review, and nothing here should be quoted as if it were.
+An outside researcher reading this output remains the missing evidence.
+
 **The most useful finding is a caveat the user attached unprompted, and it is
 the thing most likely to be misapplied later.** They dismissed a terminology
 change *and* immediately ruled out generalising it: *"some changes in
