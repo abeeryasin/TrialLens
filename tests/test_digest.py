@@ -330,6 +330,53 @@ class TestWeekdayWindow:
             datetime(2026, 9, weekend_day, 7, tzinfo=timezone.utc))
         assert since.weekday() < 5
 
+    def test_a_healthy_week_never_spans_a_weekend(self):
+        """**The test that was missing**, and the bug it now catches was
+        real: Monday's digest covers Friday and so leaves covered_until at
+        Saturday 00:00, which is always earlier than Tuesday's Monday 00:00.
+        A naive `previous_until < since` therefore read the DELIBERATE
+        weekend gap as a missed run and pulled Saturday and Sunday back into
+        every single Tuesday — the exact thing the design exists to drop,
+        reappearing weekly.
+
+        Each window in isolation looked right. Only feeding each run's
+        covered_until into the next exposes it, which is why this simulates
+        a week rather than asserting on one call."""
+        previous = None
+        for day in (4, 7, 8, 9, 10, 11):  # Fri, Mon, Tue, Wed, Thu, Fri
+            since, until = weekday_window(
+                datetime(2026, 9, day, 7, tzinfo=timezone.utc), previous)
+            assert until - since == DAY, (
+                f"the run on {day} Sep covers {(until - since).days} days — a "
+                "healthy cadence reports exactly one weekday"
+            )
+            assert since.weekday() < 5, "a window must never start on a weekend"
+            previous = until
+
+    def test_the_weekend_gap_is_not_mistaken_for_a_missed_run(self):
+        """Stated on its own because it is the specific comparison that was
+        wrong: against what a HEALTHY predecessor would have left, not
+        against this window's own start."""
+        since, _ = weekday_window(
+            datetime(2026, 9, 8, 7, tzinfo=timezone.utc),      # Tuesday
+            previous_until=datetime(2026, 9, 5, tzinfo=timezone.utc),  # Sat 00:00
+        )
+        assert since == datetime(2026, 9, 7, tzinfo=timezone.utc), (
+            "Tuesday must report Monday only — Saturday 00:00 is where a "
+            "correct Monday run leaves off, not evidence of a missed one"
+        )
+
+    def test_a_genuinely_missed_monday_is_still_caught_up(self):
+        """The guard against over-correcting: tightening the comparison must
+        not disable recovery. If Monday never ran, covered_until is still
+        Friday 00:00 and Tuesday has to reach back for Friday."""
+        since, until = weekday_window(
+            datetime(2026, 9, 8, 7, tzinfo=timezone.utc),
+            previous_until=datetime(2026, 9, 4, tzinfo=timezone.utc),
+        )
+        assert since == datetime(2026, 9, 4, tzinfo=timezone.utc)
+        assert until == datetime(2026, 9, 8, tzinfo=timezone.utc)
+
     def test_a_missed_run_is_caught_up_rather_than_mailed_to_nobody(self):
         """A failed run does not advance covered_until, so the next one
         reaches back. Two quiet weekend days in a catch-up mail cost far

@@ -39,7 +39,7 @@ came out of the 2026-09-07 clinician review and are not table rows:
 
 | Remaining work | Estimate |
 |---|---|
-| ~~Step 12 — notifications (Resend daily digest)~~ | **Built 2026-09-07**; one live send left, which needs the user's API key |
+| ~~Step 12 — notifications (Resend daily digest)~~ | **Done 2026-09-07.** First live send verified (Resend id `3ff01a1f`, digest_runs #1, 4 outcome changes named); pushed, secrets set, weekday cron live. Running it found two more things — see below |
 | ~~Surfacing description diffs on outcome changes~~ | **Done 2026-09-07** |
 | ~~Sending the weekly agent substantive changes only, reformatting as a count~~ | **Done 2026-09-07** |
 
@@ -106,6 +106,18 @@ message, and a partial spend that could never escape its own `except`
 because it was assigned from a call that raised. The second is the 2026-09-03
 accounting hole reopened at a new site that carried an accurate comment
 saying it must not be. See `docs/decisions.md`, 2026-09-07.
+
+**Shipping step 12 found two faults nothing in the diff could show.** Every
+Tuesday's digest would have pulled the weekend back in — Monday reports
+Friday and so leaves `covered_until` at Saturday 00:00, which the catch-up
+test read as a missed run; every window assertion passed because each was
+written against a single call, and only simulating a week exposed it. And
+the synthesis history-skip fired CRITICAL on its first correct run, which
+would have failed `monitor.yml` every six hours for a fortnight over a
+condition no action can clear. Both fixed and mutation-checked; `/ops/status`
+now reports healthy. See `docs/decisions.md`, 2026-09-07.
+
+**All twelve steps are now built, deployed and verified against real data.**
 
 **One thing no amount of building shortens:** the weekly synthesis agent
 needs weeks of accumulated history before it can compare this week against

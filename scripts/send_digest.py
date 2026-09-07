@@ -95,21 +95,37 @@ def previous_weekday(now: datetime):
 def weekday_window(now: datetime, previous_until=None):
     """(since, until) for this run: one whole weekday, in UTC.
 
-    `previous_until` extends the window backwards when the last run did not
-    send — a failed Tuesday means Wednesday covers Tuesday AND Monday rather
-    than mailing Monday to nobody. It can never pull the window forward, so
-    the normal path is always exactly one day and the weekend is always
-    skipped.
+    `previous_until` extends the window backwards when a WEEKDAY was missed —
+    a failed Tuesday means Wednesday covers Tuesday and Monday rather than
+    mailing Monday to nobody. Such a recovery window can span a weekend, and
+    that is the right trade: two quiet days in a catch-up mail cost far less
+    than a working day that reached no inbox.
 
-    **The recovery path can span a weekend**, and that is deliberate: two
-    quiet days in a catch-up mail is a far smaller cost than a working day
-    that reached no inbox.
+    **The weekend gap is not a missed run**, and getting that wrong was a
+    real bug (caught by simulating a week before the first Tuesday ran).
+    Monday's digest covers Friday and therefore leaves `covered_until` at
+    Saturday 00:00 — which is always earlier than Tuesday's Monday 00:00, so
+    a naive `previous_until < since` treated every single Tuesday as a
+    recovery and pulled Saturday and Sunday back in. That is precisely the
+    weekend the whole design exists to drop, reappearing weekly.
+
+    So the comparison is against the covered_until a HEALTHY predecessor
+    would have left — the weekday before this one, plus a day — not against
+    this window's own start.
     """
     day = previous_weekday(now)
     until = datetime.combine(day + timedelta(days=1), time.min, tzinfo=timezone.utc)
     since = datetime.combine(day, time.min, tzinfo=timezone.utc)
-    if previous_until is not None and previous_until < since:
-        since = previous_until
+
+    if previous_until is not None:
+        healthy_previous = datetime.combine(
+            previous_weekday(datetime.combine(day, time.min, tzinfo=timezone.utc))
+            + timedelta(days=1),
+            time.min,
+            tzinfo=timezone.utc,
+        )
+        if previous_until < healthy_previous:
+            since = previous_until
     return since, until
 
 
@@ -210,6 +226,24 @@ def main():
     now = datetime.now(timezone.utc)
     previous = None if args.dry_run else last_covered_until(conn)
     since, until = weekday_window(now, previous)
+
+    # Already sent. A second run on the same day — a manual dispatch, or
+    # GitHub firing a schedule twice — would otherwise mail an identical
+    # digest, which is worse than an empty one: the reader cannot tell a
+    # duplicate from a day that genuinely repeated itself.
+    if previous is not None and previous >= until:
+        print(f"  Already covered up to {previous:%Y-%m-%d %H:%M} UTC — "
+              "nothing new to report, no mail sent.", flush=True)
+        update_run_record(
+            conn, run_id, covered_since=since, covered_until=previous,
+            changes_reported=0,
+            skipped_reason=(
+                "duplicate: this window was already sent by an earlier run"
+            ),
+        )
+        conn.close()
+        return
+
     days = window_days(since, until)
     if previous is None:
         print("  No previous digest on file — opening with one weekday.", flush=True)

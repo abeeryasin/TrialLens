@@ -4211,3 +4211,77 @@ failed run — the alarm worked. What it could not show was that the run had
 *cost* something, because the row said $0.00. A health surface that reads
 its own job's self-report inherits that report's bugs, and there is no
 independent check on spend short of the provider's own billing.
+
+## 2026-09-07 — Pushing it found two more things, both from watching it run
+
+Step 12's first live send worked (Resend id `3ff01a1f`, `digest_runs` #1,
+4 outcome changes named, `/ops/status` cleared its own "never completed"
+warning). The synthesis dispatch behaved exactly as designed —
+`SKIPPED: the record covers 0 complete prior windows... No call made`, at
+$0.00, clearing the critical alert from that morning's failure.
+
+Then two problems that only appear once the thing is actually running.
+
+**1. Every Tuesday would have leaked the weekend back in.**
+
+The window logic looked right in isolation and was tested that way. Feeding
+each run's `covered_until` into the next — a week's simulation rather than
+one call — showed this:
+
+    Fri run: covers Thu -> Fri  (1d)
+    Mon run: covers Fri -> Sat  (1d)
+    Tue run: covers Sat -> Tue  (3d)   <== the weekend, back again
+    Wed run: covers Tue -> Wed  (1d)
+
+Monday's digest reports Friday, so it leaves `covered_until` at **Saturday
+00:00**. That is always earlier than Tuesday's Monday 00:00, and the
+catch-up test `previous_until < since` therefore read the *deliberate*
+weekend gap as a missed run — every single week, pulling back exactly the
+two days the design exists to drop.
+
+The comparison has to be against what a **healthy predecessor** would have
+left (the weekday before this one, plus a day), not against this window's own
+start. Recovery still works: a genuinely missed Monday leaves `covered_until`
+at Friday 00:00, which *is* earlier than that, so Tuesday reaches back and
+catches Friday up.
+
+**The lesson is about the test, not the code.** Every window assertion
+passed, because each was written against a single call with a hand-chosen
+`previous_until`. Only feeding the output of one run into the next exposed
+it. Stateful cadences need a simulation, not a table of independent cases —
+there is now a test that walks Fri→Fri and asserts no window is ever longer
+than a day.
+
+A second guard came with it: a window already covered (`previous_until >=
+until`) sends nothing. Without it, a manual dispatch or a double-fired cron
+mails an identical digest, and a duplicate is worse than an empty one — the
+reader cannot tell it from a day that genuinely repeated.
+
+**2. A correct skip was failing the build every six hours.**
+
+The history precondition worked, and `work_skipped` fired at **CRITICAL**,
+which fails `monitor.yml`. The agent had done the right thing and the alarm
+went off — for a condition **no action can clear**. More prior weeks cannot
+be conjured; it resolves with calendar time. `monitor.yml` would have run red
+four times a day for a fortnight.
+
+That is the exact failure `scripts/check_ops_health.py`'s own docstring
+warns about: *"a workflow that goes red for something nobody needs to act on
+today is a workflow people learn to ignore, and then the one real alarm is
+ignored too."* The rule was written for the budget skip, where a human
+genuinely must decide something, and inherited by a skip where nobody can.
+
+Severity now splits on whether the skip is **actionable**, keyed on the
+reason prefix every writer already sets. `SELF_RESOLVING_SKIPS =
+{history, empty, duplicate}` are WARNING; **`budget` stays CRITICAL**, and so
+does any prefix nobody has classified — an allowlist, not a denylist, because
+an unconsidered skip should be louder than a considered one, never quieter.
+Quieter is not hidden: the alert is still reported, still on the System page.
+
+Both fixes mutation-checked (reverting either restores the exact live
+behaviour), and `/ops/status` now reports `healthy: True` with one warning.
+
+**What both have in common.** Neither was findable by reading the diff, and
+neither was a coding error — both were correct code meeting reality. The
+first needed a week simulated; the second needed the alarm actually to fire.
+Shipping is a test the test suite cannot run.

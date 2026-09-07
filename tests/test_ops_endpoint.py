@@ -19,6 +19,8 @@ Run: PYTHONPATH=. python3 -m pytest tests/test_ops_endpoint.py -v
 """
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from api.ops import CRITICAL, JOBS, WARNING, build_alerts
 from api.schemas import OpsBudget, OpsJob
 
@@ -364,3 +366,75 @@ def test_alerts_are_a_list_of_named_conditions_never_a_score():
     assert set(codes(alerts)) == {"run_stuck", "budget_exhausted", "no_tracked_conditions"}
     for alert in alerts:
         assert alert.detail and alert.title
+
+
+# ---------------------------------------------------------------------------
+# Which skips are worth failing a build for (2026-09-07).
+#
+# Found live, minutes after the history precondition shipped: the weekly
+# agent correctly declined to spend on a week it had no history to compare
+# against, `work_skipped` fired at CRITICAL, and monitor.yml would have gone
+# red every six hours for a fortnight over a condition no action can clear.
+# That is the failure this file's own subject warns about — an alarm nobody
+# can act on is an alarm everybody learns to skip.
+# ---------------------------------------------------------------------------
+
+def skipping(reason, name="synthesis"):
+    """Alerts for a run of jobs where one recorded `reason` as its skip.
+
+    Built from JOBS so a job absent from the two-job helper above (the
+    digest, added 2026-09-07) is still present here — the first draft
+    silently produced no digest job at all and the test failed on
+    StopIteration rather than on the thing it was checking."""
+    jobs = []
+    for spec in JOBS:
+        jobs.append(job(spec.name, last_skipped_reason=reason)
+                    if spec.name == name else job(spec.name))
+    return build_alerts(jobs, budget(), ["breast cancer"])
+
+
+def only(alerts, code):
+    return next(a for a in alerts if a.code == code)
+
+
+def test_a_budget_skip_still_fails_the_build():
+    """Unchanged, and the reason it must stay CRITICAL: a real week went
+    unexamined and a human has to decide whether to raise the ceiling or go
+    looking for the spend."""
+    alert = only(skipping("budget: the ceiling is spent, this week unexamined"),
+                 "work_skipped")
+    assert alert.severity == CRITICAL
+
+
+def test_a_skip_that_no_action_can_clear_is_only_a_warning():
+    """The live case. More prior weeks cannot be conjured by acting; the
+    condition passes on its own with calendar time."""
+    alert = only(skipping("history: the record covers 0 complete prior windows"),
+                 "work_skipped")
+    assert alert.severity == WARNING
+    assert "clears itself" in alert.detail
+
+
+@pytest.mark.parametrize("reason", [
+    "empty: no trial changed anything in this window, so no digest was sent",
+    "duplicate: this window was already sent by an earlier run",
+])
+def test_the_digests_own_skips_do_not_fail_the_build(reason):
+    """Both are the correct outcome, not a fault — and the digest runs five
+    times a week, so treating them as alarms would bury every real one."""
+    assert only(skipping(reason, "digest"), "work_skipped").severity == WARNING
+
+
+def test_an_unclassified_skip_stays_loud():
+    """The allowlist defaults to CRITICAL on purpose. A skip reason nobody
+    has thought about should be louder than one that has been, never
+    quieter — the reverse would let a new silent-failure mode in unnoticed."""
+    alert = only(skipping("something nobody has classified yet"), "work_skipped")
+    assert alert.severity == CRITICAL
+
+
+def test_a_self_resolving_skip_is_still_reported():
+    """Quieter is not hidden. The run did no work, and the System page and
+    /ops/status must both still say so."""
+    alerts = skipping("history: the record covers 0 complete prior windows")
+    assert "work_skipped" in codes(alerts)

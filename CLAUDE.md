@@ -64,7 +64,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **869 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **878 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -200,6 +200,22 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   a comment, and reopened at the new site. **The tell was the number, not the
   exception.** Where a value must survive an exception, return it — don't
   assign it from a call that may not return.
+- **A stateful cadence needs a simulation, not a table of cases.** Every
+  window assertion for the digest passed, each written against one call with
+  a hand-picked previous value. Feeding each run's output into the next
+  showed **every Tuesday pulling the weekend back in** — Monday's digest
+  reports Friday, so it leaves `covered_until` at Saturday 00:00, which is
+  always earlier than Tuesday's Monday 00:00, and the catch-up test read
+  that deliberate gap as a missed run (2026-09-07). Compare against what a
+  *healthy predecessor* would have left, not against this window's own start
+  — and walk a whole week in a test.
+- **An alarm nobody can act on trains people to ignore the ones they can.**
+  The synthesis history-skip fired CRITICAL and would have failed
+  `monitor.yml` every six hours for a fortnight over a condition that
+  resolves itself with calendar time. Skip severity now splits on whether a
+  human can *do* anything: `SELF_RESOLVING_SKIPS` are WARNING, `budget`
+  stays CRITICAL, and an unclassified prefix stays CRITICAL too — an
+  allowlist, so an unconsidered skip is never quieter than a considered one.
 - **A rolling window cannot exclude a weekend.** "Everything since the last
   run" necessarily spans Saturday and Sunday on a Monday, and clipping its
   start to Monday 00:00 silently drops everything filed after Friday

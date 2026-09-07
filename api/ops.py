@@ -95,6 +95,24 @@ class JobSpec:
         self.window_hours = max(168, cadence_hours * 4)
 
 
+# Skip reasons that no human action can clear, keyed by the prefix every
+# writer of `skipped_reason` already sets. These are reported as WARNING
+# rather than failing the build:
+#
+#   history   — the record cannot yet supply enough prior windows to compare
+#               against (scripts/run_synthesis.py). Resolves with calendar
+#               time; nothing can hurry it.
+#   empty     — the digest window held nothing, so no mail was sent
+#               (scripts/send_digest.py). The correct outcome, not a fault.
+#   duplicate — that window had already been sent by an earlier run.
+#
+# Deliberately a small allowlist rather than a denylist. "budget" is absent
+# on purpose: a run that skipped because the ceiling was spent means a real
+# week went unexamined and someone must decide what to do, so it stays
+# CRITICAL — as does any prefix nobody has classified yet.
+SELF_RESOLVING_SKIPS = {"history", "empty", "duplicate"}
+
+
 JOBS = [
     # Cadence and staleness are imported from api/watch.py, not restated:
     # the watch already had to decide when a missed check becomes an alarm
@@ -405,23 +423,36 @@ def build_alerts(jobs: List[OpsJob], budget: OpsBudget,
             ))
 
         if job.last_skipped_reason:
-            # CRITICAL, where a merely-exhausted budget is only a warning.
-            # The difference is whether the guard is holding or has started
-            # costing something: "no budget left" is the guard working, while
-            # "no budget left AND a real week went unexamined" means the
-            # system has quietly stopped doing what it claims. Only the second
-            # is worth failing a build for.
+            # A skip is worth failing a build for only when a human can DO
+            # something about it. "No budget left AND a real week went
+            # unexamined" means the system has quietly stopped doing what it
+            # claims, and someone must decide whether to raise the ceiling or
+            # find the spend — CRITICAL.
             #
-            # Self-clearing by construction — it reads the LATEST run, so the
-            # first run that completes its work without skipping removes it.
+            # A skip that no action can clear is a different animal, and
+            # firing the alarm on it is the failure this file's own docstring
+            # warns about: "a workflow that goes red for something nobody
+            # needs to act on today is a workflow people learn to ignore, and
+            # then the one real alarm is ignored too." The weekly agent
+            # declining to spend on a week it has no history to compare
+            # against is correct behaviour that resolves itself with calendar
+            # time — nothing can hurry it, and it would have held the build
+            # red every six hours for a fortnight (2026-09-07).
+            #
+            # Keyed on the reason's prefix, which every writer already sets.
+            # Unknown prefixes stay CRITICAL: a skip nobody has classified is
+            # louder than one that has been, never quieter.
+            self_resolving = job.last_skipped_reason.split(":", 1)[0] in SELF_RESOLVING_SKIPS
             alerts.append(OpsAlert(
                 code="work_skipped",
-                severity=CRITICAL,
+                severity=WARNING if self_resolving else CRITICAL,
                 title=f"The {job.name} job's last run could not do its work",
                 detail=(
                     f"{job.last_skipped_reason}. The run itself completed and "
                     "nothing is broken — but the work did not happen, which "
                     "from the outside looks exactly like a quiet week."
+                    + (" Nothing to act on: this clears itself once the "
+                       "condition passes." if self_resolving else "")
                 ),
                 job=job.name,
             ))
