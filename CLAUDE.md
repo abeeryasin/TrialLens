@@ -64,7 +64,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **878 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **892 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -157,8 +157,11 @@ substantive primary-outcome changes named individually (0-5 a day) over
 counts for everything else (65-136 trials a day). **Weekends are dropped and
 an empty window sends nothing**, which forced whole-weekday windows rather
 than a rolling 24 hours — Monday reports Friday. 52 free tests cover
-composition with no account and no mail sent. **Remaining: `RESEND_API_KEY`
-and `DIGEST_TO` in `.env.local` plus as repo secrets, and one live send.**
+composition with no account and no mail sent. **The first live send is
+verified** (Resend id `3ff01a1f`, `digest_runs` #1, 4 outcome changes named);
+secrets are set and the weekday cron is live. Running it found two more
+faults, both fixed the same day — see the stateful-cadence and
+alarm-actionability gotchas below.
 
 **Two live bugs in the weekly agent, found and fixed 2026-09-07** when its
 scheduled run failed for real. `run_synthesis()` now returns
@@ -208,6 +211,17 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   of it. The real-data half is not optional before a commit (it is the only
   thing that tests the SQL), it is just not the thing to run forty times
   while editing a docstring.
+- **A cache on a monitoring tool has to be classified per endpoint.** The
+  frontend cached nothing until 2026-09-07, so a Streamlit rerun re-issued a
+  page's whole read set — 43,842 measured bytes for one Investigate
+  interaction. The fix is an allowlist in `frontend/api_client.py`
+  (`CACHEABLE_PATHS`), not `@st.cache_data` on `get`: `/ops/status` exists to
+  say what is true *now*, and `/discover`'s live CT.gov fallback could hide a
+  trial registered minutes ago. **Any write clears every cached read** — a
+  tool that appears not to register a condition the user just added is worse
+  than one that costs bandwidth. Unclassified paths are never cached, and a
+  canary fails if a page reads a path in neither list, or a list carries an
+  entry no page reads.
 - **A stateful cadence needs a simulation, not a table of cases.** Every
   window assertion for the digest passed, each written against one call with
   a hand-picked previous value. Feeding each run's output into the next

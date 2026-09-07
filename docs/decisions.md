@@ -4329,3 +4329,94 @@ bandwidth. Caching here has to be per-endpoint, with the write paths exempt.
 MCP connector, which is unauthenticated in this session, so the remaining
 ~3.5 GB is not attributed. What is measured is the per-run cost and this
 session's share of it; the rest is stated as unknown rather than guessed.
+
+## 2026-09-07 — The frontend finally remembers something, per endpoint
+
+Yesterday's bandwidth measurement named a second amplifier and deliberately
+left it: the frontend had **no caching at all**, so Streamlit's script rerun
+on every widget interaction re-issued that page's whole read set. Fixed now,
+with the constraint that made it worth thinking about rather than
+one-lining.
+
+**What a rerun actually costs.** Measured against the live API, not
+estimated:
+
+| Endpoint | Bytes | Read by |
+|---|---:|---|
+| `/investigate` | 37,711 | Investigate, every rerun |
+| `/changes?limit=25` | 8,577 | Monitor, every rerun |
+| `/discover/{nct}` | 4,395 | Understand, every rerun |
+| `/investigate/landscape` | 3,604 | Investigate, every rerun |
+| `/explore/{nct}` | 2,733 | Explore, every rerun |
+| `/watch` | 2,500 | Home *and* Investigate |
+| `/ops/status` | 2,217 | System, Review |
+| `/studies/{nct}/amendments` | 1,718 | Understand |
+| `/changes/fields` | 1,058 | Monitor |
+| `/studies/{nct}/changes` | 1,113 | Understand |
+| `/tracked-conditions` | 27 | Monitor, Investigate |
+| `/synthesis/proposals` | 16 | Review |
+
+One Investigate rerun is **43,842 bytes** (`/investigate` +
+`/investigate/landscape` + `/watch` + `/tracked-conditions`, all four
+unconditional — Streamlit executes every tab body). Both of that page's tabs
+run whether or not you are looking at them, and a session is dozens of
+reruns.
+
+**Why an allowlist and not `@st.cache_data` on `get`.** A blanket cache is
+one line and it would have shipped a lie. Two endpoints exist precisely to
+say what is true *now*:
+
+- **`/ops/status`** is the health surface built in step 11. A five-minute-old
+  all-clear during an incident is the exact failure that step exists to
+  prevent, and it costs 2,217 bytes.
+- **`/discover`** (the search, not `/discover/{nct}`) has a live CT.gov
+  fallback, so a cached search could hide a trial registered minutes ago.
+  It also has no amplification to fix — Discover already holds its result in
+  `session_state`.
+- **`/synthesis/proposals`** is a work queue a human is actively changing,
+  and it measures 16 bytes. Nothing to buy.
+
+So: `CACHEABLE_PATHS` is an explicit list of eleven patterns, and anything
+unclassified is **not** cached. An endpoint added next month is slow by
+default, never silently stale by default — the same allowlist reasoning as
+`SELF_RESOLVING_SKIPS` in `check_ops_health.py`, for the same reason: the
+unconsidered case must not inherit the quieter behaviour.
+
+**A write clears everything, bluntly.** `post()` calls `clear_cache()` on
+success. The finer alternative — a map from each write path to the reads it
+invalidates — is one more table to forget an entry in, and a forgotten entry
+shows the user a page that ignored what they just did. That is not
+hypothetical here: Home's "+ Add" writes a tracked condition, and Monitor and
+Investigate both read the list back. Writes are rare; one full refetch on the
+next rerun is the cheap half of the trade.
+
+**TTL 300s against a 6-hour cron**, i.e. 1/72nd of the cadence that changes
+the underlying data. It cannot make a reader see a stale record; what it
+covers is one person's session of filter changes.
+
+**Evidence, at two levels.** 14 free tests (`tests/test_api_client_cache.py`)
+hold the policy, and five planted mutations were all caught — a write that
+does not clear, `/ops/status` added to the allowlist, `None` params kept,
+the `_is_cacheable` guard dropped, and params ignored in the key. The TTL
+test uses a 0.2s override rather than reading the constant, because a
+configured TTL that never fires looks identical from the outside.
+
+Then the part the unit tests structurally cannot show, since every existing
+page test stubs `api_client.get` and so bypasses the cache entirely: **three
+real `AppTest` runs of Home.py with `requests.get` counted instead — 1 HTTP
+GET, not 3 — and 2 after a write and a fourth rerun.** The cache does
+survive a Streamlit rerun, which is the only claim that matters and the one
+thing "it's decorated, so it works" would not have established.
+
+**One dead rule, found and deleted.** `UNCACHED_ON_PURPOSE` first listed
+`/health`, which no page reads — a rule that can never fire, the same shape
+as the unreachable `SUMMARY_ID_CAP` and the cap that could not bind. There is
+now a canary in both directions: every path the pages read must appear in one
+of the two lists, and every entry in those lists must match a path some page
+actually reads.
+
+**What this does not fix.** The saving is bounded by "one fetch per
+(endpoint, params) per five minutes", so changing the Investigate window
+still costs a fetch — correctly, because the answer is different. And the
+~3.5 GB of unattributed transfer from yesterday's entry is still
+unattributed; that needs Neon's own per-source breakdown.
