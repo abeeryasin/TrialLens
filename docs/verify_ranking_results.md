@@ -20,9 +20,13 @@ Every quality number the project has so far comes from synthetic fixtures
 that score 1.00 because they were built to. Until this protocol has been
 run once, "the ranking works" is an assumption.
 
-You (MBBS) are the domain expert this is waiting on. It takes about
-fifteen minutes and costs nothing beyond a ranking run you've already paid
-for.
+A clinician is the domain expert this is waiting on. It takes about
+fifteen minutes and costs nothing beyond a ranking run already paid for.
+
+**Answered for Investigate, 2026-09-07.** A clinician judged all 12
+substantive primary-outcome changes on file and called 9 of them worth a
+researcher's attention. The method below is what that reading followed; see
+`docs/decisions.md`, 2026-09-07.
 
 ---
 

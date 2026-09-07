@@ -1,5 +1,10 @@
 # Which nodes should Explore actually lead with?
 
+> **Acted on and shipped 2026-09-03/04 — sites lead, collaborators are an
+> attribute. Still live, not archived: §4b's UI requirements are cited by name
+> from three tests (`test_explore_page.py`, `test_explore_real_data.py`,
+> `test_sql_honesty_guards.py`).**
+
 **Decided 2026-09-03.** Written after the step 8 unit 2 extraction, in
 response to one question: *do researchers care about collaborations?*
 

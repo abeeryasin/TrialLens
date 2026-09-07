@@ -1,216 +1,68 @@
 # Roadmap — TrialLens
 
-Working document, not permanent — delete once the project is far enough
-along that this stops being useful. Time estimates are approximate
-active-build hours, assuming ~4 hrs/day; they don't include the ~2
-calendar weeks the review queue (step 9) needs to just sit and run
-before it produces real evaluation data, which can overlap with later
-steps if sequenced well. Total below (~73.5 hrs) lines up with the
-original ~70-75 hr estimate made during planning — a useful sanity
-check, not a coincidence to worry about.
+**All twelve steps are built, deployed and verified against real data.**
+This file is the per-step build record. The dated reasoning behind every
+decision is in [`decisions.md`](decisions.md); the rules that came out of the
+painful ones are in [`gotchas.md`](gotchas.md).
 
-**Update this file, and the "Current Status" line in `CLAUDE.md`, every
-time a step starts or finishes.**
+Original estimate ~70-75 active hours, which held.
 
-| # | Step | Status | Est. hours |
+## The twelve steps
+
+| # | Step | Done | What shipped |
 |---|---|---|---|
-| 1 | Schema + Ingestion | **Done** (2026-08-26/27) | — |
-| 2 | FastAPI layer (only door to the DB, read-only enforcement) | **Done** (2026-08-27) | — |
-| 3 | Scheduler/cron automation (turn `ingest.py` into the real Monitor job; cheap-filter/expensive-diff change detection) | **Done** (2026-08-28) — pushed to GitHub, real 6-hour cron live, first run verified end-to-end on GitHub's infrastructure (11,466 studies checked, 91 needed a full refetch, 102 real changes detected, 33 flagged out of scope, none deleted) | 5-7 |
-| 4 | Discover live-fallback (ad-hoc live query for an untracked topic) | **Done** (2026-08-28) — `GET /discover`, verified with a real tracked hit, a real "incidentally already stored" hit, and a real live CT.gov fallback. The under-reporting gap found the same day (an untracked condition with a few incidental local rows being reported as the complete picture) was **fixed 2026-08-29**, not left deferred: merged local+live with per-result source tags | 3-4 |
-| 5 | Frontend (Streamlit) — Discover/Understand surface, reads through FastAPI | **Done** (2026-08-29) — Discover (search, per-result tracked/live tagging, click-through) and Understand (full detail, eligibility as explicit source text, change history) both real, reading through `api_client.py` only. Also fixed the step-4 `/discover` gap along the way rather than deferring it further (see `docs/decisions.md`, 2026-08-29) | 8-10 |
-| 6 | Monitor page — aggregate recent-changes feed across all tracked trials, not just per-trial inside Understand (decided 2026-08-29: kept separate from the notifications/digest-email idea in step 12, not a replacement for it) | **Done** (2026-08-29/30) — `GET /changes` (own top-level router, real JOIN against `studies`, `idx_study_changes_detected_at`), `frontend/pages/3_Monitor.py`, Home wired to it. Extended 2026-08-30 after real use: 25-per-page paging, five filters (condition / change type / field / detected-within / trial-freshness), inline structured diffs, and honest rendering of stored values (see step 6b) | 3-4 |
-| 6b | Data-honesty follow-ups surfaced by actually using Monitor (2026-08-30) | **Done** — real `reconcile_scope` bug fixed (missing `DISTINCT` duplicated a change row per matching condition tag; one trial with 19 "breast cancer" AJCC stage tags logged 19 copies), 22 duplicate rows + 3 rows of leftover 2026-08-28 test data removed; `enrollment_type` (ACTUAL vs ESTIMATED) stored/diffed/displayed after finding 6,577 of 11,482 records report a target, not a headcount; deterministic drop reasons (`api/tracking.py`) that say "we can't tell" rather than guess; trial-content vs tracking change categories; readable booleans/timestamps | — |
-| 7 | AI ranking/evidence layer | **Built, measured, removed** (2026-08-30/09-01). Ten files deleted; `/rank` no longer exists on the app; 75 free tests pass. Four of five scored signals were filters wearing a score's costume; the one genuine judgment scales with volume, and this product is deliberately low-volume. Real cost was ~$0.019/trial, 3x the figure in the old notes. Kept: the deterministic scorers (no importer yet — they are waiting to become filter predicates), their live-database vocabulary guard, `paid_preflight.py`, `.ranking_cache/`, and every dated entry in `decisions.md`. What the removal plan itself got wrong is recorded there (2026-09-01) | 10-14 |
-| 7b | **What replaces it** — amendment history, the watch, the watch record (agreed 2026-09-01). See `docs/plan_after_ranking.md` | **In progress.** Unit 0 (removal) and **direction 1 (amendment history) done 2026-09-01/02** — `GET /studies/{nct_id}/amendments`, `api/amendments.py`, Understand leads with it, and `has_results` added after finding the parser never read it. **Direction 2 (the watch) done 2026-09-02** — `GET /watch`, `frontend/Home.py` rebuilt from `design/Main.dc.html`: the watch leads, the capability grid moved below it, and all three states (quiet / news / stopped) are real and tested. **Direction 3 (the watch record / `monitor_runs`) done 2026-09-02** — every scheduled run opens and closes a row, `/watch` reads `last_checked_at` from the newest completed one, and the proxy plus its `last_checked_source` label are gone. The empty-table blocker was solved by seeding one row from the old proxy rather than deferring. **Step 7b complete.** 278 tests pass | 6-8 |
-| 7c | **One AI call, scoped by measurement** — interpret the prose half of an amendment, in the scheduled job, never in the request path | **Live and genuinely storing, as of 2026-09-03/04.** It was **Done (2026-09-02)** on paper and stored **zero rows** for a day: the write used MySQL's `UPDATE ... ORDER BY ... LIMIT`, Postgres rejected it, and an `except` swallowed the error — the $0.168 was really spent and the interpretations were dropped. There was also no `ANTHROPIC_API_KEY` secret, so it could not run on the schedule at all. Key added 2026-09-03; first real batch found 14 prose changes and stored 8. Reading those 8 row by row then found two more faults: the no-change gate was an exact string match the model rephrased past, and `why_matters` was ~48% of output tokens carrying every weak line. Gate is now a structured `MEANINGFUL: yes|no`; `why_matters` dropped (§2 — a researcher judges significance, the model spots the change). Verified on the exact rows the old gate got wrong: **4 real calls, 4/4 agreement with a human reading**. Honest quality verdict on the first batch: **2 clearly valuable, 2 debatable, 4 reformatting**. Billing now reads `response.usage` instead of multiplying a constant, which exposed a third bug — "no change" calls were real money recorded as $0.00. Measured cost **~$0.00125/call**, not $0.004. Ceilings: $0.25 + 50 calls per run, **$1.00 per rolling 30 days**. **7 interpretations on file, and Understand renders all of them as of 2026-09-04** — `AmendedField.interpretation`, drawn by `labels.render_interpretation` with the model attribution inside the element and the diff still one click below. Note `primary_outcomes` is both a structured field and one of the three interpreted ones, and carries 5 of the 7. See `docs/decisions.md`, 2026-09-04 | 3-5 |
-| 8 | Knowledge graph (relationships between trials/sponsors/interventions, multi-hop queries) — Explore | **In progress.** **Unit 1 (shape) done 2026-09-02** — relational tables, not a graph database: the graph already exists in `studies`, and at 11,518 trials with 2-3 hop questions, index-free adjacency buys nothing a second sync path doesn't cost back. **Unit 2 (extraction) done 2026-09-03** — 6,207 organizations (lead sponsors and collaborators in ONE table; 887 names are both), 51,272 sites, 7,717 investigators, 14,468 intervention terms, 191,864 edges, all from stored `raw_json` with no CT.gov call. Nothing merged on purpose: 381 Madrid facility strings are 381 sites. Reconciliation against source counts failed twice and was right both times — once on snapshot staleness, once on insert-only edges outliving the record, which produced the `delisted_at` decision (stamp, never delete). 12 real-data tests, all 7 mutations caught. **Unit 2b (node ranking + site enrichment) done 2026-09-03** — an evidence review (`docs/plan_explore_nodes.md`) asked whether researchers actually care about collaborations and found the field is defined as covering funders *and* co-designers with no way to separate them, reaching only 37.4% of trials with 63% of those at degree 1; it is kept but demoted from a network to an attribute. Sites lead instead at 93.8%, so the fields the parser had dropped were backfilled from `raw_json` with no network call: 49,606 of 51,272 sites now carry coordinates and 40,011 live edges carry a per-site recruitment status (31,442 RECRUITING). Disputed values are stored as NULL and counted — 109 sites are reported at geoPoints up to 52 degrees apart. 18 real-data tests, 14/14 mutations caught. **Units 3a (endpoint) and 3b (page) done 2026-09-04** — `GET /explore/{nct_id}` and `frontend/pages/4_Explore.py`, built ahead of the merge and the ordering reversed deliberately: the merge fixes "381 Madrid facility strings are 381 sites", but no page had ever shown a site list, so it would have been a layer measured against nothing (the step 7 mistake). The page groups by country and city, where those variants collapse anyway. The endpoint answers where a trial runs (country/city rollups, three-way site status, unplaceable count, dropped locations), who runs it (sponsor, collaborators as an attribute, investigators, intervention terms, each with a two-hop "also on N trials"), and who else works in the space — trials reachable in two hops through a shared site, investigator or term, in three lists never fused into one score. Every capped list carries its real denominator. A planned shared-condition count was built and discarded the same hour: it printed "0 in common" for two breast cancer trials, because nothing is merged there either (7,808 condition strings over 32,701 rows) — replaced by the neighbour's own tags as text. 46 new tests, 9/9 planted mutations caught, though 5 only by the real-data half. **Unit 3 (the merge) done 2026-09-04** — `canonical_id` on sites, intervention_terms and investigators; a pointer, never a delete, so the unmerged baseline is still exactly on file and NULLing the column undoes it. Deterministic casefold+punctuation rule only. Scope was cut by measuring first: 2,395 site groups (3,033 rows), 650 term groups (783), 99 investigator groups (111), and **0 for organizations, which therefore got no column**. Sites merge on the (facility, city, country) triple — a mutation dropping city/country was caught by the script's abort guard at 8,856 cross-place merges, nothing committed. Visible through the endpoint: RxPONDER's site-neighbours 1,497 → 1,624, Letrozole's reach 114 → 125, and NCT01740427's 299 sites resolved to the 292 real places they are. Runs in `monitor.yml` after the backfill. **Step 8 complete** | 10-14 |
-| 9 | Multi-agent synthesis — Investigate | **Engine, endpoints and page done 2026-09-04.** `GET /investigate` (window findings) and `GET /investigate/landscape` (the corpus), `api/investigate.py`, `frontend/pages/5_Investigate.py`, Home's fifth card live. **All five capabilities now exist.** Deterministic, per sec. 5: every question has one correct answer, and external evidence said the same about the agent shape — a 3-agent pipeline costs ~2.9x a single agent's tokens and the findings payload is a few KB, so **one specialist agent, weekly, reading pre-computed findings**, ~$0.63/month inside the existing $1.00 ceiling. The headline finding, **primary-outcome changes**, was chosen from published literature rather than from what the columns allowed (31.7% prevalence, OR 1.82 with funding source, 16% effect-size inflation) — the validation step 7 never got. 17 outcome changes in the record, 5 after the trial's own primary completion date; normalisation de-escalates 9 as reformatting, including one on a trial with results posted past completion whose change was capitalisation. Flags are listed, never summed. **Then a human read the page and found nine things the tests did not** — including a categorical axis that thinned its labels and so reported 78 terminated trials where the figure is 237, and an enrolment chart whose linear axis made a 57% shortfall on a small trial invisible. Fixed, with the layout guarantee moved into `tests/test_charts.py` because a PNG export could not reproduce the fault. **The synthesis agent itself — built 2026-09-05.** `api/synthesis_agent.py` (hand-rolled Anthropic Messages API tool-use loop, claude-haiku-4-5, matching `api/prose_interpreter.py`'s existing style), `review_queue` + `synthesis_runs` tables (migrated onto the real `dev` database), `GET /synthesis/proposals`, `scripts/run_synthesis.py`, a separate weekly `synthesis.yml` cron (Monday 13:00 UTC, `ANTHROPIC_API_KEY`/`DATABASE_URL` secrets already on the repo from step 7c). See `docs/decisions.md`, 2026-09-05, for the nine build decisions. **First real run, same day: $0.1099, zero proposals** — not a silent-write bug like step 7c's first two: `/investigate` for `weeks_ago=2,3,4` returns 0/0/0/0 because real monitoring only started 2026-08-28, so the agent (correctly, per its own system prompt) had only one prior week to compare against and nothing yet to call a trend. One loose thread left open rather than guessed at: whether the agent considered and declined the one flagged lifecycle anomaly in that window as a standalone `single_trial_flag`, or never looked — resolves for free once more weekly history exists. See `docs/decisions.md`, 2026-09-05. **660 tests pass**. **The review UI, deferred while the queue held zero rows, was built 2026-09-06** — `POST /synthesis/proposals/{id}/review` (the API door's third and only other write) and `frontend/pages/7_Review.py`. Built when the gap became concrete rather than on a schedule: the first genuinely scheduled weekly run was one day away, and the agent had somewhere to file with nowhere to be read. The page refuses to rank by confidence (a label is the agent's statement about its evidence, not a priority), always shows the evidence, keeps dismissed proposals fully readable, and states an empty queue as a finding using the agent's own run record. `include_evidence` is off by default on the list endpoint because the agent reads it weekly and pays by the token. Verified by a live HTTP round trip against the real database — insert, list, accept (200), bad decision (400), missing id (404), deleted by explicit id | 8-10 |
-| 10 | Real deployment (Render, production env vars, staging-vs-production split, user-managed conditions) | **In progress, started 2026-09-05.** Platform: **Render**, not the roadmap's original Railway/Vercel candidates — Vercel ruled out by research (serverless, doesn't fit Streamlit's stateful WebSocket server or FastAPI's persistent DB connections); Railway Hobby costs less than Render's paid always-on tier but this project has no income behind it, so **Render free tier + a free UptimeRobot 5-min ping** (keeps both services from sleeping at $0/mo) won out over paying for either platform's paid tier. See `docs/decisions.md`, 2026-09-05. **Neon rename done**: `dev` (the real live database) → `production`; old empty `production` → `production-old-unused`; `sandbox` untouched. Verified live — same `DATABASE_URL` still connects post-rename. **Tracked conditions moved off `config/tracked_conditions.json` into a real `tracked_conditions` table** — `GET`/`POST /tracked-conditions`, a "+ Add" popover on Home.py, `scripts/run_monitor.py` reading the table directly. Verified live over HTTP, not just by test. `render.yaml` written (two services, no secrets in the file). **Live as of 2026-09-05**, both services on Render's free tier: `triallens-api` (`https://triallens-api.onrender.com`) and `triallens-frontend` (`https://triallens-frontend.onrender.com`). Verified end to end — every read endpoint, a full write round-trip (201/409/200), and a human loading the real page: watch headline with 11,461 trials, condition chips, and the Investigate charts all rendering. **Dependencies pinned** (`requirements.txt` full 63-package closure + `.python-version` 3.9.6) after the first deploy silently resolved Python 3.14/streamlit 1.63/pandas 3.0 against a suite that runs on 3.9/1.50/2.3; the rebuild confirmed `cp39` wheels and exact version matches, so deployed now equals tested. **Two real incidents, both in `docs/decisions.md`:** a misconfigured `API_BASE_URL` put the live database password on a public page via an error message (fixed in `api_client.py`, credential now never echoed; password rotated), and a `LIKE '__%'` cleanup wiped the `tracked_conditions` registry because `_` is a SQL wildcard (restored within seconds). **Neon's `Default` branch flag moved onto `production` 2026-09-06**, so nothing picking the default branch lands on the empty old one; the branch both URLs reach is `br-fancy-bird-ay7zb0sb` (identifier, not a credential). **Step 10 complete 2026-09-07** — UptimeRobot keep-warm pings live on both services (free tier, 5-minute interval). The API monitor had to be a **keyword** monitor, not HTTP: UptimeRobot's HTTP monitors send HEAD by default and FastAPI's `@app.get("/health")` returns 405 to HEAD, so it reported a permanent false outage while the service answered in 0.4s. Changing the HTTP method and accepting 405 are both premium-only; a keyword monitor sends GET and additionally asserts the body says `ok`, which is the stronger check. Streamlit's `/_stcore/health` accepts HEAD, so the frontend monitor was green throughout — that asymmetry was what identified the cause. See `docs/decisions.md`, 2026-09-06. | 4-6 |
-| 11 | Autonomous-ops hardening (guardrails, safety monitoring, escalation protocol, observability) | **Done (2026-09-06).** The gap was never "a job crashed" — a crash is loud. It was **a job that finishes green while doing nothing**, which this project has been in twice (step 7c storing zero rows for a day inside a caught exception; the `LIKE '__%'` cleanup emptying `tracked_conditions`, which would have produced a clean run record checking zero trials). Four parts: **(1)** `monitor_runs.error` / `synthesis_runs.error` — a third state, "finished, but part of me broke"; `run_prose_interpretation()` now returns `(spend, error)` so the *reason* survives the exception, not just the money. **(2)** `api/safe_errors.py` — the 2026-09-05 credential leak's second door (cron exception → DB column → endpoint → page), scrubbing by exact secret value *and* by shape; 12 tests, mutation-checked both directions (3 killed / 1 killed). **(3)** `GET /ops/status` — deterministic (sec. 5), a list of named alerts each carrying its measurement, never a summed score (sec. 3). Every rule is a real incident. Severity split so the alarm keeps meaning something: a stale monitor is critical, a stale synthesis agent a warning, and **zero proposals filed is not a fault at all**. **(4)** `scripts/check_ops_health.py` in `monitor.yml` — fails the workflow on a critical alert, so GitHub's own notification is the escalation: no email provider, no account, no extra secret. Plus `frontend/pages/6_System.py`. **Live data corrected an assumption on the first call**: 17 monitor runs against 13 scheduled slots (dispatches the run record cannot distinguish), not the expected under-run — and the denominator is measured from each job's first run, since dividing a 28-day window by a weekly cadence invented a 75% miss rate out of history that never existed. Also caught a test passing *through* an exception path. **54 new tests; 728 pass.** See `docs/decisions.md`, 2026-09-06 | 4-6 |
-| 12 | Notifications (Resend daily digest, tied to Monitor) | **Built 2026-09-07, awaiting one live send.** `api/digest.py` (composition, 52 free tests — no network, no account, no mail), `scripts/send_digest.py`, `digest_runs` + a third `JobSpec` on `/ops/status`, and a weekday `digest.yml` cron. **No domain needed**: Resend's shared `onboarding@resend.dev` sender can only deliver to the account owner's own address, which is exactly this product's shape. Leads with substantive primary-outcome changes named individually (0-5 a day, the readable volume) over counts for everything else (65-136 trials a day, which nobody reads). **Weekends dropped and no empty mail sent**, both asked for during the build — which forced whole-weekday windows rather than a rolling 24 hours, since "since Friday 07:00" necessarily contains the weekend and clipping it would drop a working day. Monday reports Friday. Remaining: the user's `RESEND_API_KEY`/`DIGEST_TO` and one real send | 2-3 |
+| 1 | Schema + ingestion | 2026-08-26/27 | `scripts/ingest.py`, `studies`/`study_conditions`, 11,415 studies from two conditions chosen on real research-interest data |
+| 2 | FastAPI layer | 2026-08-27 | The only door to the database. Read-only enforced by a `SELECT`-only Postgres role, verified by a rejected `UPDATE` |
+| 3 | Scheduler / cron | 2026-08-28 | `monitor.yml`, 6-hourly. Cheap-filter/expensive-diff change detection, `study_changes`, and a no-`DELETE` guardrail |
+| 4 | Discover live-fallback | 2026-08-28/29 | `GET /discover`. The under-reporting gap found the same day was fixed, not deferred: merged local+live with per-result source tags |
+| 5 | Frontend (Streamlit) | 2026-08-29 | Discover + Understand, reading through `api_client.py` only |
+| 6 | Monitor page | 2026-08-29/30 | `GET /changes`, pagination, five filters, inline diffs, and an honesty pass on labels, drop reasons and enrollment type |
+| 7 | AI ranking/evidence layer | **Built, measured, removed** 2026-08-30/09-01 | Ten files deleted. Four of five scored signals were filters wearing a score's costume; real cost was ~$0.019/trial, 3x the figure in the old notes. What the removal plan itself got wrong is recorded in `decisions.md` |
+| 7b | What replaced it | 2026-09-01/02 | Amendment history (`GET /studies/{id}/amendments`), the watch (`GET /watch`, Home rebuilt), and the watch record (`monitor_runs`) |
+| 7c | One AI call, scoped by measurement | 2026-09-03/04 | `api/prose_interpreter.py`. Interprets the prose half of an amendment, in the scheduled job, never in the request path. Measured ~$0.00125/call; ceilings $0.25 + 50 calls per run, $1.00 per rolling 30 days |
+| 8 | Knowledge graph — Explore | 2026-09-02/04 | Relational tables, not a graph database. 6,207 organizations, 51,272 sites, 7,717 investigators, 14,468 intervention terms, **191,864 edges**, all from stored `raw_json` with no CT.gov call. Then site enrichment, a deterministic canonical merge, `GET /explore/{nct_id}` and the page |
+| 9 | Synthesis — Investigate | 2026-09-04/05 | `GET /investigate` + `/landscape` + `/summary`, the page, and the weekly agent (`synthesis.yml`) filing into `review_queue`. The review UI followed 2026-09-06 |
+| 10 | Real deployment | 2026-09-05/07 | Render free tier, both services live, Neon `dev`→`production` rename finally landed, tracked conditions moved into a database table, dependencies pinned, UptimeRobot keep-warm pings |
+| 11 | Autonomous-ops hardening | 2026-09-06 | `GET /ops/status`, the `error` third state on every run table, `api/safe_errors.py`, `scripts/check_ops_health.py` failing the workflow on a critical alert, and `6_System.py` |
+| 12 | Notifications | 2026-09-07 | `api/digest.py`, `scripts/send_digest.py`, `digest_runs`, weekday `digest.yml`. First live send verified (Resend id `3ff01a1f`) |
 
-**Total estimate: ~64-83 active hours** (midpoint ~73.5), plus the
-unavoidable ~2-week review-queue running time noted above.
+## Work that came after the table
 
-**What actually remains, as of 2026-09-07.** Steps 1-11 are done and
-deployed; only step 12 is unstarted on the table above. Two further items
-came out of the 2026-09-07 clinician review and are not table rows:
-
-| Remaining work | Estimate |
+| | |
 |---|---|
-| ~~Step 12 — notifications (Resend daily digest)~~ | **Done 2026-09-07.** First live send verified (Resend id `3ff01a1f`, digest_runs #1, 4 outcome changes named); pushed, secrets set, weekday cron live. Running it found two more things — see below |
-| ~~Surfacing description diffs on outcome changes~~ | **Done 2026-09-07** |
-| ~~Sending the weekly agent substantive changes only, reformatting as a count~~ | **Done 2026-09-07** |
-| ~~Per-endpoint frontend caching (the second bandwidth amplifier, named and deferred on 2026-09-07)~~ | **Done 2026-09-07.** `CACHEABLE_PATHS` in `frontend/api_client.py` — an allowlist, 300s TTL, every write clearing every cached read; `/ops/status` and `/discover` deliberately live. One Investigate rerun was 43,842 measured bytes and is now free within the window; proved by three real `AppTest` reruns of Home issuing one HTTP GET, not three. 14 free tests, 5/5 mutations caught |
-| ~~Removing a tracked condition~~ | **Done 2026-09-08.** `DELETE /tracked-conditions/{condition}` + a two-click control on Home. Needed `study_tracked_conditions` first — the old substring link between a watched term and CT.gov's own condition strings missed **2,173 of 11,453 in-scope trials (19%)**, so a removal built on it would have stranded them as watched-by-nothing. Untracks rather than deletes (the 2026-08-28 rule); reports untracked / kept / unattributed. 10 free + 6 rollback-only real-data tests; refusals verified over HTTP against the live database |
+| Clinician review of real output | 2026-09-07 — all 12 substantive primary-outcome changes judged, 9 of 12 worth a researcher's attention. Found three blind spots, all fixed the same day |
+| Observation windows compared | 2026-09-07 |
+| Endpoint descriptions compared, three change categories | 2026-09-07 |
+| Agent payload cut 89.7% (`/investigate/summary`) | 2026-09-07 |
+| Per-endpoint frontend caching | 2026-09-07 |
+| Removing a tracked condition | 2026-09-08 — needed `study_tracked_conditions` first; the old substring link missed 19% of in-scope trials |
+| Drift-check cadence moved off every tick | 2026-09-08 — the unattended job was spending ~1.6 GB of the Neon transfer allowance |
 
-**Both 2026-09-07 follow-ons are closed, and closing them found a third
-thing.** Descriptions are compared now (`outcome_descriptions`,
-`describe_description_move`), and only an *edited* or *deleted* definition
-escalates a change out of the reformatting bucket — an added one does not,
-because you cannot diff against silence and the clinician dismissed exactly
-that pattern twice. Live effect: **wording_only 8 → 3, substantive 14 →
-19**, and the honest read of those five is three real, two trivial
-("(0-10)" → "(0-10 scale)"). The weekly agent now reads substantive changes
-only, with the counts unchanged and `reformatting_listed` stating the
-filter in the payload.
+## What is not built, and why
 
-**Then two corrections from reading it back, same day.** "Reformatting
-only" was a false label for a change whose definition was *filled in* —
-nothing was reformatted, a fact appeared that was not there before, and the
-binary rule could not say so even when it happened after results were known.
-There are three categories now (`substantive` 19 / `entry_completed` 2 /
-`reformatting` 1), each keeping its own milestone flags so the reviewer
-judges rather than the filter deciding. And the weekly agent's cost was
-measured rather than argued: one `/investigate` response is 39,972
-characters of which 99.3% is per-trial reading lists built for a human to
-click, re-sent on every later turn because the Messages API is stateless.
-`GET /investigate/summary` is 4,099 characters — **89.7% smaller, an 84% cut
-to the loop's input cost** — and a history precondition now refuses to buy a
-foregone conclusion, which is what the first live run's $0.1099 bought.
+- **Per-user accounts.** Deliberately rejected, not deferred. Auth is
+  undifferentiated work demonstrating none of the skills this project was
+  chosen to practise, and a reviewer forced to sign up before seeing
+  anything usually leaves. A watchlist with no login would give the
+  interesting half.
+- **The relevance column** (`plan_relevance_column.md`). Deferred, gated on
+  a real complaint that has not arrived.
+- **Literature Q&A per trial.** Logged since 2026-08-26, with the technical
+  reason finally recorded 2026-09-08: the other project it would connect to
+  has no HTTP door and local-disk storage, so this is a new project rather
+  than an integration.
+- **A synonym-aware scope-drop query.** The 19% attribution blind spot is
+  fixed in one direction only — a synonym-tagged trial still cannot age out
+  of scope. Measured and recorded, not yet changed, because switching that
+  query would move live rows.
+- **Prompt caching for the weekly agent.** Verified applicable and deferred:
+  Haiku 4.5 has the highest minimum cacheable prefix of any current model
+  (4,096 tokens) and this agent's static prefix is 1,918, so the obvious
+  breakpoint would cache nothing, silently.
 
-The third thing: **the reformatting expander built that morning was
-rendering empty on the live record.** A single cap of 8 over a
-substantive-first sort pushed the whole bucket off the end, so the page
-counted "3 reformatting only" above something a reader could not open — the
-four hidden changes were hidden again within hours, by a different
-mechanism, and every test passed because both suites asserted on the
-classification and never on what survived the cap. Capped per bucket now,
-with the "Showing the first 8 of 19" line every other capped list on that
-page already had. See `docs/decisions.md`, 2026-09-07.
+## The one thing no amount of building shortens
 
-**That estimate held.** The two follow-ons were budgeted 2-3 hours combined
-and the work landed there — but only after the description rule was
-*measured* against the live record rather than reasoned about, which is
-what caught the naive version (any description difference escalates) taking
-reformatting from 8 to 1. And true to the pattern below, closing them
-generated a third item that was on no plan: the empty expander.
-
-**Read the rest as ~8-12 hours, not ~4-6, for two reasons this project has
-evidence for.** External services cost far more than their code: step 10 was
-budgeted 4-6 hours and the Render deployment alone took most of a night,
-almost none of it writing code — card verification, an env var pasted as a
-bare password twice, a monitor sending the wrong HTTP verb. Step 12 needs a
-Resend account and email deliverability, which is the same shape. And every
-step here has generated follow-on work from real use: 6 → 6b, 7 → 7b/7c,
-9 → the agent and the review UI, 10 → the 2026-09-07 blind-spot fixes.
-Historically that adds 50-100%. It is the design working, not scope creep —
-the most valuable work of 2026-09-07 (auditing all 22 outcome changes) was
-on no plan at all.
-
-**The weekly agent's run #2 failed live on 2026-09-07**, on code predating
-that day's work, and cost more than the run: it made five paid calls, died on
-the sixth with `messages.8: user messages must have non-empty content`, and
-recorded **$0.0000 spent** against the rolling ceiling meant to bound it.
-Two bugs, both fixed — an empty tool-result list being sent as a user
-message, and a partial spend that could never escape its own `except`
-because it was assigned from a call that raised. The second is the 2026-09-03
-accounting hole reopened at a new site that carried an accurate comment
-saying it must not be. See `docs/decisions.md`, 2026-09-07.
-
-**Shipping step 12 found two faults nothing in the diff could show.** Every
-Tuesday's digest would have pulled the weekend back in — Monday reports
-Friday and so leaves `covered_until` at Saturday 00:00, which the catch-up
-test read as a missed run; every window assertion passed because each was
-written against a single call, and only simulating a week exposed it. And
-the synthesis history-skip fired CRITICAL on its first correct run, which
-would have failed `monitor.yml` every six hours for a fortnight over a
-condition no action can clear. Both fixed and mutation-checked; `/ops/status`
-now reports healthy. See `docs/decisions.md`, 2026-09-07.
-
-**All twelve steps are now built, deployed and verified against real data.**
-
-**One thing no amount of building shortens:** the weekly synthesis agent
-needs weeks of accumulated history before it can compare this week against
-prior ones. Its first run filed zero proposals for exactly that reason.
-Calendar time, not work time.
-
-**Where things stand (2026-09-02):** steps 1-6 are done and running for
-real — the 6-hour GitHub Actions cron fires reliably on its own, and three
-of the five capabilities (Discover, Understand, Monitor) work end to end
-against real ClinicalTrials.gov data. Explore and Investigate aren't built
-yet. **Steps 7b and 7c are done** — the watch leads Home.py now, amendment
-history shows in Understand, enrollment numbers are named instead of gestured
-at, and one AI call interprets the prose half of an amendment in the
-scheduled job. 283 tests pass.
-
-**Step 7 (the ranking layer) was built, measured, and removed** on 2026-09-01.
-Four of its five scored signals were filters wearing a score's costume, and
-the one real judgment scales with volume. (**The "~17 changed trials a week"
-figure once cited here was wrong by ~20x** — measured 2026-09-04, the real
-rate is ~370 trials amended per week. The removal decision stands on the
-four-of-five-signals argument, which is unaffected; the volume leg is not
-true and should not be re-cited. See `docs/decisions.md`, 2026-09-04.) No clinician ever read a real ranked result — the synthetic
-harness scored 15/15 on ties resolved by fixture order, while published
-systems report 0.32–0.45. The deterministic scorers survive as future filter
-predicates; the removal commit stays in history as a documented dead end.
-
-**Step 7b three directions** (deferred from step 8 for timeline, 2026-09-01):
-
-1. **Amendment history** — DONE. `GET /studies/{nct_id}/amendments` groups
-   changes into amendments, `api/amendments.py` describes what each did —
-   dates, enrollment counts with numbers now shown, results posted.
-
-2. **The watch** — DONE. `GET /watch` + rebuilt Home.py. Three states (quiet /
-   news / stopped), all tested via AppTest. The quiet week stated as a
-   finding with zeros shown, not omitted. The alarm replaces the page, not
-   sits above it. `last_checked_at` is a labelled proxy until direction 3.
-
-3. **Watch record** (`monitor_runs` table) — DONE 2026-09-02, and not deferred
-   to step 10 after all. The blocker was that an empty run table reads as
-   "never checked" and fires the alarm on a healthy watch. Resolved by
-   noticing the proxy it replaces IS evidence a run completed:
-   `scripts/backfill_monitor_runs.py` seeds one row from
-   `max(studies.last_matched_at)`, the cron takes over, and
-   `last_checked_source` is deleted because the value is a record now rather
-   than a proxy needing a label. Verified live — `/watch` healthy off run #1.
-
-**Where to pick up (after 2026-09-04).** The graph is visible now — Explore
-is live and the capability grid's fifth card opens a real page. Step 7c's seven prose
-interpretations are visible too, rendered in Understand with the model
-attribution inside the element and the diff still one click below.
-
-Unit 3, the merge, is done: the empirical
-question was answered by measuring rather than by architecture (2,395 site
-groups, 3,033 rows collapsed, and 54 trial-site pairs that really did show
-one hospital twice), and organizations turned out to have zero duplicates
-so they got no column at all.
-
-What remains: **step 9, Investigate** — the last unbuilt capability.
-
-416 tests pass.
-
-**Step 8, Explore, is built through the page** — units 1 (shape), 2
-(extraction), 2b (node ranking + site enrichment) and 3a/3b (endpoint +
-page) are done; see the step 8 row above and `docs/decisions.md`,
-2026-09-03 and 2026-09-04. Unit 3 (the merge) is the remaining piece.
-
-**Explore should lead with sites, then investigators — not collaborators.**
-Decided 2026-09-03 from external evidence rather than taste, and written up
-in `docs/plan_explore_nodes.md` with what would overturn it. The short
-version: CT.gov defines "collaborator" as any organization providing support
-*including funding*, so NCI (480 trials) and NIDDK (264) dominate the field
-and an edge cannot distinguish a co-designer from a cheque; it also
-explicitly excludes individuals, so it cannot answer "who else works here"
-when *who* means a person. Sites reach 93.8% of trials and answer the
-question clinicians currently phone sites about. This is the validation step
-7 never got — and it is still second-hand: no clinician has looked at
-TrialLens, and `docs/verify_ranking_results.md` remains unanswered.
-
-**Two live-only bugs were fixed on 2026-09-03**, both found by dispatching
-the monitor workflow rather than waiting for a tick. The scheduled job had
-been passing `API_BASE_URL` but not `DATABASE_URL`, so `monitor_runs` had
-never been written by a real run; and step 7c's storage used MySQL's
-`UPDATE ... ORDER BY ... LIMIT`, which Postgres rejects, so
-`prose_interpretation` held zero rows despite the $0.168 spent. **Step 7c
-still cannot run on the schedule** — there is no `ANTHROPIC_API_KEY` secret
-on the repo, only the two database URLs.
-
-**Also this session:** enrollment switches name both numbers now (not just
-"replaced by a real count"). This required walking a trial's history
-backwards — a count move establishes which count was true AT THAT AMENDMENT,
-not today's value (CLAUDE.md §2). The record footer shows "212 trial
-updates · 498 field changes" concretely. Conditions stay hardcoded in
-`config/` for now — moving to the database so users can add them through
-the UI is step 10 work (~2–3 hrs).
+The weekly synthesis agent needs real weeks. Its first run filed zero
+proposals — correctly, because monitoring had been live for eight days and
+the agent's own prompt forbids calling one week a trend. A history
+precondition now refuses to spend money on that foregone conclusion.

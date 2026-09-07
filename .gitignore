@@ -10,6 +10,7 @@ course-alignment.md
 .agents/
 .claude/skills/
 .claude/hooks/
+.claude/worktrees/
 skills-lock.json
 .ranking_cache/
 

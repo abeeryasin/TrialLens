@@ -1,5 +1,10 @@
 # What replaces the ranking layer — step 7b
 
+> **Superseded — all three directions were built and shipped 2026-09-01/02
+> (amendment history, the watch, the watch record). Kept as the record of the
+> argument for what replaced ranking; what actually got built is in
+> `docs/decisions.md`, 2026-09-02.**
+
 **Written 2026-09-01, split the same day.** Supersedes the ranking layer
 built in step 7, which was measured, disproved, and deleted on 2026-09-01.
 This is roadmap **step 7b**, not step 8 — step 8 is the knowledge graph.

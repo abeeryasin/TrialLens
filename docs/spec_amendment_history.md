@@ -1,5 +1,10 @@
 # Spec — amendment history (step 7b, direction 1)
 
+> **Superseded — built and shipped 2026-09-02, and extended repeatedly since
+> (outcome windows, descriptions and three change categories, 2026-09-07).
+> Kept as the record of what was specified before it was built; the current
+> behaviour lives in `api/amendments.py` and `docs/decisions.md`.**
+
 **Written 2026-09-01.** The first of the three directions in
 `docs/plan_after_ranking.md`. No model, no new API cost, no new external
 dependency. Every number below was queried from the live `dev` database on
