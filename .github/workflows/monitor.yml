@@ -14,7 +14,12 @@ name: Monitor tracked trials
 on:
   schedule:
     - cron: "0 */6 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      drift_checks:
+        description: "Also run the upstream data-drift checks (~56 MB of Neon transfer)"
+        type: boolean
+        default: false
 
 jobs:
   monitor:
@@ -121,8 +126,10 @@ jobs:
       # Upstream data does not drift on a six-hour cadence — CT.gov posting a
       # thirteenth intervention type is a weekly-to-monthly event. Halving it
       # to the 00:0x and 12:0x ticks costs at most 12 hours of detection
-      # latency and saves ~112 MB a day (224 -> 112). A manual dispatch always
-      # runs it, so the check is one button away when a run looks suspicious.
+      # latency and saves ~112 MB a day (224 -> 112). A manual dispatch runs
+      # it only when asked (`drift_checks: true`), because the usual reason to
+      # dispatch this job is to make the INGEST run now — paying 56 MB for
+      # drift checks nobody asked for would put the cost straight back.
       #
       # `if: always()` so it still runs when the ingest above failed — a
       # failed ingest is exactly when you want to know whether the data
@@ -137,14 +144,14 @@ jobs:
           # The 00 and 12 ticks. 01 and 13 are accepted too, so a scheduler
           # running late (00:03 is normal, and GitHub can be far later under
           # load) does not silently skip half a day's checks.
-          case "${{ github.event_name }}:$HOUR" in
-            workflow_dispatch:*|*:00|*:01|*:12|*:13) ;;
+          case "${{ github.event.inputs.drift_checks }}:$HOUR" in
+            true:*|*:00|*:01|*:12|*:13) ;;
             *)
               echo "Skipping drift checks: they run twice a day, on the 00:0x"
               echo "and 12:0x UTC ticks (now ${HOUR}:xx). The real-data suite"
               echo "pulls ~56 MB from Neon; four a day is ~224 MB against a"
-              echo "5 GB monthly allowance. Dispatch this workflow manually to"
-              echo "force a drift check."
+              echo "5 GB monthly allowance. To force one, dispatch this"
+              echo "workflow with drift_checks = true."
               exit 0
               ;;
           esac

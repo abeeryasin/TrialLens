@@ -4583,6 +4583,13 @@ before shipping, because a `case` pattern that quietly matches nothing would
 turn this into "drift checks never run again" — the same silence this
 project keeps having to design against.
 
+**And the escape hatch had the same bug in miniature.** The first cut ran
+drift checks on *every* manual dispatch — but the usual reason to dispatch
+this job is to make the ingest run now, so "force the checks" would have
+charged 56 MB to every dispatch made for an unrelated reason. It is an
+explicit `drift_checks` input now, default false. A cost control that fires
+when nobody asked for it is how the cost comes back.
+
 **What still is not attributed.** Local runs plus the cron account for
 ~2 GB of the ~4.1 GB. The rest needs Neon's own per-source breakdown, which
 needs the MCP connector authorised. Stated as unknown, again, rather than
