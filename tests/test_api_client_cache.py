@@ -154,6 +154,25 @@ class TestWhatTheCacheMustNeverHide:
         api.get("/tracked-conditions")
         assert len(calls) == 2, "the read after a write must reach the API"
 
+    def test_a_delete_clears_every_cached_read_too(self, client):
+        """DELETE /tracked-conditions is a write like any other. Added with
+        the verb itself, because a cache invalidation rule that covers only
+        the verbs that existed when it was written is the shape of bug this
+        file exists to prevent."""
+        api, calls = client()
+
+        api.get("/tracked-conditions")
+        api.get("/tracked-conditions")
+        assert len(calls) == 1
+
+        api.requests.delete = lambda url, params=None, timeout=None: Response(
+            {"condition": "obesity", "trials_untracked": 3901}
+        )
+        api.delete("/tracked-conditions/obesity")
+
+        api.get("/tracked-conditions")
+        assert len(calls) == 2
+
     def test_a_failed_read_is_not_cached(self, client):
         """An API blip must not be sticky for five minutes. st.cache_data
         stores return values, not exceptions — this holds that, because the
@@ -278,3 +297,4 @@ class TestEveryPathThePagesReadIsClassified:
 
         overlap = set(api_client.CACHEABLE_PATHS) & set(api_client.UNCACHED_ON_PURPOSE)
         assert not overlap, overlap
+

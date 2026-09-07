@@ -25,10 +25,11 @@ three of them had already drifted by the next morning, which is the whole
 argument for reading them live.
 """
 from datetime import date
+from urllib.parse import quote
 
 import streamlit as st
 
-from api_client import ApiError, get, post
+from api_client import ApiError, delete, get, post
 from labels import (
     FIELD_LABELS,
     format_detected_at,
@@ -166,7 +167,7 @@ except ApiError as exc:
 
 conditions = watch["conditions"]
 chips = "".join(tag(c) for c in conditions) if conditions else tag("nothing yet")
-header_row, add_control = st.columns([8, 1])
+header_row, add_control, remove_control = st.columns([7, 1, 1])
 with header_row:
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
@@ -207,6 +208,70 @@ with add_control:
                         st.warning(f"‘{stripped}’ is already tracked.")
                     else:
                         st.error(str(exc))
+
+with remove_control:
+    # The obvious other half of "+ Add", built 2026-09-08 — and it needed an
+    # attribution table first, because "the trials associated with this
+    # condition" was not something the record could answer (db/schema.sql,
+    # study_tracked_conditions). Two clicks, not one: this stops trials being
+    # watched, and the second click is where the page says how many.
+    with st.popover("Remove"):
+        if not conditions:
+            st.caption("Nothing is being watched yet.")
+        else:
+            going = st.selectbox(
+                "Condition", conditions, key="remove_condition_choice",
+                label_visibility="collapsed",
+            )
+            st.caption(
+                "Trials only this condition brings in stop being watched. "
+                "Their record and history stay — re-add the condition and the "
+                "next Monitor run resumes them."
+            )
+            if st.session_state.get("remove_condition_armed") != going:
+                if st.button(f"Stop watching ‘{going}’", key="remove_condition_arm"):
+                    st.session_state["remove_condition_armed"] = going
+                    st.rerun()
+            else:
+                st.warning(f"Stop watching ‘{going}’?")
+                confirm, cancel = st.columns(2)
+                if confirm.button("Yes, stop", key="remove_condition_confirm"):
+                    try:
+                        result = delete(f"/tracked-conditions/{quote(going, safe='')}")
+                    except ApiError as exc:
+                        # 409 carries a written-for-a-human reason: the last
+                        # condition on the list, or no attribution recorded
+                        # yet. Shown as-is rather than reworded into a
+                        # generic failure.
+                        if exc.status_code == 409:
+                            st.warning(str(exc))
+                        else:
+                            st.error(str(exc))
+                        st.session_state.pop("remove_condition_armed", None)
+                    else:
+                        st.session_state.pop("remove_condition_armed", None)
+                        kept = result["trials_kept_for_another_condition"]
+                        message = (
+                            f"Stopped watching ‘{result['condition']}’. "
+                            f"{result['trials_untracked']:,} trials are no longer "
+                            "watched"
+                        )
+                        message += (
+                            f"; {kept:,} stay because another watched condition "
+                            "also brings them in." if kept else "."
+                        )
+                        st.success(message)
+                        if result["trials_unattributed"]:
+                            st.caption(
+                                f"{result['trials_unattributed']:,} trials in scope "
+                                "are not attributed to any watched condition yet, so "
+                                "this removal could not reason about them — the next "
+                                "Monitor run records them."
+                            )
+                        st.rerun()
+                if cancel.button("Cancel", key="remove_condition_cancel"):
+                    st.session_state.pop("remove_condition_armed", None)
+                    st.rerun()
 
 healthy = watch["is_healthy"]
 last_checked = watch["last_checked_at"]

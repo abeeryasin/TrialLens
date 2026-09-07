@@ -450,3 +450,104 @@ class TestAddingATrackedCondition:
         assert not app.exception
         assert calls == []
         assert any("Enter a condition" in w.value for w in app.warning)
+
+
+class TestRemovingATrackedCondition:
+    """The "Remove" popover (2026-09-08). Whether the removal itself is
+    correct is tests/test_conditions_endpoint.py and
+    tests/test_conditions_real_data.py; this covers the page's own two
+    load-bearing behaviours.
+
+    **One click must not untrack anything.** The first click arms, the second
+    confirms — this stops trials being watched, and a mis-click on a popover
+    is exactly how someone would discover that by accident.
+
+    **The counts the API returns must reach the reader.** "Stopped watching
+    obesity" alone hides the thing worth knowing: how many trials went with
+    it, and how many stayed because another condition also brings them in.
+    """
+
+    @staticmethod
+    def stub(monkeypatch, **result):
+        import api_client
+
+        monkeypatch.setattr(api_client, "get", lambda path, params=None: payload())
+        called = []
+
+        body = {
+            "condition": "obesity",
+            "trials_untracked": 3901,
+            "trials_kept_for_another_condition": 14,
+            "trials_unattributed": 0,
+        }
+        body.update(result)
+
+        def _delete(path, params=None):
+            called.append(path)
+            return body
+
+        monkeypatch.setattr(api_client, "delete", _delete)
+        return called
+
+    def test_one_click_arms_but_does_not_remove(self, monkeypatch):
+        called = self.stub(monkeypatch)
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.button(key="remove_condition_arm").click().run()
+        assert not app.exception
+        assert called == [], "arming must not call the API"
+        assert any("Stop watching" in w.value for w in app.warning)
+
+    def test_the_second_click_removes_and_reports_both_counts(self, monkeypatch):
+        called = self.stub(monkeypatch)
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.button(key="remove_condition_arm").click().run()
+        app.button(key="remove_condition_confirm").click().run()
+        assert not app.exception
+        assert called and called[0].startswith("/tracked-conditions/")
+        message = " ".join(s.value for s in app.success)
+        assert "Stopped watching" in message
+        assert "3,901" in message, "the reader needs the number, not just the verb"
+        assert "14 stay" in message
+
+    def test_cancelling_calls_nothing(self, monkeypatch):
+        called = self.stub(monkeypatch)
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.button(key="remove_condition_arm").click().run()
+        app.button(key="remove_condition_cancel").click().run()
+        assert not app.exception
+        assert called == []
+        assert app.button(key="remove_condition_arm"), "the control resets, not disappears"
+
+    def test_a_refusal_is_shown_in_the_api_s_own_words(self, monkeypatch):
+        """409 carries a written-for-a-human reason — the last condition on
+        the list, or no attribution recorded yet. Rewording it into "couldn't
+        remove that" would throw away the only part that tells the reader
+        what to do."""
+        import api_client
+
+        monkeypatch.setattr(api_client, "get", lambda path, params=None: payload())
+
+        def boom(path, params=None):
+            raise api_client.ApiError(
+                f"API returned 409 for {path}: refusing to remove 'obesity' because "
+                "it is the only condition on the watch list",
+                status_code=409,
+            )
+
+        monkeypatch.setattr(api_client, "delete", boom)
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.button(key="remove_condition_arm").click().run()
+        app.button(key="remove_condition_confirm").click().run()
+        assert not app.exception
+        assert any("only condition on the watch list" in w.value for w in app.warning)
+
+    def test_an_incomplete_record_says_so(self, monkeypatch):
+        """A non-zero unattributed count means the removal reasoned about
+        less than the whole watch. Stated, not swallowed (sec. 3)."""
+        self.stub(monkeypatch, trials_unattributed=2173)
+        app = AppTest.from_file(HOME, default_timeout=30).run()
+        app.button(key="remove_condition_arm").click().run()
+        app.button(key="remove_condition_confirm").click().run()
+        assert not app.exception
+        captions = " ".join(getattr(c, "value", "") for c in app.caption)
+        assert "2,173" in captions and "not attributed" in captions

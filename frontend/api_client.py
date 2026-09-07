@@ -228,6 +228,28 @@ def get(path: str, params: dict = None) -> dict:
     return _fetch(path, params)
 
 
+def delete(path: str, params: dict = None) -> dict:
+    """The third verb the API door opens, added with DELETE
+    /tracked-conditions. It clears the cache for the same reason post() does:
+    a page still listing a condition someone just removed is the failure the
+    invalidation exists to prevent."""
+    _require_http_address()
+    try:
+        response = requests.delete(f"{API_BASE_URL}{path}", params=params, timeout=30)
+    except requests.RequestException as exc:
+        raise ApiError(f"Could not reach the API at {_safe_base_url()}: {_redact(exc)}")
+
+    if not response.ok:
+        raise ApiError(
+            f"API returned {response.status_code} for {path}: {_redact(response.text)}",
+            status_code=response.status_code,
+        )
+
+    clear_cache()
+
+    return response.json()
+
+
 def post(path: str, data: dict = None, json_data: dict = None, params: dict = None) -> dict:
     _require_http_address()
     try:

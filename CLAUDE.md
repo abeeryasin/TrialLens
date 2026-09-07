@@ -64,7 +64,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **892 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **914 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -147,6 +147,19 @@ alert so GitHub's own notification is the alarm, and
 project's own history. Design, and what live data corrected on the first
 call: `docs/decisions.md`, 2026-09-06.
 
+**A condition can be removed as of 2026-09-08, and building it found that
+the record could not say which trials a condition brought in.** `DELETE
+/tracked-conditions/{condition}` untracks (never deletes) the trials no other
+watched condition brings in, logs the flip like any scope drop, and returns
+what it did — untracked, kept for another condition, and unattributed. It
+needed `study_tracked_conditions` first: the old substring link missed 19% of
+in-scope trials. Two refusals on purpose — the last condition on the list, and
+any removal before attribution exists. Removing a condition ends all ongoing
+cost immediately (nothing is refetched, diffed or interpreted); it does not
+reclaim the ~60 MB of disk, which is the deliberate trade for keeping the
+amendment history the digest and Investigate are computed from.
+`docs/decisions.md`, 2026-09-08.
+
 **Step 12 (notifications) is built as of 2026-09-07** — the last step on the
 table. `api/digest.py` composes, `scripts/send_digest.py` sends, `digest_runs`
 records, and a weekday `digest.yml` cron fires it; `/ops/status` gets a third
@@ -211,6 +224,18 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   of it. The real-data half is not optional before a commit (it is the only
   thing that tests the SQL), it is just not the thing to run forty times
   while editing a docstring.
+- **A substring link between two vocabularies is not attribution.** Until
+  2026-09-08 the only thing connecting a watched condition to its trials was
+  `study_conditions.condition ILIKE '%breast cancer%'` — and **2,173 of
+  11,453 in-scope trials (19%) match no tracked term at all**, because
+  CT.gov expands synonyms when it searches (`Breast Neoplasms`,
+  `Breast Carcinoma`, `Obese`, `Overweight`). A condition-removal built on
+  that rule would have stranded them: `active_in_scope = true`, counted in
+  the watch headline, with no query left that returns them.
+  `study_tracked_conditions` records the real pair at ingest, written by
+  `POST /studies/reconcile-scope`, which already had both halves. The same
+  blind spot still means a synonym-tagged trial can never age out of scope —
+  measured, recorded, not yet changed.
 - **A cache on a monitoring tool has to be classified per endpoint.** The
   frontend cached nothing until 2026-09-07, so a Streamlit rerun re-issued a
   page's whole read set — 43,842 measured bytes for one Investigate

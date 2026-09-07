@@ -399,6 +399,12 @@ class ReconcileScopeRequest(BaseModel):
 class ReconcileScopeResult(BaseModel):
     confirmed_in_scope: int
     dropped_out_of_scope: int
+    # How many (trial, condition) attributions this run wrote or refreshed —
+    # the record of WHICH watched condition brought each trial in, which is
+    # what makes removing a condition an exact operation rather than a
+    # substring guess (db/schema.sql, study_tracked_conditions). Defaulted so
+    # an older client reading this response is unaffected.
+    attributed: int = 0
 
 
 class KnownDatesRequest(BaseModel):
@@ -1211,6 +1217,27 @@ class AddConditionRequest(BaseModel):
 
 class AddConditionResponse(BaseModel):
     condition: str
+
+
+class RemoveConditionResponse(BaseModel):
+    """What removing a condition actually did, in counts the reader can
+    check — sec. 3 wants the evidence, not just the outcome.
+
+    trials_untracked                  stopped being watched: nothing else on
+                                      the list brings them in
+    trials_kept_for_another_condition still watched, because another tracked
+                                      condition also returns them
+    trials_unattributed               in scope, but no live attribution to ANY
+                                      watched condition, so this removal could
+                                      not reason about them. Should be 0 after
+                                      a full monitor run; anything else is the
+                                      record telling you it is incomplete.
+    """
+
+    condition: str
+    trials_untracked: int
+    trials_kept_for_another_condition: int
+    trials_unattributed: int
 
 
 class OpsAlert(BaseModel):

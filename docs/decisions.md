@@ -4420,3 +4420,120 @@ actually reads.
 still costs a fetch — correctly, because the answer is different. And the
 ~3.5 GB of unattributed transfer from yesterday's entry is still
 unattributed; that needs Neon's own per-source breakdown.
+
+## 2026-09-08 — Removing a condition, and the 19% the record could not account for
+
+"Can I remove a condition?" was a one-line answer — no, `/tracked-conditions`
+had only GET and POST — and a much longer one underneath it, because the
+obvious implementation would have quietly stranded a fifth of the watch.
+
+**What the question really was.** Adding a condition through the UI has been
+possible since step 10; removing one was never built, and `api/conditions.py`
+said so in its own docstring ("no edit/delete endpoint yet"). The follow-up
+question was the sharper one: if the condition goes, do its trials stay in
+the database eating storage, cost and tokens?
+
+Three different answers, and they had to be separated before anything could
+be built:
+
+- **Ongoing cost: no.** Nothing queries CT.gov for a condition that is not on
+  the registry, so its trials are never refetched, never diffed, and never
+  reach a paid interpretation call. Spend is per detected change on a watched
+  trial, never per stored row.
+- **Storage: yes.** Measured: the database is **249 MB**, of which `studies`
+  is **184 MB** (~16 KB/trial, `raw_json` about half). 11,561 trials, 11,453
+  in scope. Dropping one condition's exclusive trials would leave roughly
+  60 MB of dead weight.
+- **"All the trials associated with it": not answerable from what was
+  stored.** This is the part that mattered.
+
+**The measurement that changed the design.** `study_conditions` holds
+ClinicalTrials.gov's own condition strings for a study, not the term
+TrialLens watches, and the only link between them was a substring match —
+`sc.condition ILIKE '%breast cancer%'`, in `POST /studies/reconcile-scope`.
+Against the live record:
+
+    in-scope trials matching NEITHER tracked term:  2,173  of 11,453  (19%)
+    their commonest tags:  200 Breast Neoplasms · 135 Breast Carcinoma
+                            47 Obese ·  31 Breast Neoplasm ·  29 Overweight
+
+CT.gov expands synonyms when it searches. A trial arrives through the
+"breast cancer" query tagged `Breast Neoplasms`, and the substring rule
+cannot see it. So a removal built on that rule would have left ~2,000 trials
+`active_in_scope = true` with **no query left that returns them** — counted
+in "11,453 trials watched" while nothing watched them. That is the
+finishes-green-while-doing-nothing state step 11 exists to catch, and it
+would have been introduced by the feature, not found by it.
+
+Worth recording: the same blind spot already exists in the other direction.
+A `Breast Neoplasms` trial that ages out of the recency window can never be
+flagged out of scope, because the drop query cannot match it either. Not
+changed in this pass — switching that query to attribution would move live
+rows on the next run, and this project's rule is to measure before moving
+them.
+
+**So attribution came first.** `study_tracked_conditions (nct_id, condition,
+first_matched_at, last_matched_at, untracked_at)`, written by
+`POST /studies/reconcile-scope` — which already receives exactly the pair
+(condition, every nct_id that condition's query returned) once per condition
+per monitor run. No new call, no new script plumbing, and `INSERT ... SELECT`
+against `studies` so nothing crosses the wire and an id not yet written is
+skipped rather than rejected by the foreign key.
+
+`untracked_at` is a stamp, not a delete — the `delisted_at` precedent from
+step 8. The rows keep saying why a trial stopped being watched, and
+`ON CONFLICT ... SET untracked_at = NULL` means re-adding a condition revives
+its attribution on the next run instead of needing a repair script. That is
+what makes removal reversible.
+
+**The removal itself: untrack, never delete.** Chosen deliberately over a
+hard delete. `study_changes.nct_id` is a foreign key into `studies`, and
+those 1,098 rows are the product's actual output — the amendments, the 22
+primary-outcome changes a clinician judged on 2026-09-07, the digest
+history. Deleting trials makes last week's digest unreproducible and
+overturns the settled 2026-08-28 decision ("the row and its full history
+stay, matching how ClinicalTrials.gov itself never removes a record
+either"). Disk is the one thing a delete buys, and it is the cheapest of the
+three costs.
+
+**Two refusals, both deliberate.**
+
+1. **The last condition on the list.** An empty registry is a monitor that
+   watches nothing while still reporting a healthy watch — precisely what
+   `/ops/status` raises `no_tracked_conditions` for. 409, with "add the
+   replacement first".
+2. **Before any attribution exists.** 409, because removing a condition when
+   nothing records what it brought in is the stranding case above. The check
+   is global (does the table have any rows at all), not per-condition, so a
+   typo condition that genuinely matched nothing stays removable — otherwise
+   the guard would create its own trap.
+
+**Evidence in the response, not just an outcome** (sec. 3):
+`trials_untracked`, `trials_kept_for_another_condition`, and
+`trials_unattributed` — the last being trials in scope that no watched
+condition accounts for. It should be 0 after a full monitor run; anything
+else is the record saying this answer is narrower than it looks. The page
+prints it when it is non-zero rather than rounding it away.
+
+**Verification, at three levels.** 10 free HTTP tests for the route (the fake
+connection ignores SQL, so those cover routing, the refusals and the
+arithmetic). 6 real-data tests that **write and roll back** — attribution
+rows for real nct_ids, the queries run against them, `conn.rollback()` and
+nothing committed, which is the right shape for a suite whose own subject is
+a delete endpoint in a table a `LIKE '__%'` cleanup once emptied. The case
+they exist for is the overlap: only **14 of 9,294** trials are brought in by
+both watched conditions, and a wrong query would drop them off the watch
+where no hand-check would notice.
+
+Then the part no fake can show: the route run over HTTP against the live
+database. 404 for an unknown condition, 409 with the honest reason for a real
+one, and `["breast cancer","obesity"]` still intact afterwards.
+
+The page control is two clicks (arm, then confirm), and its own tests
+mutation-checked: making one click remove, dropping the counts from the
+message, and rewording the 409 into "could not remove that" each fail a test.
+
+**What remains before the button works.** Attribution is written by the
+deployed API, so the code has to ship and one monitor run has to complete —
+until then the endpoint correctly refuses. That is the honest order:
+the record earns the right to be edited.

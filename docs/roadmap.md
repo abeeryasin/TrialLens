@@ -43,6 +43,7 @@ came out of the 2026-09-07 clinician review and are not table rows:
 | ~~Surfacing description diffs on outcome changes~~ | **Done 2026-09-07** |
 | ~~Sending the weekly agent substantive changes only, reformatting as a count~~ | **Done 2026-09-07** |
 | ~~Per-endpoint frontend caching (the second bandwidth amplifier, named and deferred on 2026-09-07)~~ | **Done 2026-09-07.** `CACHEABLE_PATHS` in `frontend/api_client.py` — an allowlist, 300s TTL, every write clearing every cached read; `/ops/status` and `/discover` deliberately live. One Investigate rerun was 43,842 measured bytes and is now free within the window; proved by three real `AppTest` reruns of Home issuing one HTTP GET, not three. 14 free tests, 5/5 mutations caught |
+| ~~Removing a tracked condition~~ | **Done 2026-09-08.** `DELETE /tracked-conditions/{condition}` + a two-click control on Home. Needed `study_tracked_conditions` first — the old substring link between a watched term and CT.gov's own condition strings missed **2,173 of 11,453 in-scope trials (19%)**, so a removal built on it would have stranded them as watched-by-nothing. Untracks rather than deletes (the 2026-08-28 rule); reports untracked / kept / unattributed. 10 free + 6 rollback-only real-data tests; refusals verified over HTTP against the live database |
 
 **Both 2026-09-07 follow-ons are closed, and closing them found a third
 thing.** Descriptions are compared now (`outcome_descriptions`,

@@ -613,3 +613,55 @@ CREATE TABLE IF NOT EXISTS digest_runs (
 
 CREATE INDEX IF NOT EXISTS idx_digest_runs_completed
     ON digest_runs (completed_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- study_tracked_conditions (2026-09-08) — which watched condition brought a
+-- trial in.
+--
+-- Built because removing a condition was impossible to do honestly without
+-- it. `study_conditions` holds ClinicalTrials.gov's OWN condition strings for
+-- a study, which is not the same thing as the search term TrialLens watches,
+-- and the link between them was a substring match
+-- (`sc.condition ILIKE '%breast cancer%'` in POST /studies/reconcile-scope).
+--
+-- Measured on the live record, 2026-09-08: **2,173 of 11,453 in-scope trials
+-- (19%) match NEITHER tracked term** by that rule. CT.gov expands synonyms
+-- when it searches, so a trial arrives through the "breast cancer" query
+-- tagged `Breast Neoplasms` (200 of them), `Breast Carcinoma` (135), or comes
+-- through "obesity" tagged `Obese` (47) or `Overweight` (29). The substring
+-- rule cannot see any of them.
+--
+-- Two consequences, one new and one that was already true:
+--   * A condition-removal built on the substring rule would leave ~2,000
+--     trials flagged active_in_scope = true with no query left that returns
+--     them — counted in "11,453 trials watched" while nothing watches them.
+--     That is the finishes-green-while-doing-nothing state step 11 exists to
+--     catch.
+--   * The existing drop path has the same blind spot in the other direction:
+--     a `Breast Neoplasms` trial that ages out of the recency window is never
+--     flagged, because the drop query cannot match it either. Not changed in
+--     this pass — switching that query to attribution would move live rows,
+--     and it is measured first. See docs/decisions.md, 2026-09-08.
+--
+-- Written by POST /studies/reconcile-scope, which already receives exactly
+-- (condition, every nct_id that condition's query returned this run) once per
+-- condition per monitor run. No new call, no new script plumbing.
+--
+-- untracked_at is a stamp, not a delete (the `delisted_at` precedent from
+-- step 8): when a condition is removed from the watch list, its attribution
+-- rows say so and keep saying WHY a trial stopped being watched. Re-adding
+-- the condition clears the stamp on the next run.
+CREATE TABLE IF NOT EXISTS study_tracked_conditions (
+    nct_id           TEXT NOT NULL REFERENCES studies(nct_id),
+    condition        TEXT NOT NULL,
+    first_matched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_matched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    untracked_at     TIMESTAMPTZ,
+    PRIMARY KEY (nct_id, condition)
+);
+
+-- The question asked on every removal — "is this trial still brought in by
+-- some OTHER condition that is still watched?" — is a lookup by condition
+-- over live attributions only.
+CREATE INDEX IF NOT EXISTS idx_study_tracked_conditions_live
+    ON study_tracked_conditions (condition) WHERE untracked_at IS NULL;

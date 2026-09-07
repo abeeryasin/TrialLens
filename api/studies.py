@@ -544,6 +544,30 @@ def reconcile_scope(body: ReconcileScopeRequest, conn=Depends(get_db)):
         )
         confirmed = cur.rowcount
 
+    # Record WHICH watched condition brought each of these trials in. This
+    # endpoint is the only place in the system that holds the pair (condition,
+    # every nct_id that condition's query returned), and it already receives
+    # both — so attribution costs no new call and no new script plumbing.
+    # db/schema.sql explains at length why the substring rule below is not a
+    # substitute for it (19% of in-scope trials match no tracked term at all).
+    #
+    # INSERT ... SELECT against studies rather than a values list: it skips any
+    # id not yet in the table (the foreign key would reject it) and the ids
+    # never cross the wire twice. ON CONFLICT clears untracked_at, so re-adding
+    # a removed condition revives its attribution on the next run instead of
+    # needing a repair script.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO study_tracked_conditions (nct_id, condition)
+            SELECT s.nct_id, %s FROM studies s WHERE s.nct_id = ANY(%s)
+            ON CONFLICT (nct_id, condition) DO UPDATE
+                SET last_matched_at = now(), untracked_at = NULL
+            """,
+            (body.condition, body.current_nct_ids),
+        )
+        attributed = cur.rowcount
+
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
@@ -557,7 +581,9 @@ def reconcile_scope(body: ReconcileScopeRequest, conn=Depends(get_db)):
         dropped = [row["nct_id"] for row in cur.fetchall()]
 
     if not dropped:
-        return ReconcileScopeResult(confirmed_in_scope=confirmed, dropped_out_of_scope=0)
+        return ReconcileScopeResult(
+            confirmed_in_scope=confirmed, dropped_out_of_scope=0, attributed=attributed
+        )
 
     with conn.cursor() as cur:
         cur.execute(
@@ -567,4 +593,8 @@ def reconcile_scope(body: ReconcileScopeRequest, conn=Depends(get_db)):
         change_rows = [(nct_id, "active_in_scope", "true", "false") for nct_id in dropped]
         psycopg2.extras.execute_values(cur, INSERT_CHANGES, change_rows)
 
-    return ReconcileScopeResult(confirmed_in_scope=confirmed, dropped_out_of_scope=len(dropped))
+    return ReconcileScopeResult(
+        confirmed_in_scope=confirmed,
+        dropped_out_of_scope=len(dropped),
+        attributed=attributed,
+    )
