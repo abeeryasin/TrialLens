@@ -103,7 +103,16 @@ TOOLS = [
             "weeks_ago=0 is this run's own current window; weeks_ago=1 is "
             "the 7 days before that, and so on. Use several calls with "
             "increasing weeks_ago to see whether this week's numbers are "
-            "part of a trend or a one-off."
+            "part of a trend or a one-off. "
+            "NOTE on outcomes: the listed changes are the SUBSTANTIVE ones "
+            "only. Reformatting-only changes (an endpoint whose name, "
+            "observation window and description are all unchanged except "
+            "for capitalisation, punctuation or list numbering) are counted "
+            "in outcomes.wording_only but not listed, because reading them "
+            "costs tokens and they carry nothing. That filter has known "
+            "blind spots — it cannot see a change to a field it does not "
+            "compare — so treat outcomes.wording_only as 'changes not shown "
+            "to you', not as 'changes that did not matter'."
         ),
         "input_schema": {
             "type": "object",
@@ -253,7 +262,18 @@ def _execute_tool(
     if name == "get_window":
         weeks_ago = tool_input.get("weeks_ago", 0)
         as_of = datetime.now(timezone.utc) - timedelta(days=7 * weeks_ago)
-        params = {"days": days, "as_of": as_of.isoformat()}
+        # Reformatting-only outcome changes are counted, not listed
+        # (agreed 2026-09-07, docs/decisions.md). The agent pays by the
+        # token to read changes the deterministic layer has already decided
+        # carry nothing; the counts still reach it, so it knows they
+        # happened and does not silently inherit the filter as a blind
+        # spot. The Investigate PAGE keeps them listed, because a human
+        # checking the filter is the whole reason it stays honest.
+        params = {
+            "days": days,
+            "as_of": as_of.isoformat(),
+            "include_reformatting": "false",
+        }
         if tool_input.get("condition"):
             params["condition"] = tool_input["condition"]
         return _get(api_base_url, "/investigate", params)

@@ -64,7 +64,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **728 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **789 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -94,8 +94,24 @@ equals tested. **Neon's `Default` flag moved onto `production` on
 `neonctl` with no branch argument) no longer lands on an empty database.
 The branch these URLs actually reach is `br-fancy-bird-ay7zb0sb` — an
 identifier, not a credential, and the thing to compare against if the flag
-is ever in doubt. Remaining on step 10: the UptimeRobot keep-warm ping.
-Step 12 (notifications) untouched.
+is ever in doubt. **Step 10 closed 2026-09-07** with the UptimeRobot
+keep-warm pings; the API one had to be a *keyword* monitor because
+UptimeRobot sends HEAD by default and FastAPI's `/health` answers 405 to
+HEAD. **Step 12 (notifications) is the only unstarted step.**
+
+**A clinician judged real output for the first time on 2026-09-07** — all
+22 primary-outcome changes on file, 9 of 12 substantive ones worth a
+researcher's attention. That is the validation `docs/verify_ranking_results.md`
+asked for and step 7 never got. It found three blind spots, all now fixed
+the same day: observation windows were ignored, endpoint **descriptions**
+were ignored, and the reformatting bucket was unreachable from the page.
+The comparison reads three fields of a primary outcome — name, time frame,
+description — and **only an edited or deleted description escalates a
+change; an added one does not**, because a definition appearing where there
+was none is a more complete registry entry, not a moved endpoint. Live
+effect: reformatting 8 → 3, substantive 14 → 19. The weekly agent now reads
+substantive changes only, with the counts unfiltered so it never inherits
+the filter blind. `docs/decisions.md`, 2026-09-07.
 
 **Step 11 (autonomous-ops hardening) is done, 2026-09-06.** The two
 unattended jobs — the 6-hourly monitor cron and the weekly synthesis agent —
@@ -137,6 +153,16 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   failure. Same class as the `LIKE '__%'` incident below: a pattern
   matching more than the one thing you pictured. Match on something only
   the target has, or kill by PID.
+- **A cap in one place can silently undo a fix in another.** On
+  2026-09-07 the reformatting bucket was made listable so a human could
+  check the filter; measured against the live record hours later, the page
+  listed 8 changes of which **zero** were reformatting, because one
+  `NAMED_CAP` over a substantive-first sort pushed the whole bucket off the
+  end. Every test passed — both suites asserted on the *classification*,
+  never on what survived the cap, and the fixtures were too small to reach
+  it. Cap per bucket, assert on what the reader actually receives, and say
+  "showing the first N of M" wherever a list is shorter than the count
+  printed above it.
 - **When mutation-testing, diff the restored file against the backup
   before believing the result.** Mutating and restoring inside one shell
   command produced a run where correct, restored code appeared to fail —

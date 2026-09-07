@@ -671,6 +671,19 @@ def investigate(
             "not just the trailing week from right now."
         ),
     ),
+    include_reformatting: bool = Query(
+        True,
+        description=(
+            "Whether reformatting-only outcome changes appear in "
+            "outcomes.changes. The COUNTS are unaffected either way — "
+            "outcomes.wording_only still reports how many there were, and "
+            "outcomes.reformatting_listed says whether they were listed. "
+            "Set false for the weekly synthesis agent, which pays by the "
+            "token to read changes already judged not worth attention; the "
+            "page leaves it true, because that filter has known blind "
+            "spots and must stay checkable."
+        ),
+    ),
     conn=Depends(get_readonly_db),
 ):
     """Cross-trial synthesis over the watch window.
@@ -744,6 +757,23 @@ def investigate(
         for row in amendment_rows
     }
     outcome_changes, outcome_summary = analyse_outcome_changes(content_rows, trial_facts)
+    # Filtered AFTER the summary is computed, never before: the counts
+    # describe the window, not the slice a particular caller asked to read.
+    #
+    # Capped PER BUCKET, and that is not a detail. Until 2026-09-07 this was
+    # one cap over a substantive-first sort, which on the live record listed
+    # 8 changes of which 0 were reformatting — so the expander built that
+    # same morning to make the reformatting bucket checkable rendered
+    # nothing, and the caption said "3 reformatting only" about rows the
+    # reader could not open. A cap written for one section silently undid a
+    # fix written for another. Both buckets now get their own room.
+    substantive = [c for c in outcome_changes if not c.wording_only][:NAMED_CAP]
+    reformatting = (
+        [c for c in outcome_changes if c.wording_only][:NAMED_CAP]
+        if include_reformatting
+        else []
+    )
+    listed = substantive + reformatting
     amendments = {(row["nct_id"], row["detected_at"]) for row in amendment_rows}
 
     window = InvestigateWindow(
@@ -764,7 +794,11 @@ def investigate(
         dates=analyse_date_moves(content_rows),
         lifecycle=analyse_status_moves(content_rows),
         enrollment=analyse_enrollment(content_rows, current_counts),
-        outcomes=OutcomeFinding(changes=outcome_changes[:NAMED_CAP], **outcome_summary),
+        outcomes=OutcomeFinding(
+            changes=listed,
+            reformatting_listed=include_reformatting,
+            **outcome_summary,
+        ),
         scope_exits=analyse_scope_exits(scope_rows)[:NAMED_CAP],
         scope_exits_total=len([r for r in scope_rows if str(r["new_value"]).strip().lower() in {"false", "f", "0"}]),
     )
@@ -809,6 +843,19 @@ import re
 # "wording".
 _PUNCT = re.compile(r"[^\w\s]+")
 _SPACE = re.compile(r"\s+")
+
+# Descriptions are compared through this rather than through
+# normalise_measure: a measure name is a label (list numbering matters,
+# hence _LIST_MARKER), a description is a paragraph. Identical rule to
+# frontend.labels.is_formatting_only, deliberately — a reader who is told
+# "formatting only" about an eligibility diff and about an outcome
+# description should be told it by the same test.
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def _normalise_text(text) -> str:
+    return _NON_ALNUM.sub(" ", (text or "").casefold()).strip()
+
 
 # A leading list marker: "1. ", "2) ", "(3) ", "- ", "* ", "• ".
 # Stripped BEFORE punctuation, because punctuation removal alone leaves
@@ -894,6 +941,63 @@ def outcome_windows(value):
     return windows
 
 
+def outcome_descriptions(value):
+    """{normalised measure name: description} for a stored value, or None.
+
+    Added 2026-09-07, the third and last of the blind spots the clinician
+    review named. Descriptions are where an endpoint is actually defined —
+    the measure name says *what* is counted, the description says how — and
+    until now nothing read them. Two real changes were invisible because of
+    it: NCT06635980 turned "compare grade 3+ RT adverse events with the use
+    of preoperative and postoperative (Arm 1 versus Arm 2) radiation" into
+    "assess the occurrence of...", losing the between-arm comparison, and
+    NCT07160530 dropped "quantified using MyPlate categories and" from how
+    its endpoint is measured. Both kept every measure name and every
+    observation window, so both were filed as reformatting and hidden.
+
+    Keyed by the NORMALISED name, same as outcome_windows, so a description
+    is still compared across a re-capitalisation of its own measure.
+    """
+    if value is None:
+        return None
+    parsed = value
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(parsed, list):
+        return None
+    descriptions = {}
+    for item in parsed:
+        if isinstance(item, dict):
+            key = normalise_measure(str(item.get("measure") or ""))
+            descriptions[key] = str(item.get("description") or "")
+    return descriptions
+
+
+def describe_description_move(before: str, after: str) -> Optional[str]:
+    """Which of the three things happened to one measure's description.
+
+    "added" | "edited" | "removed", or None when nothing did. The kind is
+    read off the record, not judged: whether each side has text is a fact,
+    and it is the one distinction that decides whether this escalates a
+    change out of the reformatting bucket (see analyse_outcome_changes).
+
+    Normalised the same way `frontend.labels.is_formatting_only` normalises
+    every other text diff in this product — casefold, non-alphanumerics
+    collapsed — so re-punctuating a description is not a change to it.
+    """
+    had, has = bool((before or "").strip()), bool((after or "").strip())
+    if _normalise_text(before) == _normalise_text(after):
+        return None
+    if not had and has:
+        return "added"
+    if had and not has:
+        return "removed"
+    return "edited"
+
+
 # Each flag is a fact the record states, paired with the sentence a reader
 # sees. No weights, no total, no score — sec. 3 forbids a ranking whose
 # reasoning is invisible, and step 7 was removed for exactly that.
@@ -955,7 +1059,11 @@ def analyse_outcome_changes(rows, trial_facts=None):
     a much more useful sentence than "3 outcome changes", and dropping the
     five would also hide the fact that the normalisation is doing work.
     """
-    from api.schemas import OutcomeChange, OutcomeWindowChange  # local: avoids a schema import cycle
+    from api.schemas import (  # local: avoids a schema import cycle
+        OutcomeChange,
+        OutcomeDescriptionChange,
+        OutcomeWindowChange,
+    )
 
     trial_facts = trial_facts or {}
     changes: List[OutcomeChange] = []
@@ -990,11 +1098,43 @@ def analyse_outcome_changes(rows, trial_facts=None):
             and before_windows.get(key, "") != after_windows.get(key, "")
         ]
 
+        # Descriptions, same rule and same reason as windows: compared only
+        # for measures that survived, so an added or removed endpoint is
+        # reported once rather than twice.
+        before_descriptions = outcome_descriptions(row["old_value"]) or {}
+        after_descriptions = outcome_descriptions(row["new_value"]) or {}
+        description_changes = []
+        for key in after_map:
+            if not key or key not in before_map:
+                continue
+            was, now = before_descriptions.get(key, ""), after_descriptions.get(key, "")
+            kind = describe_description_move(was, now)
+            if kind is None:
+                continue
+            description_changes.append(
+                OutcomeDescriptionChange(
+                    measure=after_map[key], kind=kind, before=was, after=now
+                )
+            )
+
+        # An EDITED or REMOVED description is a change to how the endpoint
+        # is defined, so it disqualifies "reformatting". An ADDED one is
+        # not: it means the registry entry, previously silent about how
+        # this endpoint is measured, now says. You cannot diff against
+        # silence, and the clinician review dismissed exactly this pattern
+        # twice as an entry fleshed out when results were posted
+        # (NCT05872620). Escalating it would also invert this module's own
+        # worked example — NCT03674567, results posted and past primary
+        # completion, whose only real move was "tolerability" gaining a
+        # capital T. Added descriptions are still LISTED, just not
+        # escalated (docs/decisions.md, 2026-09-07).
+        redefined = [d for d in description_changes if d.kind != "added"]
+
         # A moved window is NOT reformatting, which is the whole correction
         # here: until 2026-09-07 this read `not added and not removed`, so a
         # shortened follow-up under an unchanged name was filed as wording
         # and then suppressed from the page by it.
-        wording_only = not added and not removed and not window_changes
+        wording_only = not added and not removed and not window_changes and not redefined
 
         interpretation = row.get("prose_interpretation")
         if isinstance(interpretation, dict):
@@ -1010,6 +1150,7 @@ def analyse_outcome_changes(rows, trial_facts=None):
                 count_before=len(before),
                 count_after=len(after),
                 window_changes=window_changes,
+                description_changes=description_changes,
                 wording_only=wording_only,
                 flags=flags,
                 flag_labels=[FLAG_LABELS[f] for f in flags],

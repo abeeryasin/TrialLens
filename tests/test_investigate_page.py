@@ -244,6 +244,131 @@ class TestPrimaryOutcomes:
         # real use, 2026-09-05).
         assert "Of the 17 changes above: 8 substantive, 9 reformatting only." in page
 
+    # --- endpoint descriptions (2026-09-07) -------------------------------
+    # The third blind spot the clinician review named. Two real changes were
+    # invisible under identical names and identical windows: NCT06635980
+    # lost a between-arm comparison, NCT07160530 dropped a measurement
+    # method. The page must now show both the fact and the text.
+
+    def test_an_edited_description_is_shown_as_a_change_to_the_definition(self, render):
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome(
+                measures_added=[], measures_removed=[],
+                description_changes=[{
+                    "measure": "Incidence of grade 3+ RT related adverse events",
+                    "kind": "edited",
+                    "before": "Will compare grade 3 or higher adverse events with "
+                              "the use of preoperative and postoperative radiation.",
+                    "after": "Will assess the occurrence of grade 3 or higher "
+                             "adverse events from the start of radiation therapy.",
+                }],
+            )],
+            "total": 1, "substantive": 1, "wording_only": 0,
+            "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "How this endpoint is defined changed" in page
+        assert "how the endpoint is measured, compared or analysed" in page
+
+    def test_the_registrys_own_words_are_shown_never_a_summary(self, render):
+        """sec. 2: the diff shows what moved, and never an LLM's paraphrase
+        of clinical wording. Same renderer Understand uses for eligibility."""
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome(
+                measures_added=[], measures_removed=[],
+                description_changes=[{
+                    "measure": "Adherence", "kind": "edited",
+                    "before": "Percent of days with fourteen hours fasting.",
+                    "after": "Estimated with an exact binomial interval.",
+                }],
+            )],
+            "total": 1, "substantive": 1, "wording_only": 0,
+            "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "binomial" in page
+        assert "Struck-through red = removed" in page
+
+    def test_a_filled_in_description_is_not_presented_as_evidence_of_change(self, render):
+        """NCT03674567 and NCT05872620, real, both dismissed by the
+        clinician as an entry fleshed out when results were posted. The page
+        must say what it is rather than let it read as a moved endpoint."""
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome(
+                wording_only=True, measures_added=[], measures_removed=[],
+                description_changes=[{
+                    "measure": "Safety and Tolerability", "kind": "added",
+                    "before": "", "after": "treatment-emergent adverse events",
+                }],
+            )],
+            "total": 1, "substantive": 0, "wording_only": 1,
+            "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "A definition was filled in" in page
+        assert "not evidence the" in page and "endpoint changed" in page
+        assert "Requires review" not in page
+
+    def test_the_reformatting_bucket_carries_its_evidence(self, render):
+        """The expander exists so the filter can be CHECKED. A row with no
+        evidence attached is the filter asking to be trusted again."""
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome(
+                nct_id="NCT03674567", wording_only=True,
+                measures_added=[], measures_removed=[],
+                description_changes=[{
+                    "measure": "Overall Response Rate", "kind": "added",
+                    "before": "", "after": "Summary of Best Overall Response",
+                }],
+            )],
+            "total": 1, "substantive": 0, "wording_only": 1,
+            "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "Summary of Best Overall Response" in page
+
+    def test_the_page_states_which_fields_the_filter_compares(self, render):
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome()], "total": 1, "substantive": 1,
+            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "observation window" in page and "description" in page
+
+    def test_the_reformatting_caveat_no_longer_claims_descriptions_are_unseen(self, render):
+        """The caption written on the morning of 2026-09-07 said this page
+        'cannot yet see' a changed description. It can now, and a stale
+        limitation is a false statement about what the tool does."""
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome(wording_only=True, measures_added=[], measures_removed=[])],
+            "total": 1, "substantive": 0, "wording_only": 1,
+            "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "cannot yet see that" not in page
+
+    def test_a_truncated_list_says_how_many_it_is_showing(self, render):
+        """On the live record the page printed '19 substantive' over 8 cards
+        and explained nothing. Every other capped list here already says
+        'Showing the N largest of M'."""
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome(nct_id=f"NCT{i}") for i in range(8)],
+            "total": 22, "substantive": 19, "wording_only": 3,
+            "after_primary_completion": 9, "unreadable": 0,
+        }))
+        assert "Showing the first 8 of 19 substantive changes" in page
+
+    def test_a_complete_list_does_not_claim_to_be_truncated(self, render):
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome()], "total": 1, "substantive": 1,
+            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "Showing the first" not in page
+
+    def test_a_truncated_reformatting_bucket_states_its_real_total(self, render):
+        page, _ = render(investigate(outcomes={
+            "changes": [outcome(nct_id=f"NCTr{i}", wording_only=True,
+                                measures_added=[], measures_removed=[])
+                        for i in range(8)],
+            "total": 30, "substantive": 0, "wording_only": 22,
+            "after_primary_completion": 0, "unreadable": 0,
+        }))
+        assert "8 of 22 changes the filter judged reformatting only" in page
+
     def test_a_missing_ai_reading_is_not_reported_as_nothing_important(self, render):
         """Absence means three things the column cannot separate."""
         page, _ = render(investigate(outcomes={

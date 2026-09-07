@@ -40,6 +40,7 @@ import pandas as pd
 import streamlit as st
 
 import charts
+import labels
 from api_client import ApiError, get
 
 st.set_page_config(page_title="Investigate — TrialLens", page_icon="🧭", layout="wide")
@@ -113,6 +114,60 @@ changed_tab, field_tab = st.tabs(["What changed", "The field"])
 
 def plural(n, singular, plural_word=None):
     return singular if n == 1 else (plural_word or singular + "s")
+
+
+# How each kind of description move is introduced. The wording is doing
+# real work: "edited" and "removed" are why a change is on the substantive
+# list at all, while "added" is a registry entry that used to be silent and
+# now is not — which is NOT evidence the endpoint changed, and must not
+# read like it. Added 2026-09-07, the last of the three blind spots the
+# clinician review named.
+DESCRIPTION_MOVE = {
+    "edited": (
+        "How this endpoint is defined changed",
+        "The measure name is the same. What changed is the description "
+        "underneath it — how the endpoint is measured, compared or analysed.",
+    ),
+    "removed": (
+        "The definition of this endpoint was deleted",
+        "The entry used to say how this endpoint is measured and no longer "
+        "does. Nothing replaced it.",
+    ),
+    "added": (
+        "A definition was filled in for this endpoint",
+        "The entry was previously silent about how this endpoint is "
+        "measured. That is a more complete record, not evidence the "
+        "endpoint changed — commonly an entry fleshed out when results were "
+        "posted — so it is not counted as a substantive change.",
+    ),
+}
+
+
+def render_description_changes(change):
+    """The description diffs for one outcome change, or nothing.
+
+    Word-level, through the same labels.render_text_diff that Understand
+    uses for eligibility text — one product, one way of showing what moved
+    in a passage, and never an LLM's summary of clinical wording
+    (CLAUDE.md sec. 2). Collapsed behind an expander because a description
+    runs to a paragraph and the flags above it are what a reader scans
+    first.
+    """
+    moves = change.get("description_changes") or []
+    if not moves:
+        return
+    st.markdown(
+        f"**{len(moves)} endpoint {plural(len(moves), 'description')} "
+        f"changed under an unchanged name**"
+    )
+    for i, move in enumerate(moves):
+        heading, explain = DESCRIPTION_MOVE.get(
+            move["kind"], ("The description changed", "")
+        )
+        with st.expander(f"{heading} — {move['measure']}"):
+            if explain:
+                st.caption(explain)
+            labels.render_text_diff(move["before"], move["after"])
 
 
 # ============================================================================
@@ -201,7 +256,9 @@ with changed_tab:
             f"capitalisation, punctuation and list numbering — a purely "
             f'cosmetic edit (e.g. "Safety and tolerability" → "Safety and '
             f'Tolerability", or a list number added) isn\'t reported as a '
-            f"changed endpoint. Of the {outcomes['total']} "
+            f"changed endpoint. Three things are compared for an endpoint "
+            f"that survived the change: its **name**, its **observation "
+            f"window**, and its **description**. Of the {outcomes['total']} "
             f"{plural(outcomes['total'], 'change')} above: "
             f"{outcomes['substantive']} substantive, "
             f"{outcomes['wording_only']} reformatting only."
@@ -220,7 +277,19 @@ with changed_tab:
         # changed analysis method. A reader could not have found those,
         # because the page never showed them. Same rule as every other
         # capped list here: say what was set aside, and let it be opened.
-        for change in [c for c in outcomes["changes"] if not c["wording_only"]]:
+        substantive = [c for c in outcomes["changes"] if not c["wording_only"]]
+        # Say when the list is shorter than the count above it. Every other
+        # capped list on this page already does ("Showing the N largest gaps
+        # of M"); this one did not, so a reader saw "19 substantive" over 8
+        # cards with nothing explaining the gap.
+        if len(substantive) < outcomes["substantive"]:
+            st.caption(
+                f"Showing the first {len(substantive)} of "
+                f"{outcomes['substantive']} substantive changes — strongest "
+                f"milestone flags first. Narrow the window or the condition "
+                f"to see the rest."
+            )
+        for change in substantive:
             with st.container(border=True):
                 # The NCT ID was a dead end: the page names the trial that
                 # needs review and gave no way to go read it. Reported
@@ -265,6 +334,7 @@ with changed_tab:
                     st.markdown("**Observation window moved**")
                     for w in change["window_changes"]:
                         st.markdown(f"- {w['measure']}  \n  `{w['before']}` → `{w['after']}`")
+                render_description_changes(change)
 
                 if change["interpretation"]:
                     st.info(
@@ -282,17 +352,25 @@ with changed_tab:
 
         reformatting = [c for c in outcomes["changes"] if c["wording_only"]]
         if reformatting:
+            shown = (
+                f"{len(reformatting)} of {outcomes['wording_only']}"
+                if len(reformatting) < outcomes["wording_only"]
+                else str(len(reformatting))
+            )
             with st.expander(
-                f"{len(reformatting)} change"
-                f"{'s' if len(reformatting) != 1 else ''} the filter judged "
-                "reformatting only — open to check"
+                f"{shown} change"
+                f"{'s' if outcomes['wording_only'] != 1 else ''} the filter "
+                "judged reformatting only — open to check"
             ):
                 st.caption(
                     "The endpoint name is identical after casefolding and "
-                    "punctuation, and no observation window moved. Listed "
-                    "rather than hidden so the filter can be checked: a "
-                    "description can still have changed underneath a name "
-                    "that did not, and this page cannot yet see that."
+                    "punctuation, no observation window moved, and no "
+                    "surviving endpoint's description was edited or deleted. "
+                    "Listed rather than hidden so the filter stays checkable. "
+                    "**What it still cannot see:** anything outside those "
+                    "three fields — a change to a secondary outcome, to the "
+                    "arm an endpoint applies to, or to any part of the record "
+                    "this comparison does not read."
                 )
                 for change in reformatting:
                     st.markdown(
@@ -302,6 +380,10 @@ with changed_tab:
                         + (f" · `{'` `'.join(change['flag_labels'])}`"
                            if change["flag_labels"] else "")
                     )
+                    # A description filled in where there was none does not
+                    # escalate the change, but it is still shown — the point
+                    # of this expander is that nothing is taken on trust.
+                    render_description_changes(change)
 
     st.divider()
 

@@ -3749,3 +3749,134 @@ analysis method (NCT07160530). **Both of the latter live in descriptions
 and remain invisible.** They are now at least listed in the expander rather
 than absent, so a reader can reach them, but the page still cannot tell you
 that anything moved inside them.
+
+## 2026-09-07 — Descriptions, the third blind spot, and a cap that quietly undid a fix
+
+Part 3 of the clinician review's agreed order, plus the weekly agent's
+payload, plus a fault the first of those two uncovered in the second.
+
+**1. Endpoint descriptions are compared now.** `outcome_descriptions()`
+reads `description` per outcome, keyed by the normalised measure name, the
+same shape `outcome_windows()` already used. A description is where an
+endpoint is actually defined — the measure name says *what* is counted, the
+description says how it is measured, compared and analysed — and nothing
+had ever read it.
+
+`describe_description_move()` returns which of three things happened, read
+off the record rather than judged: **added** (the entry was silent and now
+speaks), **edited** (both sides define it, differently), **removed** (the
+entry said how and no longer does). Text is normalised exactly as
+`frontend.labels.is_formatting_only` normalises every other diff in the
+product, so re-punctuating a paragraph is not a change to it.
+
+**2. Only an edit or a deletion escalates. An addition does not, and that
+is the whole design decision.** Measured against the live record first,
+because the naive rule is very wrong: treating *any* description difference
+as substantive moves **8 reformatting changes down to 1**, which would gut
+the filter. The `added` exclusion is what makes the rule usable, and it is
+not a convenience —
+
+- The clinician dismissed exactly this pattern: NCT05872620, "entry
+  fleshed out at results posting."
+- It would invert this module's own worked example. NCT03674567 has results
+  posted and is past primary completion — the strongest flag combination
+  available — and its only real move is "tolerability" gaining a capital T.
+  Its descriptions went from empty to "treatment-emergent adverse events"
+  when results were posted. Escalating that turns the documented
+  demonstration that the normalisation works into a flagged trial.
+- And it is true rather than convenient: **you cannot diff against
+  silence.** A description appearing where there was none says the registry
+  entry is more complete, not that the endpoint moved.
+
+An added description is still *listed*, on the reformatting card, with its
+text. Not escalated is not the same as not shown.
+
+**Measured effect on the live record: wording_only 8 → 3, substantive
+14 → 19.** Five changes reclassified, and the honest breakdown of those
+five is three-and-two, not five-for-five:
+
+- **NCT06635980** — "Will **compare** grade 3+ RT adverse events with the
+  use of preoperative and postoperative (**Arm 1 versus Arm 2**) radiation"
+  became "Will **assess the occurrence of**…". A between-arm comparison
+  became a single-arm observation. Named by the review as invisible.
+- **NCT07160530** — dropped "quantified using MyPlate categories and" from
+  how its endpoint is measured. Also named by the review.
+- **NCT05327608** — the operational definition of adherence ("percent of
+  days a patient reports 14+ hours of fasting") replaced by a statistical
+  one ("estimated with the corresponding exact binomial 90% CI").
+- **NCT05379153** — "(0-10)" → "(0-10 scale)".
+- **NCT05654142** — "We" → "The investigators".
+
+The last two are trivial, and **no deterministic rule separates them from
+the first three.** Both change real words, so `is_formatting_only` cannot
+catch them; the only thing that would is a threshold on how many words
+moved, which is a tuned knob whose reasoning is invisible — the thing sec.
+3 forbids and step 7 was removed for. Two extra cards costing a reviewer
+seconds is the honest price, and the review's own finding says which way to
+err: "a false positive costs a reviewer seconds, a false negative is never
+seen." Stated here rather than tuned away.
+
+**3. The weekly agent gets substantive changes only.** `GET /investigate`
+takes `include_reformatting` (default true); `get_window` sends false. The
+**counts are computed before the filter and are identical either way**, and
+the payload carries `reformatting_listed` so nothing has to infer the
+filter from a short list. The tool description tells the agent in words
+that `outcomes.wording_only` means "changes not shown to you", not "changes
+that did not matter" — the agent must not silently inherit a filter with
+known blind spots, which is the same reason the page keeps its expander.
+
+**Do not quote this as a cost saving without the caveat.** Measured on the
+live record it removes 3 rows of 11 from the agent's read. It saves nothing
+at all in a window with 8 or more substantive changes, because `NAMED_CAP`
+binds first — and the description text this same session added is *heavier*
+than the rows removed (~2,650 chars on a full list). Net effect on the
+weekly bill is roughly neutral. The real argument is quality: the agent no
+longer reads rows the deterministic layer already judged to carry nothing,
+so it cannot build a "pattern" out of capitalisation edits.
+
+**4. A cap written for one section had silently undone a fix written for
+another.** Measuring point 3 against the live record turned this up, and it
+is the more serious finding of the session.
+
+That morning's entry says the reformatting bucket "is replaced by an
+expander listing them with their flags". Against the real record it listed
+**nothing**. `changes` was capped at `NAMED_CAP` (8) over a list sorted
+substantive-first, and the record holds more than 8 substantive changes —
+so the reformatting rows fell off the end. The page printed "3 reformatting
+only" in a caption above an expander that could not render, and the four
+changes a clinician had found hidden that morning were hidden again by
+lunchtime, by a different mechanism.
+
+It passed every test because both suites asserted on the classification,
+never on what survived the cap. The fix is a cap **per bucket** — each gets
+its own room — plus the missing sentence: the page now says "Showing the
+first 8 of 19 substantive changes", which every other capped list on that
+page already said and this one did not. A reader saw "19 substantive" over
+8 cards with nothing to explain the gap.
+
+**Proven able to fail** (sec. 7). Seven mutations, all caught, each restore
+diffed against its backup before the result was believed (the 2026-09-06
+rule):
+
+| Mutation | Caught by |
+|---|---|
+| descriptions stop disqualifying reformatting | `test_an_edited_description_under_an_unchanged_name_is_substantive` |
+| an *added* description also escalates | `test_a_description_filled_in_where_there_was_none_stays_reformatting` |
+| one cap over the merged list | `test_both_buckets_are_listed_when_either_would_fill_the_cap` |
+| the counts follow the filter, not the window | `test_include_reformatting_false_omits_the_rows_but_keeps_the_count` |
+| the agent stops filtering | `test_get_window_asks_for_substantive_outcome_changes_only` |
+| the page stops rendering description diffs | `test_an_edited_description_is_shown_as_a_change_to_the_definition` |
+| the page drops the truncation notice | `test_a_truncated_list_says_how_many_it_is_showing` |
+
+34 new tests. The real-data half checks the properties that survive
+re-ingestion — every reported diff is re-derivable from the stored
+`old_value`/`new_value`, no reformatting-filed change carries an edit or a
+deletion, and the reformatting bucket actually reaches the reader. The page
+was additionally rendered against the **real** `/investigate` payload, not
+only against fixtures, because fixtures are what hid the cap fault.
+
+**Still not fixed, so it is not mistaken for done.** The comparison reads
+three fields of a primary outcome — name, time frame, description. A change
+to a secondary outcome, to which arm an endpoint applies to, or to anything
+else in the record is invisible to it, and the page's expander now says so
+in those words instead of the narrower claim it made this morning.

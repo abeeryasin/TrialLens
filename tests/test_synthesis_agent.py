@@ -163,6 +163,28 @@ class TestToolRouting:
         age_days = (datetime.now(timezone.utc) - as_of).days
         assert 13 <= age_days <= 14
 
+    def test_get_window_asks_for_substantive_outcome_changes_only(self, monkeypatch):
+        """Agreed 2026-09-07 after a clinician judged all 22 outcome changes
+        on file: the agent pays by the token to read changes the
+        deterministic layer has already decided carry nothing. The COUNT
+        still reaches it in outcomes.wording_only — dropping that instead
+        would hand the agent a filter with known blind spots and no way to
+        know it was there."""
+        call = _FakeResponse(
+            [_ToolUse("t1", "get_window", {"weeks_ago": 0})], "tool_use"
+        )
+        _install(monkeypatch, [call, ENDS_TURN])
+        calls = _install_get(monkeypatch, lambda path, params: {})
+        sa.run_synthesis("http://x", max_cost_usd=1.0)
+        assert calls[0][1]["include_reformatting"] == "false"
+
+    def test_the_agent_is_told_what_it_is_not_being_shown(self, monkeypatch):
+        """A filter the reader cannot see is a filter taken on trust — the
+        same rule the Investigate page's expander keeps for a human."""
+        (window_tool,) = [t for t in sa.TOOLS if t["name"] == "get_window"]
+        assert "wording_only" in window_tool["description"]
+        assert "blind spot" in window_tool["description"]
+
     def test_get_window_passes_condition_through_when_given(self, monkeypatch):
         call = _FakeResponse(
             [_ToolUse("t1", "get_window", {"weeks_ago": 0, "condition": "Obesity"})],

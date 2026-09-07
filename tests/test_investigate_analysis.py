@@ -28,6 +28,7 @@ from api.investigate import (
     analyse_date_moves,
     analyse_enrollment,
     analyse_scope_exits,
+    describe_description_move,
     analyse_status_moves,
     classify_date_move,
     transition_kind,
@@ -762,3 +763,148 @@ class TestAShortenedWindowIsNotReformatting:
         )])
         assert changes[0].measures_added == ["Progression-free survival"]
         assert changes[0].window_changes == []
+
+
+# ---------------------------------------------------------------------------
+# Endpoint descriptions (2026-09-07). The third and last blind spot the
+# clinician review named, and the one where the meaning most often lives:
+# the measure name says WHAT is counted, the description says how it is
+# measured, compared and analysed. Two real changes were invisible until
+# this ran — NCT06635980 lost a between-arm comparison and NCT07160530
+# dropped a measurement method, both under identical names and identical
+# windows. Every case below is a real record.
+# ---------------------------------------------------------------------------
+
+def described(*triples):
+    """primary_outcomes JSON from (measure, time_frame, description) triples."""
+    return json.dumps(
+        [{"measure": m, "time_frame": t, "description": d} for m, t, d in triples]
+    )
+
+
+class TestDescribeDescriptionMove:
+    """The kind is read off the record, never judged — which side has text
+    is a fact, and it is the one distinction that decides escalation."""
+
+    def test_silent_to_stated_is_added(self):
+        assert describe_description_move("", "Measured in kilograms.") == "added"
+
+    def test_stated_to_silent_is_removed(self):
+        assert describe_description_move("Measured in kilograms.", "") == "removed"
+
+    def test_stated_to_different_is_edited(self):
+        assert describe_description_move("Measured in kg.", "Measured in lb.") == "edited"
+
+    def test_identical_text_is_no_move(self):
+        assert describe_description_move("Same.", "Same.") is None
+
+    def test_repunctuation_is_no_move(self):
+        """Same rule as every other text diff in the product
+        (frontend.labels.is_formatting_only): casing, punctuation and
+        whitespace are not a change to what a trial says."""
+        assert describe_description_move(
+            "Overall survival, measured at 5 years.",
+            "Overall survival -- measured at 5 YEARS",
+        ) is None
+
+    def test_whitespace_only_is_not_added(self):
+        """A description of spaces is silence, not a statement."""
+        assert describe_description_move("   ", "\n\t ") is None
+
+
+class TestADescriptionMoveDecidesReformatting:
+    def test_an_edited_description_under_an_unchanged_name_is_substantive(self):
+        """NCT06635980, real: 'Will compare grade 3+ RT adverse events with
+        the use of preoperative and postoperative (Arm 1 versus Arm 2)
+        radiation' became 'Will assess the occurrence of...'. The between-arm
+        comparison is gone. Same name, same window, and until 2026-09-07
+        this was filed as reformatting and hidden."""
+        changes, summary = analyse_outcome_changes([outcome_row(
+            described(("Incidence of grade 3 or higher RT related AEs", "2 years",
+                       "Will compare grade 3 or higher RT related adverse events "
+                       "with the use of preoperative and postoperative "
+                       "(Arm 1 versus Arm 2) radiation.")),
+            described(("Incidence of grade 3 or higher RT related AEs", "2 years",
+                       "Will assess the occurrence of grade 3 or higher RT "
+                       "related adverse events within years from the start of "
+                       "radiation therapy.")),
+        )])
+        assert summary["wording_only"] == 0
+        assert changes[0].wording_only is False
+        [moved] = changes[0].description_changes
+        assert moved.kind == "edited"
+
+    def test_a_deleted_description_is_substantive(self):
+        """The entry said how the endpoint is measured and no longer does.
+        Nothing replaced it, which is a loss of definition, not tidying."""
+        changes, summary = analyse_outcome_changes([outcome_row(
+            described(("Overall survival", "5 years", "Time from randomisation to death.")),
+            described(("Overall survival", "5 years", "")),
+        )])
+        assert summary["wording_only"] == 0
+        assert changes[0].description_changes[0].kind == "removed"
+
+    def test_a_description_filled_in_where_there_was_none_stays_reformatting(self):
+        """NCT03674567, real, and this module's own worked example: results
+        posted, past primary completion — the strongest flag combination
+        available — and the only real move is 'tolerability' gaining a
+        capital T. Its descriptions went from empty to 'treatment-emergent
+        adverse events' when results were posted. Escalating that would
+        invert the example, and the clinician review dismissed exactly this
+        pattern (NCT05872620, 'entry fleshed out at results posting').
+
+        You cannot diff against silence."""
+        changes, summary = analyse_outcome_changes([outcome_row(
+            described(("Safety and tolerability of FLX475", "2 years", "")),
+            described(("Safety and Tolerability of FLX475", "2 years",
+                       "treatment-emergent adverse events")),
+        )])
+        assert summary["wording_only"] == 1, (
+            "a description appearing where there was none is a more complete "
+            "record, not evidence the endpoint changed"
+        )
+        assert changes[0].description_changes[0].kind == "added"
+
+    def test_an_added_description_is_still_reported(self):
+        """Not escalated is not the same as not shown. The reformatting
+        expander exists so the filter can be checked, and it can only be
+        checked if the evidence travels with the row."""
+        changes, _ = analyse_outcome_changes([outcome_row(
+            described(("Overall survival", "5 years", "")),
+            described(("Overall survival", "5 years", "Time to death from any cause.")),
+        )])
+        assert changes[0].description_changes[0].after == "Time to death from any cause."
+
+    def test_the_texts_are_the_registrys_own(self):
+        """Shown as written, never summarised — the same rule the
+        eligibility diffs follow (CLAUDE.md sec. 2)."""
+        changes, _ = analyse_outcome_changes([outcome_row(
+            described(("Adherence", "16 weeks", "Percent of days with 14+ hours fasting.")),
+            described(("Adherence", "16 weeks", "Estimated with an exact binomial 90% CI.")),
+        )])
+        [moved] = changes[0].description_changes
+        assert moved.before == "Percent of days with 14+ hours fasting."
+        assert moved.after == "Estimated with an exact binomial 90% CI."
+
+    def test_a_description_on_an_added_measure_is_not_double_reported(self):
+        """Same guard as windows: an added measure already appears in
+        measures_added, and reporting its description as 'changed' as well
+        would count one event twice."""
+        changes, _ = analyse_outcome_changes([outcome_row(
+            described(("Overall survival", "5 years", "Time to death.")),
+            described(("Overall survival", "5 years", "Time to death."),
+                      ("Progression-free survival", "2 years", "Time to progression.")),
+        )])
+        assert changes[0].measures_added == ["Progression-free survival"]
+        assert changes[0].description_changes == []
+
+    def test_a_repunctuated_description_stays_reformatting(self):
+        """The over-correction guard. If re-typing a description escalated
+        the change, the substantive list would fill with noise and the
+        filter would stop meaning anything."""
+        changes, summary = analyse_outcome_changes([outcome_row(
+            described(("Overall survival", "5 years", "Time from randomisation to death.")),
+            described(("Overall Survival", "5 years", "Time from randomisation to death")),
+        )])
+        assert summary["wording_only"] == 1
+        assert changes[0].description_changes == []

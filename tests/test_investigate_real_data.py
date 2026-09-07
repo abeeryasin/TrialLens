@@ -393,6 +393,89 @@ def test_a_flag_is_backed_by_a_stated_field(cur, body):
             assert trial["start_date"] is not None
 
 
+# ---------------------------------------------------------------------------
+# Endpoint descriptions against the live record (2026-09-07). Chosen by
+# PROPERTY, as this file requires: the assertions below survive re-ingestion
+# and a changed record, and would fail if the classification inverted.
+# ---------------------------------------------------------------------------
+
+
+def test_a_description_change_is_backed_by_the_stored_value(cur, body):
+    """Every description the endpoint reports as moved must be re-derivable
+    from the row's own old_value/new_value. A diff with no stated basis is
+    an invented fact (sec. 2)."""
+    import json as _json
+
+    for change in body["outcomes"]["changes"]:
+        for moved in change["description_changes"]:
+            row = one(
+                cur,
+                """
+                SELECT old_value, new_value FROM study_changes
+                WHERE nct_id = %s AND field_name = 'primary_outcomes'
+                  AND detected_at = %s
+                """,
+                (change["nct_id"], change["detected_at"]),
+            )
+            assert row is not None, "the change must still be on file"
+
+            def described(raw):
+                parsed = _json.loads(raw) if isinstance(raw, str) else raw
+                return {str(i.get("measure") or ""): str(i.get("description") or "")
+                        for i in parsed if isinstance(i, dict)}
+
+            assert moved["before"] in described(row["old_value"]).values()
+            assert moved["after"] in described(row["new_value"]).values()
+
+
+def test_only_an_edit_or_a_deletion_escalates_a_change(body):
+    """The rule the clinician review settled: a description appearing where
+    there was none is a more complete registry entry, not evidence the
+    endpoint moved. On the live record NCT03674567 and NCT07030868 are
+    exactly this, and both must stay in the reformatting bucket."""
+    for change in body["outcomes"]["changes"]:
+        if not change["wording_only"]:
+            continue
+        kinds = {m["kind"] for m in change["description_changes"]}
+        assert kinds <= {"added"}, (
+            f"{change['nct_id']} is filed as reformatting while a description "
+            f"was {kinds - {'added'}} — an edited or deleted definition is a "
+            "substantive change"
+        )
+
+
+def test_the_reformatting_bucket_actually_reaches_the_reader(body):
+    """The regression found on 2026-09-07: one cap of 8 over a
+    substantive-first sort listed 8 changes of which 0 were reformatting,
+    so the expander built that morning to make the filter checkable
+    rendered empty while the caption still counted them."""
+    o = body["outcomes"]
+    if not o["wording_only"]:
+        pytest.skip("no reformatting-only changes in the record right now")
+    assert any(c["wording_only"] for c in o["changes"]), (
+        "the counts name a bucket the page cannot open"
+    )
+
+
+def test_the_agent_gets_the_same_counts_with_fewer_rows(cur):
+    """What the weekly synthesis agent asks for. The rows it does not read
+    must not change the numbers it reads them against."""
+    agent = TestClient(app).get(
+        "/investigate", params={"days": WINDOW, "include_reformatting": "false"}
+    )
+    assert agent.status_code == 200
+    o = agent.json()["outcomes"]
+    page = TestClient(app).get("/investigate", params={"days": WINDOW}).json()["outcomes"]
+
+    assert o["total"] == page["total"]
+    assert o["wording_only"] == page["wording_only"], (
+        "the count survives the filter, or the agent inherits a blind spot"
+    )
+    assert o["reformatting_listed"] is False
+    assert all(not c["wording_only"] for c in o["changes"])
+    assert len(o["changes"]) <= len(page["changes"])
+
+
 def test_no_change_carries_a_score_or_a_confidence_number(body):
     """sec. 3: no unexplained relevance scores, no black-box ranking. Step
     7 was built, measured and removed over exactly this."""

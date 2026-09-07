@@ -8,6 +8,7 @@ canonical join from Explore passed every fake-connection test in the repo.
 What these cover is what only an HTTP call can: request binding, the
 route's assembly between query and response, and the response model.
 """
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -255,3 +256,110 @@ def test_an_empty_window_is_a_finding_not_an_error(api):
     assert body["dates"] == [] and body["lifecycle"] == []
     assert body["outcomes"]["total"] == 0
     assert body["enrollment"]["became_actual_total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# include_reformatting, and the cap that has to be per-bucket (2026-09-07).
+#
+# Both come from the same real fault. The reformatting bucket was made
+# listable that morning so a human could check the filter; measured against
+# the live record the same afternoon, the page listed 8 changes of which
+# ZERO were reformatting — one cap of 8 over a substantive-first sort had
+# pushed the whole bucket off the end, and the caption said "3 reformatting
+# only" about rows nobody could open. A cap written for one section
+# silently undid a fix written for another.
+# ---------------------------------------------------------------------------
+
+def outcome_amendment(nct_id, before, after, **extra):
+    return amendment_row(
+        "primary_outcomes",
+        json.dumps([{"measure": m, "time_frame": "2 years", "description": ""}
+                    for m in before]),
+        json.dumps([{"measure": m, "time_frame": "2 years", "description": ""}
+                    for m in after]),
+        nct_id=nct_id,
+        **extra,
+    )
+
+
+def mixed_outcome_rows(substantive=10, reformatting=4):
+    """Enough of each kind that a single cap of 8 cannot show both."""
+    rows = [
+        outcome_amendment(f"NCTsub{i}", ["Overall survival"], [f"Adverse events {i}"])
+        for i in range(substantive)
+    ]
+    rows += [
+        outcome_amendment(f"NCTref{i}", ["Overall survival"], ["overall SURVIVAL"])
+        for i in range(reformatting)
+    ]
+    return rows
+
+
+def test_both_buckets_are_listed_when_either_would_fill_the_cap(api):
+    """The regression this exists for: 10 substantive changes must not
+    consume the reformatting bucket's room."""
+    outcomes = api(results(mixed_outcome_rows())).get("/investigate").json()["outcomes"]
+    listed = outcomes["changes"]
+    assert sum(1 for c in listed if not c["wording_only"]) == 8, "substantive capped at 8"
+    assert sum(1 for c in listed if c["wording_only"]) == 4, (
+        "the reformatting bucket must get its own room, or the expander "
+        "built to make the filter checkable renders empty"
+    )
+
+
+def test_the_counts_describe_the_window_not_the_slice(api):
+    """The cap truncates the reading list. It must never touch the numbers
+    the page prints above it — that is rule 1, every figure carries its
+    real denominator."""
+    outcomes = api(results(mixed_outcome_rows())).get("/investigate").json()["outcomes"]
+    assert outcomes["total"] == 14
+    assert outcomes["substantive"] == 10
+    assert outcomes["wording_only"] == 4
+
+
+def test_include_reformatting_false_omits_the_rows_but_keeps_the_count(api):
+    """What the weekly synthesis agent asks for. It pays by the token to
+    read changes already judged to carry nothing — but it still has to know
+    they happened, or it silently inherits a filter with known blind
+    spots."""
+    outcomes = api(results(mixed_outcome_rows())).get(
+        "/investigate", params={"include_reformatting": "false"}
+    ).json()["outcomes"]
+    assert all(not c["wording_only"] for c in outcomes["changes"])
+    assert outcomes["wording_only"] == 4, "the count survives the filter"
+    assert outcomes["total"] == 14
+    assert outcomes["reformatting_listed"] is False
+
+
+def test_the_payload_says_whether_the_bucket_was_listed(api):
+    """Stated, not implied. Nothing should have to infer the filter from a
+    short list."""
+    rows = mixed_outcome_rows()
+    assert api(results(rows)).get("/investigate").json()["outcomes"][
+        "reformatting_listed"] is True
+
+
+def test_reformatting_is_listed_by_default(api):
+    """The page is the caller that must keep them: a filter a human cannot
+    open is a filter taken on trust."""
+    outcomes = api(results(mixed_outcome_rows())).get("/investigate").json()["outcomes"]
+    assert any(c["wording_only"] for c in outcomes["changes"])
+
+
+def test_a_changed_description_travels_with_the_change(api):
+    """The evidence, not a summary of it (sec. 3) — a reviewer judges from
+    the registry's own text."""
+    row = amendment_row(
+        "primary_outcomes",
+        json.dumps([{"measure": "Adherence", "time_frame": "16 weeks",
+                     "description": "Percent of days with 14+ hours fasting."}]),
+        json.dumps([{"measure": "Adherence", "time_frame": "16 weeks",
+                     "description": "Estimated with an exact binomial 90% CI."}]),
+        nct_id="NCT7",
+    )
+    outcomes = api(results([row])).get("/investigate").json()["outcomes"]
+    assert outcomes["substantive"] == 1
+    (moved,) = outcomes["changes"][0]["description_changes"]
+    assert moved["kind"] == "edited"
+    assert moved["before"] == "Percent of days with 14+ hours fasting."
+    assert moved["after"] == "Estimated with an exact binomial 90% CI."

@@ -892,6 +892,33 @@ class OutcomeWindowChange(BaseModel):
     after: str
 
 
+class OutcomeDescriptionChange(BaseModel):
+    """One outcome's description, before and after.
+
+    The description is where an endpoint is actually defined — the measure
+    name says what is counted, this says how it is measured and analysed.
+    Added 2026-09-07 after a clinician review found two real changes living
+    here and invisible: a between-arm comparison that became a single-arm
+    observation, and a measurement method dropped from an otherwise
+    identical endpoint.
+
+    `kind` is read off the record, never judged:
+      "added"   — the entry was silent before and says something now.
+      "edited"  — both sides define the endpoint, and differently.
+      "removed" — the entry said how, and no longer does.
+
+    Only "edited" and "removed" stop a change being classed as
+    reformatting; see OutcomeChange.wording_only. Both texts are the
+    registry's own, shown as written and never summarised — the same rule
+    the eligibility diffs in Understand already follow.
+    """
+
+    measure: str
+    kind: str
+    before: str
+    after: str
+
+
 class OutcomeChange(TrialRef):
     """A change to a trial's registered primary outcome.
 
@@ -930,9 +957,17 @@ class OutcomeChange(TrialRef):
     # reader and a guess to a parser, and inventing "shortened by 6 weeks"
     # from free text is the kind of derived claim sec. 3 rules out.
     window_changes: List["OutcomeWindowChange"] = []
+    # Descriptions that moved under a surviving measure name. Added
+    # 2026-09-07 — the third blind spot the clinician review named, and
+    # the one where the meaning most often lives. Two real cases were
+    # hidden by its absence: NCT06635980 (a between-arm comparison became
+    # a single-arm observation) and NCT07160530 (a measurement method
+    # dropped).
+    description_changes: List["OutcomeDescriptionChange"] = []
     # True when the measure names are identical after casefold and
-    # punctuation stripping AND no observation window moved: the endpoint
-    # did not change, its wording did. NCT03674567 in the live record is
+    # punctuation stripping, no observation window moved, AND no surviving
+    # endpoint's description was edited or removed: the endpoint did not
+    # change, its wording did. NCT03674567 in the live record is
     # exactly this — "Safety and tolerability" became "Safety and
     # Tolerability" on a trial that has posted results and is past primary
     # completion, which is the strongest flag combination available and
@@ -948,6 +983,13 @@ class OutcomeFinding(BaseModel):
     """What the window says about registered primary outcomes moving."""
 
     changes: List[OutcomeChange] = []
+    # Whether `changes` lists the reformatting-only ones. False for the
+    # weekly synthesis agent, which pays by the token to read changes this
+    # module has already decided are not worth attention — the counts below
+    # are still complete, so it knows they happened without reading them
+    # (docs/decisions.md, 2026-09-07). Stated in the payload rather than
+    # implied, so nothing has to infer the filter from a short list.
+    reformatting_listed: bool = True
     total: int = 0
     substantive: int = 0
     wording_only: int = 0

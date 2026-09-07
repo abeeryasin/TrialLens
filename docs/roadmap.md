@@ -40,10 +40,38 @@ came out of the 2026-09-07 clinician review and are not table rows:
 | Remaining work | Estimate |
 |---|---|
 | Step 12 — notifications (Resend daily digest) | 2-3 hrs (this table's own figure) |
-| Surfacing description diffs on outcome changes (part 3 of the review fixes) | 1.5-2 hrs |
-| Sending the weekly agent substantive changes only, reformatting as a count | 0.5-1 hr |
+| ~~Surfacing description diffs on outcome changes~~ | **Done 2026-09-07** |
+| ~~Sending the weekly agent substantive changes only, reformatting as a count~~ | **Done 2026-09-07** |
 
-**Read that as ~8-12 hours, not ~4-6, for two reasons this project has
+**Both 2026-09-07 follow-ons are closed, and closing them found a third
+thing.** Descriptions are compared now (`outcome_descriptions`,
+`describe_description_move`), and only an *edited* or *deleted* definition
+escalates a change out of the reformatting bucket — an added one does not,
+because you cannot diff against silence and the clinician dismissed exactly
+that pattern twice. Live effect: **wording_only 8 → 3, substantive 14 →
+19**, and the honest read of those five is three real, two trivial
+("(0-10)" → "(0-10 scale)"). The weekly agent now reads substantive changes
+only, with the counts unchanged and `reformatting_listed` stating the
+filter in the payload.
+
+The third thing: **the reformatting expander built that morning was
+rendering empty on the live record.** A single cap of 8 over a
+substantive-first sort pushed the whole bucket off the end, so the page
+counted "3 reformatting only" above something a reader could not open — the
+four hidden changes were hidden again within hours, by a different
+mechanism, and every test passed because both suites asserted on the
+classification and never on what survived the cap. Capped per bucket now,
+with the "Showing the first 8 of 19" line every other capped list on that
+page already had. See `docs/decisions.md`, 2026-09-07.
+
+**That estimate held.** The two follow-ons were budgeted 2-3 hours combined
+and the work landed there — but only after the description rule was
+*measured* against the live record rather than reasoned about, which is
+what caught the naive version (any description difference escalates) taking
+reformatting from 8 to 1. And true to the pattern below, closing them
+generated a third item that was on no plan: the empty expander.
+
+**Read the rest as ~8-12 hours, not ~4-6, for two reasons this project has
 evidence for.** External services cost far more than their code: step 10 was
 budgeted 4-6 hours and the Render deployment alone took most of a night,
 almost none of it writing code — card verification, an env var pasted as a
