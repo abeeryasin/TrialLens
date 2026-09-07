@@ -25,7 +25,9 @@ PYTHONPATH=. .venv/bin/uvicorn api.main:app --reload   # the API
 PYTHONPATH=. .venv/bin/python -m pytest tests/ -k "not real_data" -q  # iterate
 PYTHONPATH=. .venv/bin/python -m pytest tests/ -q                     # pre-commit
 PYTHONPATH=. .venv/bin/python scripts/run_monitor.py     # one Monitor cycle
-PYTHONPATH=. .venv/bin/python scripts/paid_preflight.py  # before any paid call
+PYTHONPATH=. .venv/bin/python scripts/paid_preflight.py  # required before any paid call
+PYTHONPATH=. .venv/bin/python scripts/run_synthesis.py   # weekly agent (paid)
+PYTHONPATH=. .venv/bin/python scripts/send_digest.py     # weekday digest (needs Resend)
 PYTHONPATH=. .venv/bin/python scripts/check_ops_health.py
 ```
 
@@ -68,8 +70,7 @@ scores, no black-box ranking, no summed scores.
 **§7 — Verification & quality gates**
 
 - Code generating successfully isn't the finish line — run tests, inspect real output, verify
-  against acceptance criteria. Nothing is "done" because a file exists. For AI behavior: explicit
-  evaluation cases, not inspection.
+  against acceptance criteria. Nothing is "done" because a file exists.
 - **No paid model call until a free test of the same path passes**, and batch the paid questions
   that remain. `scripts/paid_preflight.py` refuses when the free suite is red.
 - A test calling an endpoint function directly is not testing the endpoint — only an HTTP call
@@ -77,23 +78,14 @@ scores, no black-box ranking, no summed scores.
 
 ## Current status
 
-**All twelve roadmap steps are built, deployed and verified. 914 tests pass.** Live on Render's
-free tier — API `https://triallens-api.onrender.com`, frontend
-`https://triallens-frontend.onrender.com` — against a Neon Postgres `production` branch
-(`br-fancy-bird-ay7zb0sb`; an identifier, not a credential). Watching 11,453 trials.
+**All twelve roadmap steps are built, deployed and verified.** Live on Render's free tier — API
+`https://triallens-api.onrender.com`, frontend `https://triallens-frontend.onrender.com` — against
+the Neon Postgres `production` branch (`br-fancy-bird-ay7zb0sb`; an identifier, not a credential).
+Four unattended jobs write to it; `.github/workflows/` is the authority on what runs when.
 
-Four unattended jobs: `monitor.yml` (6-hourly ingest, diff, prose interpretation, graph sync),
-`synthesis.yml` (weekly proposals into `review_queue`), `digest.yml` (weekday Resend email), and
-`tests.yml` (every push, deliberately holding no database credentials).
-
-`GET /ops/status` is the health surface — deterministic per §5, named alerts each carrying its
-measurement, never a summed score per §3, shown by `frontend/pages/6_System.py`. Every alert rule
-is a real incident from this project's history, because the failure mode that matters is not a
-crash but **a job that finishes green while doing nothing**, which this project has been in twice.
-
-The one genuinely multi-step judgment is the weekly synthesis agent ("is this week's movement a
-pattern or a coincidence?"). It reads `GET /investigate/summary`, files labelled-confidence
-proposals — never a verdict — and a human decides in `frontend/pages/7_Review.py`.
+**The failure mode that matters here is not a crash** — a crash is loud. It is **a job that
+finishes green while doing nothing**, which this project has been in twice. `GET /ops/status`
+exists for that, and every alert rule in it is a real incident from this project's own history.
 
 **Read more:** `docs/gotchas.md` for the rules that cost something to learn, `docs/decisions.md`
 for the dated reasoning behind each, `docs/roadmap.md` for the per-step record.
