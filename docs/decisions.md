@@ -4285,3 +4285,47 @@ behaviour), and `/ops/status` now reports `healthy: True` with one warning.
 neither was a coding error — both were correct code meeting reality. The
 first needed a week simulated; the second needed the alarm actually to fire.
 Shipping is a test the test suite cannot run.
+
+## 2026-09-07 — Neon's transfer allowance, measured rather than blamed
+
+Neon warned at 82% of the 5 GB monthly public-transfer allowance (4.1 GB).
+Diagnosed by measuring, and the two obvious suspects were both wrong:
+
+- **The 6-hourly graph rebuild.** `raw_json` is 96 MB across 11,561 studies
+  and `backfill_graph_entities.py` runs four times a day, which looks
+  damning — 384 MB/day would explain the whole bill. It is not the cause:
+  every one of its queries is `INSERT ... SELECT`, so the JSON is read and
+  written inside Postgres and never crosses the wire.
+- **The ingest.** Genuinely lean. The cheap filter pulls `NCTId +
+  LastUpdatePostDate` only, and full records are fetched for the ~91 of
+  11,466 that actually moved. No `SELECT *` against `studies` exists
+  anywhere — the standing gotcha is being obeyed.
+
+**The measured answer is the test suite, and mostly this session.**
+
+| Suite | Tests | Bytes in | Time |
+|---|---:|---:|---:|
+| `-k "not real_data"` | 757 | **0.5 MB** | 38s |
+| `-k "real_data"` | 121 | **56 MB** | 161s |
+
+86% of the coverage for 0.8% of the transfer. Roughly ten full-suite runs
+went through on 2026-09-07 alone — **~560 MB, about 14% of the monthly
+allowance in one sitting.** The rule is now in CLAUDE.md: iterate on the free
+subset, run the full suite once before committing. The real-data half is not
+optional at a commit — it is the only thing that tests the SQL — it just
+should not run forty times while a docstring is being edited.
+
+**A second, smaller amplifier, not yet fixed:** the frontend has **no
+caching at all** — no `st.cache_data` anywhere. Streamlit re-runs its whole
+script on every widget interaction, so each filter change on Investigate
+re-issues `/investigate` (~40 KB), `/investigate/landscape` and
+`/tracked-conditions`. Left alone deliberately rather than patched: a blanket
+cache on the API read helper would also cache `/tracked-conditions`
+immediately after the "+ Add" write, and a monitoring tool that appears not
+to register a change the user just made is worse than one that costs
+bandwidth. Caching here has to be per-endpoint, with the write paths exempt.
+
+**What could not be established.** Neon's own per-source breakdown needs the
+MCP connector, which is unauthenticated in this session, so the remaining
+~3.5 GB is not attributed. What is measured is the per-run cost and this
+session's share of it; the rest is stated as unknown rather than guessed.

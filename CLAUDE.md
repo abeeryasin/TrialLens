@@ -200,6 +200,14 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   a comment, and reopened at the new site. **The tell was the number, not the
   exception.** Where a value must survive an exception, return it — don't
   assign it from a call that may not return.
+- **Iterate on `pytest -k "not real_data"`; run the full suite once, before
+  committing.** Measured 2026-09-07: the free 757 tests cost **0.5 MB and
+  38s**, the 121 real-data tests cost **56 MB and 161s** — 86% of the
+  coverage for 0.8% of the bytes. Neon's free tier allows 5 GB of public
+  network transfer a month, and ten full-suite runs in one session is ~560 MB
+  of it. The real-data half is not optional before a commit (it is the only
+  thing that tests the SQL), it is just not the thing to run forty times
+  while editing a docstring.
 - **A stateful cadence needs a simulation, not a table of cases.** Every
   window assertion for the digest passed, each written against one call with
   a hand-picked previous value. Feeding each run's output into the next
