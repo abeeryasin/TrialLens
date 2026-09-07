@@ -3,8 +3,7 @@
     "allow": [
       "Bash(PYTHONPATH=. .venv/bin/python -m pytest tests/ -k \"not real_data\" -q)",
       "Bash(PYTHONPATH=. .venv/bin/python -m pytest tests/ -q)",
-      "Bash(PYTHONPATH=.:frontend .venv/bin/python -m pytest -q)",
-      "Bash(.venv/bin/python -c ' *)"
+      "Bash(PYTHONPATH=.:frontend .venv/bin/python -m pytest -q)"
     ]
   }
 }
