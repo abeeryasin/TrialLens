@@ -110,10 +110,21 @@ jobs:
       # parses, that a trial's changes still group into amendments the way
       # the endpoint assumes. None of that changes when someone edits code;
       # it changes when the upstream data does. So they belong on the data's
-      # schedule, immediately after the ingest that would introduce the
-      # drift, not on every push.
+      # schedule, not on every push.
       #
-      # `if: always()` so they still run when the ingest above failed — a
+      # TWICE A DAY, not every tick (2026-09-08). The real-data half of the
+      # suite pulls 56 MB from Neon per run, and this job fires four times a
+      # day: 29 runs since the step was added on 2026-09-02 is ~1.6 GB, on a
+      # free tier that allows 5 GB of transfer a month. Yesterday's bandwidth
+      # postmortem blamed local test runs and undercounted this one.
+      #
+      # Upstream data does not drift on a six-hour cadence — CT.gov posting a
+      # thirteenth intervention type is a weekly-to-monthly event. Halving it
+      # to the 00:0x and 12:0x ticks costs at most 12 hours of detection
+      # latency and saves ~112 MB a day (224 -> 112). A manual dispatch always
+      # runs it, so the check is one button away when a run looks suspicious.
+      #
+      # `if: always()` so it still runs when the ingest above failed — a
       # failed ingest is exactly when you want to know whether the data
       # changed shape underneath it.
       - name: Check for upstream data drift
@@ -122,6 +133,21 @@ jobs:
           DATABASE_URL_READONLY: ${{ secrets.DATABASE_URL_READONLY }}
           PYTHONPATH: .
         run: |
+          HOUR=$(date -u +%H)
+          # The 00 and 12 ticks. 01 and 13 are accepted too, so a scheduler
+          # running late (00:03 is normal, and GitHub can be far later under
+          # load) does not silently skip half a day's checks.
+          case "${{ github.event_name }}:$HOUR" in
+            workflow_dispatch:*|*:00|*:01|*:12|*:13) ;;
+            *)
+              echo "Skipping drift checks: they run twice a day, on the 00:0x"
+              echo "and 12:0x UTC ticks (now ${HOUR}:xx). The real-data suite"
+              echo "pulls ~56 MB from Neon; four a day is ~224 MB against a"
+              echo "5 GB monthly allowance. Dispatch this workflow manually to"
+              echo "force a drift check."
+              exit 0
+              ;;
+          esac
           pip install -r requirements-dev.txt
           pytest tests/ -q -rs
 

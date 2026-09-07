@@ -4537,3 +4537,53 @@ message, and rewording the 409 into "could not remove that" each fail a test.
 deployed API, so the code has to ship and one monitor run has to complete —
 until then the endpoint correctly refuses. That is the honest order:
 the record earns the right to be edited.
+
+## 2026-09-08 — The bandwidth postmortem blamed the wrong runner
+
+Yesterday's entry closed with "the measured answer is the test suite, and
+mostly this session", and left ~3.5 GB unattributed. Half of that sentence
+was wrong, and the question that found it was "will pushing use up the
+allowance?"
+
+**Pushing costs nothing on the Neon meter.** `tests.yml` runs on every push
+and every pull request *deliberately without database credentials* — that is
+in its own header, and it is why every real-data test skips there. A push
+transfers zero bytes from Neon.
+
+**The 6-hourly cron does.** `monitor.yml`'s drift-check step runs
+`pytest tests/ -q -rs` **with** `DATABASE_URL_READONLY`, which is the full
+suite including the 121 real-data tests measured at 56 MB:
+
+    monitor runs since 2026-09-02 (when the step was added):  29
+    29 x 56 MB  =  ~1.6 GB        ~224 MB/day, unattended
+
+So a large part of yesterday's "unattributed" transfer was this job, and the
+entry that went looking for the cause measured the runs it could see — the
+local ones — and stopped. **The tell was that the suspect it cleared and the
+suspect it convicted were both things a human types.** An unattended job
+running the same expensive thing four times a day was never in the lineup.
+
+**Fixed by cadence, not by deletion.** The drift checks are real: they assert
+what ClinicalTrials.gov actually sends — every intervention type is one we
+know, every stored age parses, changes still group into amendments the way
+the endpoint assumes. They are also checking for something that does not
+happen on a six-hour cycle; CT.gov posting a thirteenth intervention type is
+a weekly-to-monthly event. They now run on the **00:0x and 12:0x ticks only**
+(01 and 13 accepted, so a late scheduler does not silently skip half a day),
+and always on a manual dispatch, so the check is one button away when a run
+looks suspicious.
+
+    before:  4 x 56 MB = 224 MB/day
+    after:   2 x 56 MB = 112 MB/day        ~3.4 GB/month saved
+
+The cost is up to 12 hours of detection latency on upstream drift, against a
+transfer meter that was at 82% with the month still running. The gating
+condition was checked against every hour of the day for both event types
+before shipping, because a `case` pattern that quietly matches nothing would
+turn this into "drift checks never run again" — the same silence this
+project keeps having to design against.
+
+**What still is not attributed.** Local runs plus the cron account for
+~2 GB of the ~4.1 GB. The rest needs Neon's own per-source breakdown, which
+needs the MCP connector authorised. Stated as unknown, again, rather than
+guessed at.

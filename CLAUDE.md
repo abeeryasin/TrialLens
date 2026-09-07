@@ -223,7 +223,13 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   network transfer a month, and ten full-suite runs in one session is ~560 MB
   of it. The real-data half is not optional before a commit (it is the only
   thing that tests the SQL), it is just not the thing to run forty times
-  while editing a docstring.
+  while editing a docstring. **And check what runs it unattended**:
+  `monitor.yml` was running the same full suite on all four daily ticks —
+  29 runs, ~1.6 GB — which the 2026-09-07 postmortem missed because both
+  suspects it considered were things a human types. Drift checks now run on
+  the 00:0x and 12:0x ticks only (2026-09-08). `tests.yml`, on every push,
+  deliberately holds no database credentials, so pushing costs nothing on
+  that meter.
 - **A substring link between two vocabularies is not attribution.** Until
   2026-09-08 the only thing connecting a watched condition to its trials was
   `study_conditions.condition ILIKE '%breast cancer%'` — and **2,173 of
