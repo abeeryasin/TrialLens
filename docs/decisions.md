@@ -4594,3 +4594,60 @@ when nobody asked for it is how the cost comes back.
 ~2 GB of the ~4.1 GB. The rest needs Neon's own per-source breakdown, which
 needs the MCP connector authorised. Stated as unknown, again, rather than
 guessed at.
+
+## 2026-09-08 — The transfer ledger, and a cadence that restores itself
+
+Following the correction above, the billing period turned out to run
+**26 Aug → 26 Sep**, which turns "we are at 82%" into a deadline.
+
+**The ledger, built from our own records rather than Neon's.** The Free plan
+does not expose the consumption-history API (`public_network_transfer_bytes`
+is Launch/Scale/Agent/Enterprise only), and even on a paid plan it breaks
+down by time and branch, never by client. So attribution came from run counts
+(`gh run list`) multiplied by measured per-run cost:
+
+| Consumer | Runs since 26 Aug | Per run | Total |
+|---|---:|---:|---:|
+| `monitor.yml` drift checks (added 2 Sep) | 29 | 56 MB | **~1.6 GB** |
+| Local full-suite runs, 7 Sep alone | ~10 | 56 MB | **~560 MB** |
+| `monitor.yml` ingest half | 47 | ~0.5-2 MB (unmeasured) | ~25-95 MB |
+| `tests.yml` | 35 | **0** — holds no DB credentials | 0 |
+| UptimeRobot pings | ~3,700 | **0** — `/health` returns a static dict | 0 |
+| `synthesis.yml` / `digest.yml` | 2 / 0 | KB | negligible |
+
+~2.3 GB of 4.1 GB accounted for. The rest is most likely local full-suite
+runs on the other twelve days, which nothing recorded — stated as unproven.
+The gain is not the estimate, it is that **two suspects are now eliminated
+rather than assumed**: a push costs nothing (that workflow deliberately holds
+no credentials), and the 5-minute uptime pings cost nothing (`/health` never
+touches Postgres).
+
+**Halving was not enough, and the arithmetic says so.**
+
+    remaining   ~840 MB (5 GB - 4.1 GB, less ~60 MB spent today)
+    days left    18      (reset 26 Sep)
+    budget      ~47 MB/day
+
+    twice daily  112 MB/day -> exhausted ~16 Sep
+    once daily    56 MB/day -> exhausted ~24 Sep
+    weekly       ~16 MB/day -> ~140 MB total
+
+And running out is not a slowdown: Neon's Free plan **suspends the compute**
+until the next period or an upgrade. The deployed site would have gone dark,
+during the window it is being shown to potential employers. A cost control
+that is merely an improvement is not a fix when there is a deadline attached.
+
+**So: weekly until the reset, twice daily after — decided by the code, not by
+a comment.** The step reads `BILLING_RESET=2026-09-26` and picks its own
+cadence around it. Writing "remember to put this back" in a comment is how it
+would quietly stay weekly for a year; this project already has the rule that
+a comment describing an invariant is not the invariant, and this is the same
+shape. The gate was checked across dates, days and hours before shipping —
+Thursday before the reset: never; Monday before: 00/01 only; on or after the
+reset: 00/01/12/13; manual dispatch with `drift_checks=true`: always.
+
+**Also worth watching, and not watched before now:** the Free plan allows
+**0.5 GB of storage per project**, and the database measured **249 MB** —
+about half — and Neon bills storage including branch history, so its figure
+reads higher than `pg_database_size`. Transfer was the loud meter; that one
+is quieter and nearer.

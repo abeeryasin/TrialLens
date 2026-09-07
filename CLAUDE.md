@@ -229,7 +229,12 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   suspects it considered were things a human types. Drift checks now run on
   the 00:0x and 12:0x ticks only (2026-09-08). `tests.yml`, on every push,
   deliberately holds no database credentials, so pushing costs nothing on
-  that meter.
+  that meter. **Running out is not a slowdown — Neon's free tier suspends the
+  compute**, so the deployed site goes dark until the period resets (26th of
+  the month here). Drift checks are therefore weekly until 2026-09-26 and
+  twice daily after, decided by a date in the workflow rather than by a
+  comment promising to restore it. Storage is the quieter meter: 0.5 GB
+  allowed, 249 MB used.
 - **A substring link between two vocabularies is not attribution.** Until
   2026-09-08 the only thing connecting a watched condition to its trials was
   `study_conditions.condition ILIKE '%breast cancer%'` — and **2,173 of

@@ -117,6 +117,14 @@ jobs:
       # it changes when the upstream data does. So they belong on the data's
       # schedule, not on every push.
       #
+      # WEEKLY until 2026-09-26, then twice a day (see the date in the script
+      # below — it flips itself). The billing period runs 26 Aug -> 26 Sep and
+      # was at 82% on 2026-09-07 with ~840 MB left over 18 days, i.e. ~47 MB a
+      # day. Twice-daily checks are 112 MB a day: they would have exhausted the
+      # allowance around 16 September, and Neon's free tier SUSPENDS THE COMPUTE
+      # when transfer runs out — the deployed site would have gone dark, which
+      # matters because it is being shown to potential employers.
+      #
       # TWICE A DAY, not every tick (2026-09-08). The real-data half of the
       # suite pulls 56 MB from Neon per run, and this job fires four times a
       # day: 29 runs since the step was added on 2026-09-02 is ~1.6 GB, on a
@@ -140,21 +148,38 @@ jobs:
           DATABASE_URL_READONLY: ${{ secrets.DATABASE_URL_READONLY }}
           PYTHONPATH: .
         run: |
-          HOUR=$(date -u +%H)
-          # The 00 and 12 ticks. 01 and 13 are accepted too, so a scheduler
-          # running late (00:03 is normal, and GitHub can be far later under
-          # load) does not silently skip half a day's checks.
-          case "${{ github.event.inputs.drift_checks }}:$HOUR" in
-            true:*|*:00|*:01|*:12|*:13) ;;
-            *)
-              echo "Skipping drift checks: they run twice a day, on the 00:0x"
-              echo "and 12:0x UTC ticks (now ${HOUR}:xx). The real-data suite"
-              echo "pulls ~56 MB from Neon; four a day is ~224 MB against a"
-              echo "5 GB monthly allowance. To force one, dispatch this"
-              echo "workflow with drift_checks = true."
-              exit 0
-              ;;
-          esac
+          HOUR=$(date -u +%H)   # 01 and 13 are accepted alongside 00 and 12 so a
+          DOW=$(date -u +%u)    # late scheduler does not silently skip a slot.
+          TODAY=$(date -u +%F)
+
+          # The cadence restores itself. Until the billing period resets there
+          # is not enough transfer left for twice-daily checks (see the header);
+          # after it, there is. Writing that as a comment saying "remember to
+          # put this back" is how it would quietly stay weekly for a year —
+          # this project has a standing rule that a comment describing an
+          # invariant is not the invariant, so the date is in the code.
+          BILLING_RESET=2026-09-26
+          if [ "$TODAY" \< "$BILLING_RESET" ]; then
+            WINDOW="weekly"   # Mondays only
+            case "$DOW:$HOUR" in 1:00|1:01) DUE=yes ;; *) DUE=no ;; esac
+          else
+            WINDOW="twice daily"
+            case "$HOUR" in 00|01|12|13) DUE=yes ;; *) DUE=no ;; esac
+          fi
+          if [ "${{ github.event.inputs.drift_checks }}" = "true" ]; then
+            DUE=yes
+          fi
+
+          if [ "$DUE" != "yes" ]; then
+            echo "Skipping drift checks: cadence is ${WINDOW} (now ${TODAY}"
+            echo "${HOUR}:xx UTC, day ${DOW}). The real-data suite pulls ~56 MB"
+            echo "from Neon, and the free tier suspends the compute when the"
+            echo "5 GB monthly allowance runs out. Weekly until the billing"
+            echo "period resets on ${BILLING_RESET}, twice daily after that."
+            echo "To force one now, dispatch this workflow with"
+            echo "drift_checks = true."
+            exit 0
+          fi
           pip install -r requirements-dev.txt
           pytest tests/ -q -rs
 
