@@ -103,16 +103,27 @@ TOOLS = [
             "weeks_ago=0 is this run's own current window; weeks_ago=1 is "
             "the 7 days before that, and so on. Use several calls with "
             "increasing weeks_ago to see whether this week's numbers are "
-            "part of a trend or a one-off. "
-            "NOTE on outcomes: the listed changes are the SUBSTANTIVE ones "
-            "only. Reformatting-only changes (an endpoint whose name, "
-            "observation window and description are all unchanged except "
-            "for capitalisation, punctuation or list numbering) are counted "
-            "in outcomes.wording_only but not listed, because reading them "
-            "costs tokens and they carry nothing. That filter has known "
-            "blind spots — it cannot see a change to a field it does not "
-            "compare — so treat outcomes.wording_only as 'changes not shown "
-            "to you', not as 'changes that did not matter'."
+            "part of a trend or a one-off.\n"
+            "Each finding gives you `counts` (compare these across weeks), "
+            "`trials` (the NCT IDs behind it, strongest or largest first) "
+            "and `trials_total` (how many there really were — always "
+            "compute shares against this, never against len(trials), which "
+            "is a capped reading list).\n"
+            "This is a SUMMARY. Per-trial detail — titles, before/after "
+            "values, diffs — is deliberately not here, because you read "
+            "several windows and every earlier one is re-sent on every "
+            "later turn. Call get_trial_amendments for any trial you want "
+            "to look at properly.\n"
+            "Outcome categories: `substantive` means a measure name, "
+            "observation window or endpoint definition MOVED. "
+            "`entry_completed` means a definition was filled in where the "
+            "entry was previously silent — a more complete record, not "
+            "evidence the endpoint changed. `reformatting` means "
+            "capitalisation, punctuation or list numbering only; those "
+            "trial IDs are not listed because they carry nothing, so read "
+            "that count as 'changes not shown to you', never as 'changes "
+            "that did not matter' — the comparison has known blind spots "
+            "and cannot see a field it does not read."
         ),
         "input_schema": {
             "type": "object",
@@ -262,21 +273,18 @@ def _execute_tool(
     if name == "get_window":
         weeks_ago = tool_input.get("weeks_ago", 0)
         as_of = datetime.now(timezone.utc) - timedelta(days=7 * weeks_ago)
-        # Reformatting-only outcome changes are counted, not listed
-        # (agreed 2026-09-07, docs/decisions.md). The agent pays by the
-        # token to read changes the deterministic layer has already decided
-        # carry nothing; the counts still reach it, so it knows they
-        # happened and does not silently inherit the filter as a blind
-        # spot. The Investigate PAGE keeps them listed, because a human
-        # checking the filter is the whole reason it stays honest.
-        params = {
-            "days": days,
-            "as_of": as_of.isoformat(),
-            "include_reformatting": "false",
-        }
+        # The SUMMARY route, not /investigate (2026-09-07). Measured, not
+        # assumed: one /investigate response is 39,972 characters, of which
+        # 99.3% is per-trial reading lists built for a human to click and
+        # 277 characters are the numbers this agent reasons with. It reads
+        # 4-6 windows and the Messages API is stateless, so window 1 is
+        # re-sent on every turn after it — the loop was paying for those
+        # cards five or six times over to answer a question about totals.
+        # The summary is 4,113 characters, 89.7% smaller, same arithmetic.
+        params = {"days": days, "as_of": as_of.isoformat()}
         if tool_input.get("condition"):
             params["condition"] = tool_input["condition"]
-        return _get(api_base_url, "/investigate", params)
+        return _get(api_base_url, "/investigate/summary", params)
 
     if name == "get_landscape":
         params = {}

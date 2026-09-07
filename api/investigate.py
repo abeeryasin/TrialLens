@@ -79,6 +79,7 @@ from api.schemas import (
     EnrollmentFinding,
     EnrollmentMove,
     InvestigateResponse,
+    InvestigateSummary,
     InvestigateWindow,
     InterventionUse,
     LandscapeBucket,
@@ -90,6 +91,7 @@ from api.schemas import (
     OutcomeFinding,
     SponsorActivity,
     StatusTransitionCount,
+    SummaryFinding,
     ScopeExit,
     StatusMove,
 )
@@ -676,12 +678,13 @@ def investigate(
         description=(
             "Whether reformatting-only outcome changes appear in "
             "outcomes.changes. The COUNTS are unaffected either way — "
-            "outcomes.wording_only still reports how many there were, and "
+            "outcomes.reformatting still reports how many there were, and "
             "outcomes.reformatting_listed says whether they were listed. "
-            "Set false for the weekly synthesis agent, which pays by the "
-            "token to read changes already judged not worth attention; the "
-            "page leaves it true, because that filter has known blind "
-            "spots and must stay checkable."
+            "The page leaves it true, because that filter has known blind "
+            "spots and must stay checkable by a human. Built 2026-09-07 for "
+            "the weekly synthesis agent, which has since moved to "
+            "GET /investigate/summary — a far bigger saving on the same "
+            "problem — so this now serves direct API callers only."
         ),
     ),
     conn=Depends(get_readonly_db),
@@ -691,6 +694,18 @@ def investigate(
     One response for one screen, the same shape /watch and /explore take:
     these findings are read together, and a slip count means something
     different depending on how many trials changed at all.
+    """
+    return _analyse_window(conn, days, condition, as_of, include_reformatting)
+
+
+def _analyse_window(
+    conn, days, condition, as_of, include_reformatting=True
+) -> InvestigateResponse:
+    """The window, as plain code. Both /investigate and
+    /investigate/summary call this rather than one route calling the other:
+    a route function invoked directly gets `Query(...)` OBJECTS where its
+    defaults should be, not the values, which is the same class of mistake
+    CLAUDE.md sec. 7 records about testing a route by calling it.
     """
     until = as_of or datetime.now(timezone.utc)
     since = until - timedelta(days=days)
@@ -767,13 +782,11 @@ def investigate(
     # nothing, and the caption said "3 reformatting only" about rows the
     # reader could not open. A cap written for one section silently undid a
     # fix written for another. Both buckets now get their own room.
-    substantive = [c for c in outcome_changes if not c.wording_only][:NAMED_CAP]
-    reformatting = (
-        [c for c in outcome_changes if c.wording_only][:NAMED_CAP]
-        if include_reformatting
-        else []
-    )
-    listed = substantive + reformatting
+    listed = []
+    for name in OUTCOME_CATEGORIES:
+        if name == OUTCOME_REFORMATTING and not include_reformatting:
+            continue
+        listed += [c for c in outcome_changes if c.category == name][:NAMED_CAP]
     amendments = {(row["nct_id"], row["detected_at"]) for row in amendment_rows}
 
     window = InvestigateWindow(
@@ -801,6 +814,151 @@ def investigate(
         ),
         scope_exits=analyse_scope_exits(scope_rows)[:NAMED_CAP],
         scope_exits_total=len([r for r in scope_rows if str(r["new_value"]).strip().lower() in {"false", "f", "0"}]),
+    )
+
+
+# ============================================================================
+# The same window, costed for a machine reader
+# ============================================================================
+#
+# GET /investigate/summary. Its own route rather than a flag on /investigate,
+# same reasoning as /investigate/landscape and /investigate/trials: a
+# different question gets a different shape, and a route whose response model
+# changes with a query parameter is two routes wearing one name.
+#
+# Why it exists, measured rather than assumed (docs/decisions.md,
+# 2026-09-07). One /investigate call is 37,051 characters — 12,707 tokens —
+# and the split is:
+#
+#     outcomes    10,228 (27.6%)   dates      9,147 (24.7%)
+#     lifecycle    8,091 (21.8%)   enrollment 6,002 (16.2%)
+#     scope_exits  3,196  (8.6%)   window       277  (0.7%)
+#
+# Every one of those except `window` is a capped list of individual trials,
+# built for a human to click. The weekly agent reads 4-6 windows and the
+# Messages API is stateless, so window 1 is re-sent on every turn after it —
+# the loop pays for those cards five or six times over to answer a question
+# about totals.
+
+def _summary_finding(key, label, counts, trials, trials_total=None) -> SummaryFinding:
+    """One finding reduced to counts plus identifiers.
+
+    **The IDs are already capped at NAMED_CAP (8 per finding) upstream**, so
+    this adds no cap of its own — a second limit that never binds would be a
+    number in the code claiming to do something it does not. A first draft
+    had exactly that (SUMMARY_ID_CAP = 20, unreachable), which is the same
+    shape as the cap fault found earlier today, just harmless.
+
+    What the caller therefore gets is the TOP N by the ordering each finding
+    already sorts by — strongest milestone flags first for outcomes, largest
+    move first for dates. For an agent choosing which trial to look at next
+    that is the right 8 rather than an arbitrary 8, and `trials_total`
+    carries the real figure so no share is ever computed against a truncated
+    list (rule 1).
+    """
+    ids = [t for t in trials if t]
+    return SummaryFinding(
+        key=key,
+        label=label,
+        counts=counts,
+        trials=ids,
+        trials_total=len(ids) if trials_total is None else trials_total,
+    )
+
+
+@router.get("/investigate/summary", response_model=InvestigateSummary)
+def investigate_summary(
+    days: int = Query(DEFAULT_WINDOW_DAYS, ge=1, le=MAX_WINDOW_DAYS),
+    condition: Optional[str] = Query(None),
+    as_of: Optional[datetime] = Query(None),
+    conn=Depends(get_readonly_db),
+):
+    """Every count this window states, plus the NCT IDs behind each finding.
+
+    Same arithmetic as GET /investigate — it calls it — so the two can never
+    disagree about a number. What it drops is the per-trial detail: titles,
+    before/after values, diffs, descriptions. A caller that wants those for
+    one trial calls GET /studies/{nct_id}/amendments, which is cheaper than
+    carrying them for every trial on the chance one gets named.
+    """
+    full = _analyse_window(conn, days, condition, as_of, include_reformatting=True)
+
+    dates = [
+        _summary_finding(
+            d.field_name,
+            d.label,
+            {
+                "pushed": d.pushed, "pulled": d.pulled,
+                "median_push_days": d.median_push_days or 0,
+                "median_pull_days": d.median_pull_days or 0,
+                "imprecise_moves": d.imprecise_moves,
+                "precision_only": d.precision_only,
+                "no_move": d.no_move, "unreadable": d.unreadable,
+                "rows_seen": d.rows_seen,
+            },
+            [t.nct_id for t in d.biggest],
+            trials_total=d.biggest_total,
+        )
+        for d in full.dates
+    ]
+
+    lifecycle = [
+        _summary_finding(
+            f.kind, f.label,
+            {"count": f.count, "anomaly": int(f.anomaly)},
+            [t.nct_id for t in f.trials],
+            trials_total=f.count,
+        )
+        for f in full.lifecycle
+    ]
+
+    e = full.enrollment
+    enrollment = [
+        _summary_finding(key, label, {"total": total}, [t.nct_id for t in trials], total)
+        for key, label, total, trials in (
+            ("became_actual", "Target replaced by a real count",
+             e.became_actual_total, e.became_actual),
+            ("switched_back", "A real count reverted to a target",
+             e.switched_back_total, e.switched_back),
+            ("target_raised", "Target raised", e.target_raised_total, e.target_raised),
+            ("target_lowered", "Target lowered", e.target_lowered_total, e.target_lowered),
+        )
+        if total
+    ]
+    if e.under_target or e.became_actual_observational_total:
+        enrollment.append(_summary_finding(
+            "context", "Enrolment context",
+            {"under_target": e.under_target,
+             "observational_excluded": e.became_actual_observational_total},
+            [],
+        ))
+
+    o = full.outcomes
+    outcomes = _summary_finding(
+        "primary_outcomes", "Registered primary outcome changed",
+        {"total": o.total, "substantive": o.substantive,
+         "entry_completed": o.entry_completed, "reformatting": o.reformatting,
+         "after_primary_completion": o.after_primary_completion,
+         "unreadable": o.unreadable},
+        # Reformatting IDs are omitted, not capped away: the deterministic
+        # layer has already decided those carry nothing, and the count above
+        # still says how many there were so nothing inherits the filter
+        # blind. entry_completed IDs ARE listed — that category exists
+        # precisely because "not substantive" is not the same as "nothing".
+        [c.nct_id for c in o.changes if c.category != OUTCOME_REFORMATTING],
+        trials_total=o.substantive + o.entry_completed,
+    )
+
+    scope_exits = _summary_finding(
+        "scope_exits", "Left the tracked scope",
+        {"total": full.scope_exits_total},
+        [x.nct_id for x in full.scope_exits],
+        trials_total=full.scope_exits_total,
+    )
+
+    return InvestigateSummary(
+        window=full.window, dates=dates, lifecycle=lifecycle,
+        enrollment=enrollment, outcomes=outcomes, scope_exits=scope_exits,
     )
 
 
@@ -910,7 +1068,7 @@ def outcome_windows(value):
     """{normalised measure name: time_frame} for a stored value, or None.
 
     Added 2026-09-07, after a clinician read every outcome change on file
-    and found the comparison was blind to this. Until now `wording_only`
+    and found the comparison was blind to this. Until now the category
     was decided on measure NAMES alone, so a trial could keep every
     endpoint name identical, shorten its observation window, and be filed
     as reformatting — hidden from the page entirely. That is not
@@ -996,6 +1154,29 @@ def describe_description_move(before: str, after: str) -> Optional[str]:
     if had and not has:
         return "removed"
     return "edited"
+
+
+# The three things that can happen to a registered primary outcome, named
+# rather than reduced to a boolean. Until 2026-09-07 there were two buckets
+# and a definition filled in where there was none had to go in one of them
+# — so the page filed it under "reformatting only", which is a false
+# statement about the record: nothing was reformatted, a fact appeared that
+# was not there before.
+#
+# The middle category is the fix. It is NOT evidence the endpoint moved (you
+# cannot diff against silence, and the clinician review dismissed the
+# pattern twice as an entry fleshed out at results posting), but it is also
+# not nothing, and it is the kind of thing worth seeing when it happens
+# after results are known. So it is listed under its own name, carrying its
+# own milestone flags, and the reviewer judges — facts listed, never summed
+# (sec. 3).
+OUTCOME_SUBSTANTIVE = "substantive"
+OUTCOME_ENTRY_COMPLETED = "entry_completed"
+OUTCOME_REFORMATTING = "reformatting"
+
+# Loudest first. The page renders in this order and the cap is applied per
+# category, so no category can crowd out another (the 2026-09-07 fault).
+OUTCOME_CATEGORIES = [OUTCOME_SUBSTANTIVE, OUTCOME_ENTRY_COMPLETED, OUTCOME_REFORMATTING]
 
 
 # Each flag is a fact the record states, paired with the sentence a reader
@@ -1118,23 +1299,21 @@ def analyse_outcome_changes(rows, trial_facts=None):
             )
 
         # An EDITED or REMOVED description is a change to how the endpoint
-        # is defined, so it disqualifies "reformatting". An ADDED one is
-        # not: it means the registry entry, previously silent about how
-        # this endpoint is measured, now says. You cannot diff against
-        # silence, and the clinician review dismissed exactly this pattern
-        # twice as an entry fleshed out when results were posted
-        # (NCT05872620). Escalating it would also invert this module's own
-        # worked example — NCT03674567, results posted and past primary
-        # completion, whose only real move was "tolerability" gaining a
-        # capital T. Added descriptions are still LISTED, just not
-        # escalated (docs/decisions.md, 2026-09-07).
+        # is defined. An ADDED one is not — it means the registry entry,
+        # previously silent about how this endpoint is measured, now says.
         redefined = [d for d in description_changes if d.kind != "added"]
+        filled_in = [d for d in description_changes if d.kind == "added"]
 
-        # A moved window is NOT reformatting, which is the whole correction
+        # A moved window is NOT reformatting, which was the first correction
         # here: until 2026-09-07 this read `not added and not removed`, so a
         # shortened follow-up under an unchanged name was filed as wording
         # and then suppressed from the page by it.
-        wording_only = not added and not removed and not window_changes and not redefined
+        if added or removed or window_changes or redefined:
+            category = OUTCOME_SUBSTANTIVE
+        elif filled_in:
+            category = OUTCOME_ENTRY_COMPLETED
+        else:
+            category = OUTCOME_REFORMATTING
 
         interpretation = row.get("prose_interpretation")
         if isinstance(interpretation, dict):
@@ -1151,7 +1330,7 @@ def analyse_outcome_changes(rows, trial_facts=None):
                 count_after=len(after),
                 window_changes=window_changes,
                 description_changes=description_changes,
-                wording_only=wording_only,
+                category=category,
                 flags=flags,
                 flag_labels=[FLAG_LABELS[f] for f in flags],
                 interpretation=interpretation,
@@ -1164,17 +1343,25 @@ def analyse_outcome_changes(rows, trial_facts=None):
     # score, which is the invisible ranking sec. 3 forbids.
     changes.sort(
         key=lambda c: (
-            c.wording_only,
+            OUTCOME_CATEGORIES.index(c.category),
             -len(c.flags),
             FLAG_ORDER.index(c.flags[0]) if c.flags else len(FLAG_ORDER),
         )
     )
     summary = {
         "total": len(changes),
-        "wording_only": sum(1 for c in changes if c.wording_only),
-        "substantive": sum(1 for c in changes if not c.wording_only),
+        "substantive": sum(1 for c in changes if c.category == OUTCOME_SUBSTANTIVE),
+        "entry_completed": sum(
+            1 for c in changes if c.category == OUTCOME_ENTRY_COMPLETED
+        ),
+        "reformatting": sum(1 for c in changes if c.category == OUTCOME_REFORMATTING),
+        # Substantive only. A definition filled in on a trial past its own
+        # primary completion is real and carries that flag on its own card,
+        # but folding it into THIS number would inflate the one figure the
+        # literature attaches to outcome switching.
         "after_primary_completion": sum(
-            1 for c in changes if not c.wording_only and "after_primary_completion" in c.flags
+            1 for c in changes
+            if c.category == OUTCOME_SUBSTANTIVE and "after_primary_completion" in c.flags
         ),
         "unreadable": unreadable,
     }

@@ -345,17 +345,21 @@ def test_every_outcome_change_is_seen(cur, body):
     )["n"]
     o = body["outcomes"]
     assert o["total"] + o["unreadable"] == expected
-    assert o["substantive"] + o["wording_only"] == o["total"]
+    assert (o["substantive"] + o["entry_completed"] + o["reformatting"]
+            == o["total"]), "a change must land in exactly one of the three"
 
 
 def test_reformatting_is_actually_being_separated(body):
     """If normalisation ever silently stopped working, every change would
     read as substantive and the whole finding would become an accusation
-    machine. 9 of 17 were wording on 2026-09-04."""
+    machine. 9 of 17 were wording on 2026-09-04; after descriptions were
+    compared on 2026-09-07 the live split is 19 / 2 / 1."""
     o = body["outcomes"]
     if o["total"] == 0:
         pytest.skip("no outcome changes in the record right now")
-    assert o["wording_only"] > 0, "normalisation is catching nothing — check normalise_measure"
+    assert o["reformatting"] + o["entry_completed"] > 0, (
+        "nothing is being de-escalated at all — check normalise_measure"
+    )
 
 
 def test_a_wording_change_is_never_counted_as_a_post_completion_change(body):
@@ -365,7 +369,7 @@ def test_a_wording_change_is_never_counted_as_a_post_completion_change(body):
     o = body["outcomes"]
     assert o["after_primary_completion"] <= o["substantive"]
     for change in o["changes"]:
-        if change["wording_only"]:
+        if change["category"] != "substantive":
             assert change["measures_added"] == [] and change["measures_removed"] == []
 
 
@@ -434,14 +438,20 @@ def test_only_an_edit_or_a_deletion_escalates_a_change(body):
     endpoint moved. On the live record NCT03674567 and NCT07030868 are
     exactly this, and both must stay in the reformatting bucket."""
     for change in body["outcomes"]["changes"]:
-        if not change["wording_only"]:
+        if change["category"] == "substantive":
             continue
         kinds = {m["kind"] for m in change["description_changes"]}
         assert kinds <= {"added"}, (
-            f"{change['nct_id']} is filed as reformatting while a description "
-            f"was {kinds - {'added'}} — an edited or deleted definition is a "
-            "substantive change"
+            f"{change['nct_id']} is filed as {change['category']} while a "
+            f"description was {kinds - {'added'}} — an edited or deleted "
+            "definition is a substantive change"
         )
+        # And a filled-in definition must never be called reformatting.
+        if kinds == {"added"}:
+            assert change["category"] == "entry_completed", (
+                f"{change['nct_id']} had a definition filled in and is filed "
+                "as reformatting — nothing was reformatted"
+            )
 
 
 def test_the_reformatting_bucket_actually_reaches_the_reader(body):
@@ -450,11 +460,12 @@ def test_the_reformatting_bucket_actually_reaches_the_reader(body):
     so the expander built that morning to make the filter checkable
     rendered empty while the caption still counted them."""
     o = body["outcomes"]
-    if not o["wording_only"]:
-        pytest.skip("no reformatting-only changes in the record right now")
-    assert any(c["wording_only"] for c in o["changes"]), (
-        "the counts name a bucket the page cannot open"
-    )
+    for name in ("entry_completed", "reformatting"):
+        if not o[name]:
+            continue
+        assert any(c["category"] == name for c in o["changes"]), (
+            f"the counts name {o[name]} '{name}' change(s) the page cannot open"
+        )
 
 
 def test_the_agent_gets_the_same_counts_with_fewer_rows(cur):
@@ -468,12 +479,63 @@ def test_the_agent_gets_the_same_counts_with_fewer_rows(cur):
     page = TestClient(app).get("/investigate", params={"days": WINDOW}).json()["outcomes"]
 
     assert o["total"] == page["total"]
-    assert o["wording_only"] == page["wording_only"], (
+    assert o["reformatting"] == page["reformatting"], (
         "the count survives the filter, or the agent inherits a blind spot"
     )
     assert o["reformatting_listed"] is False
-    assert all(not c["wording_only"] for c in o["changes"])
+    assert all(c["category"] != "reformatting" for c in o["changes"])
     assert len(o["changes"]) <= len(page["changes"])
+
+
+def test_the_summary_agrees_with_the_window_it_summarises(cur):
+    """Two routes must never become two answers. They share the analysis, so
+    this pins that they still do — a future refactor that re-derived either
+    side would show up here as two numbers disagreeing."""
+    client = TestClient(app)
+    at = {"days": WINDOW, "as_of": "2026-09-07T00:00:00+00:00"}
+    full = client.get("/investigate", params=at).json()
+    summary = client.get("/investigate/summary", params=at).json()
+
+    assert summary["window"] == full["window"]
+    o, so = full["outcomes"], summary["outcomes"]["counts"]
+    for key in ("total", "substantive", "entry_completed", "reformatting",
+                "after_primary_completion", "unreadable"):
+        assert so[key] == o[key], f"outcomes.{key} disagrees between the two routes"
+    assert summary["scope_exits"]["counts"]["total"] == full["scope_exits_total"]
+    for finding, summarised in zip(full["dates"], summary["dates"]):
+        assert summarised["key"] == finding["field_name"]
+        assert summarised["counts"]["pushed"] == finding["pushed"]
+        assert summarised["trials_total"] == finding["biggest_total"]
+
+
+def test_the_summary_is_dramatically_smaller_than_the_window(cur):
+    """The reason it exists. Measured on the live record 2026-09-07:
+    39,972 chars -> 4,113, an 89.7% cut, and the agent re-sends every window
+    it has read on every later turn. Asserted as a floor rather than a fixed
+    figure, so it survives the record growing."""
+    client = TestClient(app)
+    at = {"days": WINDOW, "as_of": "2026-09-07T00:00:00+00:00"}
+    full = len(client.get("/investigate", params=at).content)
+    summary = len(client.get("/investigate/summary", params=at).content)
+    assert summary < full / 2, (
+        f"the summary is {summary:,} bytes against {full:,} — it has stopped "
+        "being a summary, which is the only reason this route exists"
+    )
+
+
+def test_every_summarised_id_is_a_real_tracked_trial(cur):
+    """The IDs are the whole drill-down path. One that does not resolve
+    sends a caller — or the weekly agent — to a 404."""
+    summary = TestClient(app).get(
+        "/investigate/summary", params={"days": WINDOW}
+    ).json()
+    ids = {t for f in summary["dates"] + summary["lifecycle"] + summary["enrollment"]
+           for t in f["trials"]}
+    ids |= set(summary["outcomes"]["trials"]) | set(summary["scope_exits"]["trials"])
+    if not ids:
+        pytest.skip("a quiet window names no trials")
+    cur.execute("SELECT nct_id FROM studies WHERE nct_id = ANY(%s)", (list(ids),))
+    assert {r["nct_id"] for r in cur.fetchall()} == ids
 
 
 def test_no_change_carries_a_score_or_a_confidence_number(body):

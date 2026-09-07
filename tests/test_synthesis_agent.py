@@ -155,7 +155,7 @@ class TestToolRouting:
 
         assert len(calls) == 1
         path, params = calls[0]
-        assert path == "/investigate"
+        assert path == "/investigate/summary"
         assert params["days"] == 7
         # weeks_ago=2 -> as_of is ~14 days back, not "now".
         from datetime import datetime, timezone
@@ -163,27 +163,39 @@ class TestToolRouting:
         age_days = (datetime.now(timezone.utc) - as_of).days
         assert 13 <= age_days <= 14
 
-    def test_get_window_asks_for_substantive_outcome_changes_only(self, monkeypatch):
-        """Agreed 2026-09-07 after a clinician judged all 22 outcome changes
-        on file: the agent pays by the token to read changes the
-        deterministic layer has already decided carry nothing. The COUNT
-        still reaches it in outcomes.wording_only — dropping that instead
-        would hand the agent a filter with known blind spots and no way to
-        know it was there."""
+    def test_get_window_reads_the_summary_not_the_full_window(self, monkeypatch):
+        """Measured 2026-09-07: /investigate is 39,972 characters, 99.3% of
+        it per-trial reading lists built for a human to click, against 277
+        characters of the numbers this agent actually reasons with. It reads
+        4-6 windows and the Messages API is stateless, so window 1 is
+        re-sent on every later turn — the loop paid for those cards five or
+        six times over. The summary is 89.7% smaller and the same
+        arithmetic."""
         call = _FakeResponse(
             [_ToolUse("t1", "get_window", {"weeks_ago": 0})], "tool_use"
         )
         _install(monkeypatch, [call, ENDS_TURN])
         calls = _install_get(monkeypatch, lambda path, params: {})
         sa.run_synthesis("http://x", max_cost_usd=1.0)
-        assert calls[0][1]["include_reformatting"] == "false"
+        assert calls[0][0] == "/investigate/summary"
 
     def test_the_agent_is_told_what_it_is_not_being_shown(self, monkeypatch):
         """A filter the reader cannot see is a filter taken on trust — the
-        same rule the Investigate page's expander keeps for a human."""
+        same rule the Investigate page's expander keeps for a human. It must
+        also be told the detail is missing on purpose, and where to get it,
+        or a summary reads as the whole picture."""
         (window_tool,) = [t for t in sa.TOOLS if t["name"] == "get_window"]
-        assert "wording_only" in window_tool["description"]
-        assert "blind spot" in window_tool["description"]
+        text = window_tool["description"]
+        assert "blind spots" in text
+        assert "not shown to you" in text
+        assert "get_trial_amendments" in text, (
+            "an agent handed a summary with no route to the detail will "
+            "either under-report or invent"
+        )
+        assert "trials_total" in text, (
+            "computing a share against the capped `trials` list instead of "
+            "the real total is rule 1's failure mode"
+        )
 
     def test_get_window_passes_condition_through_when_given(self, monkeypatch):
         call = _FakeResponse(

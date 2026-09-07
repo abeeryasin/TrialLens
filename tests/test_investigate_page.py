@@ -60,7 +60,7 @@ def outcome(**overrides):
         "nct_id": "NCT04276493", "brief_title": "A real trial",
         "measures_added": ["Adverse Events and Serious Adverse Events"],
         "measures_removed": ["Adverse Events"],
-        "count_before": 3, "count_after": 2, "wording_only": False,
+        "count_before": 3, "count_after": 2, "category": "substantive",
         "flags": [], "flag_labels": [], "interpretation": None,
         "detected_at": "2026-09-02T20:10:24Z",
     }
@@ -79,7 +79,7 @@ def investigate(**overrides):
             "target_lowered": [], "target_lowered_total": 0,
         },
         "outcomes": {
-            "changes": [], "total": 0, "substantive": 0, "wording_only": 0,
+            "changes": [], "total": 0, "substantive": 0, "entry_completed": 0, "reformatting": 0,
             "after_primary_completion": 0, "unreadable": 0,
         },
         "scope_exits": [], "scope_exits_total": 0,
@@ -200,7 +200,7 @@ class TestPrimaryOutcomes:
                 flag_labels=["changed after the trial's primary completion date",
                              "the trial has already posted results"],
             )],
-            "total": 1, "substantive": 1, "wording_only": 0,
+            "total": 1, "substantive": 1, "entry_completed": 0, "reformatting": 0,
             "after_primary_completion": 1, "unreadable": 0,
         }))
         assert "Requires review" in page
@@ -213,7 +213,7 @@ class TestPrimaryOutcomes:
     def test_the_page_says_a_change_is_not_a_verdict(self, render):
         page, _ = render(investigate(outcomes={
             "changes": [outcome()], "total": 1, "substantive": 1,
-            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+            "entry_completed": 0, "reformatting": 0, "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "innocent explanations" in page
         assert "nothing below is" in page
@@ -223,10 +223,10 @@ class TestPrimaryOutcomes:
         substantive change on a completed trial, the page would have made an
         accusation the record does not support."""
         page, _ = render(investigate(outcomes={
-            "changes": [outcome(wording_only=True, measures_added=[], measures_removed=[],
+            "changes": [outcome(category="reformatting", measures_added=[], measures_removed=[],
                                 flags=["after_primary_completion"],
                                 flag_labels=["changed after the trial's primary completion date"])],
-            "total": 1, "substantive": 0, "wording_only": 1,
+            "total": 1, "substantive": 0, "entry_completed": 0, "reformatting": 1,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "Requires review" not in page
@@ -235,14 +235,19 @@ class TestPrimaryOutcomes:
     def test_the_narrowing_is_shown_because_it_is_the_argument(self, render):
         page, _ = render(investigate(outcomes={
             "changes": [outcome()], "total": 17, "substantive": 8,
-            "wording_only": 9, "after_primary_completion": 5, "unreadable": 0,
+            "entry_completed": 0, "reformatting": 9, "after_primary_completion": 5, "unreadable": 0,
         }))
         assert "Reformatting only" in page
         assert "capitalisation, punctuation and list numbering" in page
         # The caption states the split in the tiles' own words, not a vague
         # "narrowed X to Y" a reader has to map back to them (reported from
-        # real use, 2026-09-05).
-        assert "Of the 17 changes above: 8 substantive, 9 reformatting only." in page
+        # real use, 2026-09-05). Three parts since 2026-09-07, and the middle
+        # one must be described rather than just counted — "entry_completed"
+        # means nothing to a reader.
+        assert (
+            "Of the 17 changes above: 8 substantive, 0 where a definition "
+            "was filled in under an unchanged endpoint, 9 reformatting only."
+        ) in page
 
     # --- endpoint descriptions (2026-09-07) -------------------------------
     # The third blind spot the clinician review named. Two real changes were
@@ -263,7 +268,7 @@ class TestPrimaryOutcomes:
                              "adverse events from the start of radiation therapy.",
                 }],
             )],
-            "total": 1, "substantive": 1, "wording_only": 0,
+            "total": 1, "substantive": 1, "entry_completed": 0, "reformatting": 0,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "How this endpoint is defined changed" in page
@@ -281,7 +286,7 @@ class TestPrimaryOutcomes:
                     "after": "Estimated with an exact binomial interval.",
                 }],
             )],
-            "total": 1, "substantive": 1, "wording_only": 0,
+            "total": 1, "substantive": 1, "entry_completed": 0, "reformatting": 0,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "binomial" in page
@@ -293,13 +298,13 @@ class TestPrimaryOutcomes:
         must say what it is rather than let it read as a moved endpoint."""
         page, _ = render(investigate(outcomes={
             "changes": [outcome(
-                wording_only=True, measures_added=[], measures_removed=[],
+                category="reformatting", measures_added=[], measures_removed=[],
                 description_changes=[{
                     "measure": "Safety and Tolerability", "kind": "added",
                     "before": "", "after": "treatment-emergent adverse events",
                 }],
             )],
-            "total": 1, "substantive": 0, "wording_only": 1,
+            "total": 1, "substantive": 0, "entry_completed": 0, "reformatting": 1,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "A definition was filled in" in page
@@ -311,14 +316,14 @@ class TestPrimaryOutcomes:
         evidence attached is the filter asking to be trusted again."""
         page, _ = render(investigate(outcomes={
             "changes": [outcome(
-                nct_id="NCT03674567", wording_only=True,
+                nct_id="NCT03674567", category="reformatting",
                 measures_added=[], measures_removed=[],
                 description_changes=[{
                     "measure": "Overall Response Rate", "kind": "added",
                     "before": "", "after": "Summary of Best Overall Response",
                 }],
             )],
-            "total": 1, "substantive": 0, "wording_only": 1,
+            "total": 1, "substantive": 0, "entry_completed": 0, "reformatting": 1,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "Summary of Best Overall Response" in page
@@ -326,7 +331,7 @@ class TestPrimaryOutcomes:
     def test_the_page_states_which_fields_the_filter_compares(self, render):
         page, _ = render(investigate(outcomes={
             "changes": [outcome()], "total": 1, "substantive": 1,
-            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+            "entry_completed": 0, "reformatting": 0, "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "observation window" in page and "description" in page
 
@@ -335,8 +340,8 @@ class TestPrimaryOutcomes:
         'cannot yet see' a changed description. It can now, and a stale
         limitation is a false statement about what the tool does."""
         page, _ = render(investigate(outcomes={
-            "changes": [outcome(wording_only=True, measures_added=[], measures_removed=[])],
-            "total": 1, "substantive": 0, "wording_only": 1,
+            "changes": [outcome(category="reformatting", measures_added=[], measures_removed=[])],
+            "total": 1, "substantive": 0, "entry_completed": 0, "reformatting": 1,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "cannot yet see that" not in page
@@ -347,7 +352,7 @@ class TestPrimaryOutcomes:
         'Showing the N largest of M'."""
         page, _ = render(investigate(outcomes={
             "changes": [outcome(nct_id=f"NCT{i}") for i in range(8)],
-            "total": 22, "substantive": 19, "wording_only": 3,
+            "total": 22, "substantive": 19, "entry_completed": 0, "reformatting": 3,
             "after_primary_completion": 9, "unreadable": 0,
         }))
         assert "Showing the first 8 of 19 substantive changes" in page
@@ -355,16 +360,16 @@ class TestPrimaryOutcomes:
     def test_a_complete_list_does_not_claim_to_be_truncated(self, render):
         page, _ = render(investigate(outcomes={
             "changes": [outcome()], "total": 1, "substantive": 1,
-            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+            "entry_completed": 0, "reformatting": 0, "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "Showing the first" not in page
 
     def test_a_truncated_reformatting_bucket_states_its_real_total(self, render):
         page, _ = render(investigate(outcomes={
-            "changes": [outcome(nct_id=f"NCTr{i}", wording_only=True,
+            "changes": [outcome(nct_id=f"NCTr{i}", category="reformatting",
                                 measures_added=[], measures_removed=[])
                         for i in range(8)],
-            "total": 30, "substantive": 0, "wording_only": 22,
+            "total": 30, "substantive": 0, "entry_completed": 0, "reformatting": 22,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "8 of 22 changes the filter judged reformatting only" in page
@@ -373,14 +378,14 @@ class TestPrimaryOutcomes:
         """Absence means three things the column cannot separate."""
         page, _ = render(investigate(outcomes={
             "changes": [outcome(interpretation=None)], "total": 1, "substantive": 1,
-            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+            "entry_completed": 0, "reformatting": 0, "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "does not" in page and "unimportant" in page
 
     def test_a_stored_reading_is_labelled_as_the_model_not_the_registry(self, render):
         page, _ = render(investigate(outcomes={
             "changes": [outcome(interpretation="the endpoint was narrowed")],
-            "total": 1, "substantive": 1, "wording_only": 0,
+            "total": 1, "substantive": 1, "entry_completed": 0, "reformatting": 0,
             "after_primary_completion": 0, "unreadable": 0,
         }))
         assert "not from ClinicalTrials.gov" in page
@@ -392,7 +397,7 @@ class TestPrimaryOutcomes:
 
     def test_unreadable_values_are_reported(self, render):
         page, _ = render(investigate(outcomes={
-            "changes": [], "total": 0, "substantive": 0, "wording_only": 0,
+            "changes": [], "total": 0, "substantive": 0, "entry_completed": 0, "reformatting": 0,
             "after_primary_completion": 0, "unreadable": 2,
         }))
         assert "could not be read" in page
@@ -672,14 +677,14 @@ class TestClickThrough:
     def test_a_flagged_trial_offers_a_way_into_it(self, render):
         _, app = render(investigate(outcomes={
             "changes": [outcome(nct_id="NCT04276493")], "total": 1, "substantive": 1,
-            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+            "entry_completed": 0, "reformatting": 0, "after_primary_completion": 0, "unreadable": 0,
         }))
         assert any(b.key == "open_NCT04276493" for b in app.button)
 
     def test_opening_a_trial_hands_its_id_to_understand(self, render):
         _, app = render(investigate(outcomes={
             "changes": [outcome(nct_id="NCT04276493")], "total": 1, "substantive": 1,
-            "wording_only": 0, "after_primary_completion": 0, "unreadable": 0,
+            "entry_completed": 0, "reformatting": 0, "after_primary_completion": 0, "unreadable": 0,
         }))
         button = next(b for b in app.button if b.key == "open_NCT04276493")
         button.click().run()

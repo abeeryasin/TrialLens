@@ -300,8 +300,8 @@ def test_both_buckets_are_listed_when_either_would_fill_the_cap(api):
     consume the reformatting bucket's room."""
     outcomes = api(results(mixed_outcome_rows())).get("/investigate").json()["outcomes"]
     listed = outcomes["changes"]
-    assert sum(1 for c in listed if not c["wording_only"]) == 8, "substantive capped at 8"
-    assert sum(1 for c in listed if c["wording_only"]) == 4, (
+    assert sum(1 for c in listed if c["category"] == "substantive") == 8, "substantive capped at 8"
+    assert sum(1 for c in listed if c["category"] == "reformatting") == 4, (
         "the reformatting bucket must get its own room, or the expander "
         "built to make the filter checkable renders empty"
     )
@@ -314,7 +314,7 @@ def test_the_counts_describe_the_window_not_the_slice(api):
     outcomes = api(results(mixed_outcome_rows())).get("/investigate").json()["outcomes"]
     assert outcomes["total"] == 14
     assert outcomes["substantive"] == 10
-    assert outcomes["wording_only"] == 4
+    assert outcomes["reformatting"] == 4
 
 
 def test_include_reformatting_false_omits_the_rows_but_keeps_the_count(api):
@@ -325,8 +325,8 @@ def test_include_reformatting_false_omits_the_rows_but_keeps_the_count(api):
     outcomes = api(results(mixed_outcome_rows())).get(
         "/investigate", params={"include_reformatting": "false"}
     ).json()["outcomes"]
-    assert all(not c["wording_only"] for c in outcomes["changes"])
-    assert outcomes["wording_only"] == 4, "the count survives the filter"
+    assert all(c["category"] == "substantive" for c in outcomes["changes"])
+    assert outcomes["reformatting"] == 4, "the count survives the filter"
     assert outcomes["total"] == 14
     assert outcomes["reformatting_listed"] is False
 
@@ -343,7 +343,7 @@ def test_reformatting_is_listed_by_default(api):
     """The page is the caller that must keep them: a filter a human cannot
     open is a filter taken on trust."""
     outcomes = api(results(mixed_outcome_rows())).get("/investigate").json()["outcomes"]
-    assert any(c["wording_only"] for c in outcomes["changes"])
+    assert any(c["category"] == "reformatting" for c in outcomes["changes"])
 
 
 def test_a_changed_description_travels_with_the_change(api):
@@ -363,3 +363,91 @@ def test_a_changed_description_travels_with_the_change(api):
     assert moved["kind"] == "edited"
     assert moved["before"] == "Percent of days with 14+ hours fasting."
     assert moved["after"] == "Estimated with an exact binomial 90% CI."
+
+
+# ---------------------------------------------------------------------------
+# GET /investigate/summary (2026-09-07) — the same window, costed for a
+# machine reader. Measured cause: /investigate is 39,972 characters, of which
+# 99.3% is per-trial reading lists built for a human to click and 277
+# characters are the numbers the weekly agent reasons with. It reads 4-6
+# windows and the Messages API is stateless, so window 1 is re-sent on every
+# later turn.
+# ---------------------------------------------------------------------------
+
+def test_the_summary_carries_every_count_the_full_window_does(api):
+    rows = mixed_outcome_rows(substantive=10, reformatting=4)
+    body = api(results(rows)).get("/investigate/summary").json()
+    counts = body["outcomes"]["counts"]
+    assert counts["total"] == 14
+    assert counts["substantive"] == 10
+    assert counts["reformatting"] == 4
+
+
+def test_the_summary_carries_no_per_trial_prose(api):
+    """The whole point. A title, a before/after value or a description diff
+    in here would put back the bytes this route exists to remove."""
+    row = amendment_row(
+        "primary_outcomes",
+        json.dumps([{"measure": "Adherence", "time_frame": "16 weeks",
+                     "description": "Percent of days with 14+ hours fasting."}]),
+        json.dumps([{"measure": "Adherence", "time_frame": "16 weeks",
+                     "description": "Estimated with an exact binomial 90% CI."}]),
+        nct_id="NCT7",
+    )
+    raw = api(results([row])).get("/investigate/summary").text
+    assert "NCT7" in raw, "the identifier must survive — it is how a caller drills in"
+    assert "Percent of days" not in raw
+    assert "binomial" not in raw
+    assert "Trial NCT7" not in raw, "brief_title is prose, and ~60 chars against an ID's 11"
+
+
+def test_the_summary_states_the_real_total_beside_the_capped_list(api):
+    """Rule 1. A caller computing a share against len(trials) instead of
+    trials_total would divide by a reading-list cap."""
+    rows = [
+        outcome_amendment(f"NCTs{i}", ["Overall survival"], [f"Adverse events {i}"])
+        for i in range(12)
+    ]
+    outcomes = api(results(rows)).get("/investigate/summary").json()["outcomes"]
+    assert outcomes["trials_total"] == 12
+    assert len(outcomes["trials"]) == 8, "the reading list is capped at NAMED_CAP"
+    assert outcomes["counts"]["substantive"] == 12
+
+
+def test_reformatting_trial_ids_are_omitted_but_still_counted(api):
+    """Same rule the agent's tool description states in words: the count is
+    'changes not shown to you', never 'changes that did not matter'."""
+    rows = mixed_outcome_rows(substantive=2, reformatting=3)
+    outcomes = api(results(rows)).get("/investigate/summary").json()["outcomes"]
+    assert outcomes["counts"]["reformatting"] == 3
+    assert not any(t.startswith("NCTref") for t in outcomes["trials"])
+    assert outcomes["trials_total"] == 2
+
+
+def test_a_filled_in_definition_keeps_its_id_in_the_summary(api):
+    """entry_completed exists precisely because 'not substantive' is not the
+    same as 'nothing'. Dropping its IDs would re-hide it from the agent the
+    way the cap re-hid it from the page."""
+    row = amendment_row(
+        "primary_outcomes",
+        json.dumps([{"measure": "Overall survival", "time_frame": "5y", "description": ""}]),
+        json.dumps([{"measure": "Overall survival", "time_frame": "5y",
+                     "description": "Time to death from any cause."}]),
+        nct_id="NCTfilled",
+    )
+    outcomes = api(results([row])).get("/investigate/summary").json()["outcomes"]
+    assert outcomes["counts"]["entry_completed"] == 1
+    assert "NCTfilled" in outcomes["trials"]
+
+
+def test_the_summary_reports_the_same_window_denominators(api):
+    """It must never become a second, disagreeing source for the figures the
+    page prints — which is why it calls the same analysis rather than
+    re-deriving anything."""
+    rows = mixed_outcome_rows()
+    # as_of pinned: both routes default it to now(), so an unpinned pair
+    # differs by microseconds and the test would compare clocks, not code.
+    at = {"as_of": T0.isoformat()}
+    summary = api(results(rows)).get("/investigate/summary", params=at).json()
+    full = api(results(rows)).get("/investigate", params=at).json()
+    assert summary["window"] == full["window"]

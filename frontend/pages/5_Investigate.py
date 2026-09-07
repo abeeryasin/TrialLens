@@ -237,17 +237,19 @@ with changed_tab:
             "a verdict. It says what changed, when, and what the trial's own "
             "milestones were at the time."
         )
-        stats = st.columns(4)
+        stats = st.columns(5)
         stats[0].metric("Outcome changes", f"{outcomes['total']:,}")
-        stats[1].metric("Reformatting only", f"{outcomes['wording_only']:,}")
-        stats[2].metric("Substantive", f"{outcomes['substantive']:,}")
-        stats[3].metric(
+        stats[1].metric("Substantive", f"{outcomes['substantive']:,}")
+        stats[2].metric("Definition filled in", f"{outcomes['entry_completed']:,}")
+        stats[3].metric("Reformatting only", f"{outcomes['reformatting']:,}")
+        stats[4].metric(
             "…after primary completion", f"{outcomes['after_primary_completion']:,}"
         )
 
         split = charts.stacked_split([
             {"part": "Substantive", "count": outcomes["substantive"]},
-            {"part": "Reformatting only", "count": outcomes["wording_only"]},
+            {"part": "Definition filled in", "count": outcomes["entry_completed"]},
+            {"part": "Reformatting only", "count": outcomes["reformatting"]},
         ])
         if split is not None:
             st.altair_chart(split, use_container_width=True)
@@ -261,7 +263,9 @@ with changed_tab:
             f"window**, and its **description**. Of the {outcomes['total']} "
             f"{plural(outcomes['total'], 'change')} above: "
             f"{outcomes['substantive']} substantive, "
-            f"{outcomes['wording_only']} reformatting only."
+            f"{outcomes['entry_completed']} where a definition was filled in "
+            f"under an unchanged endpoint, "
+            f"{outcomes['reformatting']} reformatting only."
         )
         if outcomes["unreadable"]:
             st.caption(
@@ -277,7 +281,7 @@ with changed_tab:
         # changed analysis method. A reader could not have found those,
         # because the page never showed them. Same rule as every other
         # capped list here: say what was set aside, and let it be opened.
-        substantive = [c for c in outcomes["changes"] if not c["wording_only"]]
+        substantive = [c for c in outcomes["changes"] if c["category"] == "substantive"]
         # Say when the list is shorter than the count above it. Every other
         # capped list on this page already does ("Showing the N largest gaps
         # of M"); this one did not, so a reader saw "19 substantive" over 8
@@ -350,29 +354,53 @@ with changed_tab:
                         "seen since 2026-09-03."
                     )
 
-        reformatting = [c for c in outcomes["changes"] if c["wording_only"]]
-        if reformatting:
+        # Two lower buckets, not one (2026-09-07). Until today a definition
+        # filled in where the entry was silent was filed under "reformatting
+        # only", which is a false statement about the record: nothing was
+        # reformatted. It is not evidence the endpoint moved either — so it
+        # gets its own name, its own place on the page, and its own flags,
+        # and the reviewer decides.
+        for key, heading, caption in (
+            (
+                "entry_completed",
+                "change{s} where a definition was filled in under an "
+                "unchanged endpoint",
+                "The endpoint did not move. What changed is that the registry "
+                "entry, previously silent about how this outcome is measured, "
+                "now says — commonly an entry completed when results were "
+                "posted. **Not counted as substantive**, because a definition "
+                "appearing where there was none is a more complete record "
+                "rather than a changed endpoint. The milestone flags still "
+                "apply: if this happened after a trial's own primary "
+                "completion date, that is stated on the card, and it is your "
+                "judgement to make, not the filter's.",
+            ),
+            (
+                "reformatting",
+                "change{s} the filter judged reformatting only",
+                "The endpoint name is identical after casefolding and "
+                "punctuation, no observation window moved, and no surviving "
+                "endpoint's description was added, edited or deleted. Listed "
+                "rather than hidden so the filter stays checkable. **What it "
+                "still cannot see:** anything outside those three fields — a "
+                "change to a secondary outcome, to the arm an endpoint "
+                "applies to, or to any part of the record this comparison "
+                "does not read.",
+            ),
+        ):
+            bucket = [c for c in outcomes["changes"] if c["category"] == key]
+            if not bucket:
+                continue
+            real_total = outcomes[key]
             shown = (
-                f"{len(reformatting)} of {outcomes['wording_only']}"
-                if len(reformatting) < outcomes["wording_only"]
-                else str(len(reformatting))
+                f"{len(bucket)} of {real_total}"
+                if len(bucket) < real_total
+                else str(len(bucket))
             )
-            with st.expander(
-                f"{shown} change"
-                f"{'s' if outcomes['wording_only'] != 1 else ''} the filter "
-                "judged reformatting only — open to check"
-            ):
-                st.caption(
-                    "The endpoint name is identical after casefolding and "
-                    "punctuation, no observation window moved, and no "
-                    "surviving endpoint's description was edited or deleted. "
-                    "Listed rather than hidden so the filter stays checkable. "
-                    "**What it still cannot see:** anything outside those "
-                    "three fields — a change to a secondary outcome, to the "
-                    "arm an endpoint applies to, or to any part of the record "
-                    "this comparison does not read."
-                )
-                for change in reformatting:
+            label = heading.format(s="s" if real_total != 1 else "")
+            with st.expander(f"{shown} {label} — open to check"):
+                st.caption(caption)
+                for change in bucket:
                     st.markdown(
                         f"**{change['nct_id']}** — {change['brief_title']}  \n"
                         f"{change['count_before']} → {change['count_after']} primary "
@@ -380,9 +408,6 @@ with changed_tab:
                         + (f" · `{'` `'.join(change['flag_labels'])}`"
                            if change["flag_labels"] else "")
                     )
-                    # A description filled in where there was none does not
-                    # escalate the change, but it is still shown — the point
-                    # of this expander is that nothing is taken on trust.
                     render_description_changes(change)
 
     st.divider()

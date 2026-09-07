@@ -3880,3 +3880,158 @@ three fields of a primary outcome — name, time frame, description. A change
 to a secondary outcome, to which arm an endpoint applies to, or to anything
 else in the record is invisible to it, and the page's expander now says so
 in those words instead of the narrower claim it made this morning.
+
+## 2026-09-07 — Three categories, and the agent stops reading case notes
+
+Two corrections to work committed the same day, both prompted by the user
+reading it back.
+
+### 1. "Reformatting only" was a false label
+
+The morning's rule was binary: an edited or deleted description escalates a
+change, an added one does not. The reasoning still holds — you cannot diff
+against silence, and the clinician dismissed the pattern twice. **The
+label was wrong.** A change with a definition filled in was filed under
+"reformatting only", and nothing about it was reformatted: a fact appeared
+in the registry that was not there before.
+
+The user's objection was sharper than "too strict": *it can be important in
+some cases*. It can, and the binary rule had no way to say so — worst of
+all when a definition appears **after results are known**, which is exactly
+when a reader would want it, and which the old label actively hid.
+
+Two buckets could not hold three cases, so there are three:
+
+| Category | Meaning | Live |
+|---|---|---:|
+| `substantive` | a measure name, observation window, or surviving endpoint's definition **moved** | 19 |
+| `entry_completed` | a definition was **filled in** where the entry was silent — a more complete record, not a moved endpoint | 2 |
+| `reformatting` | capitalisation, punctuation, list numbering | 1 |
+
+`OutcomeChange.wording_only` (bool) became `OutcomeChange.category` (str).
+A pair of booleans would have permitted an impossible both-true state; one
+field cannot contradict itself.
+
+**Every category keeps its own milestone flags**, which is what makes this
+sufficient rather than a rename. A definition filled in on a trial past its
+own primary completion date, with results posted, says so on its own card —
+and the reviewer judges. Facts listed, never summed (sec. 3).
+
+**The rejected alternative, and why.** Escalating an added description
+whenever a risky flag is present sounds better and fails on the data: both
+live cases (NCT03674567, NCT07030868) are past primary completion *and*
+have results posted, so that rule flags both — including NCT03674567, which
+the user and the record agree is genuinely nothing ("treatment-emergent
+adverse events" added under an endpoint already named "Safety and
+Tolerability"). A flag cannot carry this distinction. A named category can.
+
+### 2. The agent was being handed case notes to answer a question about totals
+
+"How can we genuinely reduce cost?" — so it was measured rather than
+argued. One `GET /investigate` response is **39,972 characters, 12,707
+tokens**, and the split is:
+
+    outcomes    10,228 (27.6%)   dates      9,147 (24.7%)
+    lifecycle    8,091 (21.8%)   enrollment 6,002 (16.2%)
+    scope_exits  3,196  (8.6%)   window       277  (0.7%)
+
+Everything except `window` is a capped list of individual trials, built for
+a human to click. The agent's question — "is this week's movement a pattern
+or a coincidence?" — is arithmetic over counts, and its own prompt tells it
+to read 2-3 prior weeks. The Messages API is stateless, so window 1 is
+re-sent on every turn after it: the loop paid for those cards five or six
+times over.
+
+**`GET /investigate/summary`** returns every count, median and denominator,
+plus the bare NCT IDs behind each finding. **4,099 characters — 89.7%
+smaller.** Detail comes from `get_trial_amendments`, which the agent already
+had, for the one trial it actually wants to name.
+
+Modelled over a five-window loop at this project's own measured 2.61
+chars/token: the conversation ends at **10,288 tokens instead of 78,984**,
+and the loop's input cost falls **$0.2443 → $0.0382, 84%**. Treat the ratio
+as the finding and the absolutes as a projection on today's record — the one
+real run observed billed $0.1099 on a much thinner record.
+
+Two things this route does NOT do, deliberately:
+
+- **It does not re-derive anything.** It calls the same `_analyse_window`
+  the page does, so the two can never disagree about a number. Extracting
+  that helper was forced by a real bug: the first draft had the summary
+  route call `investigate()` directly and got `Query(...)` *objects* where
+  the defaults should be — the same class of mistake sec. 7 records about
+  testing a route by calling it.
+- **It does not add a cap.** A first draft had `SUMMARY_ID_CAP = 20`, which
+  can never bind because the lists are already capped at `NAMED_CAP` (8)
+  upstream — a number in the code claiming to do something it does not, the
+  same shape as this morning's cap fault and harmless only by luck. Removed.
+  What a caller gets is the top 8 by each finding's existing order, which
+  for "which trial should I look at next" is the right 8 rather than an
+  arbitrary 8, with `trials_total` carrying the real figure.
+
+### 3. Not buying a foregone conclusion
+
+The first live run cost **$0.1099 and filed zero proposals**, correctly:
+monitoring began 2026-08-28, so `weeks_ago=2,3,4` all returned nothing and
+the agent is forbidden by its own prompt from calling one week a pattern.
+The outcome was determined before any money was spent, and "does the record
+hold two prior windows" is a database question — sec. 5, deterministic
+first.
+
+`prior_windows_available()` now asks it before the budget is committed.
+`MIN_PRIOR_WINDOWS = 2` is **read off the agent's own system prompt**
+("at least 2-3 prior weeks"), not picked — a test asserts the prompt still
+says so, because otherwise this enforces a rule nobody stated.
+
+**A failed lookup returns `None` and does NOT skip.** The dangerous failure
+here is the inverse of the one being fixed: a transient API blip silently
+skipping a week is precisely what step 11 was built to make visible. And a
+skip writes `skipped_reason`, never a plain `completed` with zero
+proposals — that reads identically to a week the agent examined and found
+quiet, which is the one thing this record must never blur.
+
+### 4. The chart's third colour was computed, not chosen
+
+Three categories needed a third fill, and `stacked_split` had a hardcoded
+two-entry range. The obvious middle — the palette's amber, `SERIES[3]` —
+measured **ΔE 13.7 against `SERIES[1]` for normal vision, under the floor of
+15**: full-colour readers would struggle to tell the segments apart. It
+looked fine. `SERIES[0]` measures **33.6 normal and 24.7 on the worst CVD
+simulation**, and is what shipped.
+
+Adjacent-hue separation is computable, so it was computed. The two-part
+chart's range is byte-identical to before, because the last fill is always
+the neutral by construction.
+
+### Proven able to fail (sec. 7)
+
+Six mutations, each restore diffed against its backup before the result was
+believed. **One of them lied the first time**: the runner passed two test
+paths as a single quoted argument, so pytest never ran and the mutation read
+as "caught nothing to report". Re-run correctly, it killed four tests. Same
+lesson as 2026-09-06 — verify the mutation actually executed.
+
+| Mutation | Caught by |
+|---|---|
+| an added definition is filed as reformatting again | `test_a_description_filled_in_is_not_called_reformatting_either` |
+| an added definition escalates to substantive | `test_a_filled_in_definition_keeps_its_milestone_flags` |
+| the summary leaks per-trial prose | `test_the_summary_carries_no_per_trial_prose` |
+| the history precondition never fires | `test_the_first_live_run_would_have_been_skipped` |
+| a failed lookup skips the run | `test_a_failed_lookup_returns_none_and_never_skips` |
+| the split chart reuses one hue | the palette validator, ΔE 13.7 FAIL |
+
+Real-data tests pin that the two routes agree on every count, that the
+summary stays under half the full response, and that every ID it emits
+resolves to a real tracked trial. The page was again rendered against the
+live `/investigate` payload, where all three buckets appear.
+
+### What was considered and not done
+
+**Prompt caching.** Real, and verified applicable — but partly redundant
+once the payload shrank by 89.7%, and it carries a trap worth recording:
+**Haiku 4.5 has the highest minimum cacheable prefix of any current model,
+4,096 tokens.** This agent's static prefix (system prompt + tool
+definitions) measures **1,918 tokens**, so a breakpoint placed there — the
+obvious placement — would have cached *nothing*, silently, with no error and
+a bigger bill. Caching only becomes available once the conversation has
+grown past the minimum. Deferred, not rejected.

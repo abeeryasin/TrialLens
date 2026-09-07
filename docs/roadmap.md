@@ -54,6 +54,20 @@ that pattern twice. Live effect: **wording_only 8 → 3, substantive 14 →
 only, with the counts unchanged and `reformatting_listed` stating the
 filter in the payload.
 
+**Then two corrections from reading it back, same day.** "Reformatting
+only" was a false label for a change whose definition was *filled in* —
+nothing was reformatted, a fact appeared that was not there before, and the
+binary rule could not say so even when it happened after results were known.
+There are three categories now (`substantive` 19 / `entry_completed` 2 /
+`reformatting` 1), each keeping its own milestone flags so the reviewer
+judges rather than the filter deciding. And the weekly agent's cost was
+measured rather than argued: one `/investigate` response is 39,972
+characters of which 99.3% is per-trial reading lists built for a human to
+click, re-sent on every later turn because the Messages API is stateless.
+`GET /investigate/summary` is 4,099 characters — **89.7% smaller, an 84% cut
+to the loop's input cost** — and a history precondition now refuses to buy a
+foregone conclusion, which is what the first live run's $0.1099 bought.
+
 The third thing: **the reformatting expander built that morning was
 rendering empty on the live record.** A single cap of 8 over a
 substantive-first sort pushed the whole bucket off the end, so the page

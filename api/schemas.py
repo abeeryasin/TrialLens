@@ -892,6 +892,47 @@ class OutcomeWindowChange(BaseModel):
     after: str
 
 
+class SummaryFinding(BaseModel):
+    """One window finding, reduced to what a cross-week comparison needs.
+
+    Added 2026-09-07 for GET /investigate/summary. Measured cause: one
+    /investigate call is 37,051 characters (12,707 tokens), of which the
+    per-trial reading lists are 99.3% and the numbers are 277 characters —
+    and the weekly agent reads 4-6 windows, re-sending every earlier one on
+    every later turn, because the Messages API is stateless.
+
+    The agent's question is "is this week's movement a pattern or a
+    coincidence?", which is arithmetic over counts. The per-trial cards
+    exist for the PAGE, where a human clicks into a trial. The agent
+    already has get_trial_amendments for that, so it gets counts plus bare
+    NCT IDs and fetches detail only for a trial it actually wants to name.
+
+    `counts` is an open dict on purpose: each finding type reports different
+    figures (a date move has pushed/pulled/medians, enrolment has four
+    totals), and inventing a union of every field would be a wider, emptier
+    shape than the one that exists.
+    """
+
+    key: str
+    label: str
+    counts: Dict[str, int] = {}
+    # Bare identifiers, capped. Never titles — a title is ~60 characters
+    # against an ID's 11, and the agent can read one with a second call.
+    trials: List[str] = []
+    trials_total: int = 0
+
+
+class InvestigateSummary(BaseModel):
+    """The same window as GET /investigate, costed for a machine reader."""
+
+    window: "InvestigateWindow"
+    dates: List[SummaryFinding] = []
+    lifecycle: List[SummaryFinding] = []
+    enrollment: List[SummaryFinding] = []
+    outcomes: SummaryFinding
+    scope_exits: SummaryFinding
+
+
 class OutcomeDescriptionChange(BaseModel):
     """One outcome's description, before and after.
 
@@ -908,7 +949,7 @@ class OutcomeDescriptionChange(BaseModel):
       "removed" — the entry said how, and no longer does.
 
     Only "edited" and "removed" stop a change being classed as
-    reformatting; see OutcomeChange.wording_only. Both texts are the
+    reformatting; see OutcomeChange.category. Both texts are the
     registry's own, shown as written and never summarised — the same rule
     the eligibility diffs in Understand already follow.
     """
@@ -947,7 +988,7 @@ class OutcomeChange(TrialRef):
     count_before: int
     count_after: int
     # Observation windows that moved while the measure name stayed the
-    # same. Added 2026-09-07: `wording_only` was decided on names alone, so
+    # same. Added 2026-09-07: the category was decided on names alone, so
     # a shortened follow-up was filed as reformatting and hidden. Two real
     # cases were found this way — NCT05112185 (12 months to 10) and
     # NCT07654972 (follow-up Week 39 to Week 33).
@@ -964,15 +1005,33 @@ class OutcomeChange(TrialRef):
     # a single-arm observation) and NCT07160530 (a measurement method
     # dropped).
     description_changes: List["OutcomeDescriptionChange"] = []
-    # True when the measure names are identical after casefold and
-    # punctuation stripping, no observation window moved, AND no surviving
-    # endpoint's description was edited or removed: the endpoint did not
-    # change, its wording did. NCT03674567 in the live record is
+    # Which of three things happened. Replaced the `wording_only` boolean on
+    # 2026-09-07, because two buckets could not hold three cases and a
+    # definition filled in where there was none was being filed as
+    # "reformatting only" — a false statement about the record.
+    #
+    #   "substantive"     — a measure name, an observation window, or a
+    #                       surviving endpoint's definition MOVED.
+    #   "entry_completed" — a definition was filled in where the entry was
+    #                       silent. Nothing moved; the record got more
+    #                       complete. NCT03674567 and NCT07030868, real,
+    #                       both at results posting.
+    #   "reformatting"    — capitalisation, punctuation, list numbering.
+    #                       NCT03674567's measure also did exactly this:
+    #                       "Safety and tolerability" -> "Safety and
+    #                       Tolerability", on a trial with results posted
+    #                       and past primary completion, which is the
+    #                       strongest flag combination available and still
+    #                       not a switch.
+    #
+    # Every category carries its own milestone flags. A definition filled in
+    # after a trial's primary completion date says so on its own card, and
+    # the reviewer judges — listed, never summed (sec. 3). NCT03674567 in the live record is
     # exactly this — "Safety and tolerability" became "Safety and
     # Tolerability" on a trial that has posted results and is past primary
     # completion, which is the strongest flag combination available and
     # still not a switch.
-    wording_only: bool = False
+    category: str = "substantive"
     flags: List[str] = []
     flag_labels: List[str] = []
     interpretation: Optional[str] = None
@@ -991,8 +1050,11 @@ class OutcomeFinding(BaseModel):
     # implied, so nothing has to infer the filter from a short list.
     reformatting_listed: bool = True
     total: int = 0
+    # total == substantive + entry_completed + reformatting. Three counts,
+    # not two, since 2026-09-07 — see OutcomeChange.category.
     substantive: int = 0
-    wording_only: int = 0
+    entry_completed: int = 0
+    reformatting: int = 0
     # Substantive changes made after the trial's own primary completion
     # date — the signal the literature treats as real, because before that
     # date nobody has seen the endpoint data.

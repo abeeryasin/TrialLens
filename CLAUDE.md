@@ -64,7 +64,7 @@ Every substantive trial claim preserves source study, source field, the relevant
 
 All five capabilities are live (Discover, Understand, Monitor, Explore,
 Investigate) — schema + ingestion, the FastAPI-only-door layer, a real
-6-hour GitHub Actions cron, and the Streamlit frontend. **789 tests pass.**
+6-hour GitHub Actions cron, and the Streamlit frontend. **809 tests pass.**
 Dated reasoning: `docs/decisions.md`. Per-step build status:
 `docs/roadmap.md`. This section stays short on purpose — a status essay
 copied into three files goes stale in three files.
@@ -106,12 +106,30 @@ asked for and step 7 never got. It found three blind spots, all now fixed
 the same day: observation windows were ignored, endpoint **descriptions**
 were ignored, and the reformatting bucket was unreachable from the page.
 The comparison reads three fields of a primary outcome — name, time frame,
-description — and **only an edited or deleted description escalates a
-change; an added one does not**, because a definition appearing where there
-was none is a more complete registry entry, not a moved endpoint. Live
-effect: reformatting 8 → 3, substantive 14 → 19. The weekly agent now reads
-substantive changes only, with the counts unfiltered so it never inherits
-the filter blind. `docs/decisions.md`, 2026-09-07.
+description — and an outcome change now lands in one of **three** named
+categories, not two: `substantive` (something moved), `entry_completed` (a
+definition was filled in where the entry was silent — a more complete
+record, not a moved endpoint) and `reformatting`. Live: 19 / 2 / 1. Each
+keeps its own milestone flags, so a definition appearing after results were
+posted says so on its own card and the reviewer judges. Calling that
+"reformatting only", as the first cut did, was a false statement about the
+record. `docs/decisions.md`, 2026-09-07.
+
+**The weekly agent's cost was measured, not argued (2026-09-07).** One
+`GET /investigate` response is 39,972 characters, of which 99.3% is
+per-trial reading lists built for a human to click and 277 characters are
+the numbers the agent reasons with — and the Messages API is stateless, so
+every window it reads is re-sent on every later turn.
+**`GET /investigate/summary`** returns the counts plus bare NCT IDs at 4,099
+characters (89.7% smaller, **84% off the loop's input cost**); detail comes
+from `get_trial_amendments` for the one trial it names. A history
+precondition (`MIN_PRIOR_WINDOWS`, read off the agent's own prompt) also
+refuses to run when the record cannot supply two prior windows — which is
+what the first live run's $0.1099 and zero proposals bought. Prompt caching
+was verified applicable and deferred: **Haiku 4.5 has the highest minimum
+cacheable prefix of any current model, 4,096 tokens**, and this agent's
+static prefix is 1,918 — the obvious breakpoint would cache nothing,
+silently.
 
 **Step 11 (autonomous-ops hardening) is done, 2026-09-06.** The two
 unattended jobs — the 6-hourly monitor cron and the weekly synthesis agent —
@@ -153,6 +171,11 @@ Standing gotchas, dated postmortem for each in `docs/decisions.md`:
   failure. Same class as the `LIKE '__%'` incident below: a pattern
   matching more than the one thing you pictured. Match on something only
   the target has, or kill by PID.
+- **A number that can never bind is a lie in the code.** The summary
+  route's first draft carried `SUMMARY_ID_CAP = 20` over lists already
+  capped at 8 upstream — unreachable, and harmless only by luck. Same shape
+  as the cap fault below, which was not harmless. If a limit cannot fire,
+  delete it and document the one that does.
 - **A cap in one place can silently undo a fix in another.** On
   2026-09-07 the reformatting bucket was made listable so a human could
   check the filter; measured against the live record hours later, the page

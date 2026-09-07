@@ -544,8 +544,9 @@ def test_unreadable_rows_are_counted_not_dropped():
     _, summary = analyse_outcome_changes([outcome_row("junk", outcomes("A"))])
     assert summary == {
         "total": 0,
-        "wording_only": 0,
         "substantive": 0,
+        "entry_completed": 0,
+        "reformatting": 0,
         "after_primary_completion": 0,
         "unreadable": 1,
     }
@@ -556,9 +557,9 @@ def test_a_capitalisation_change_is_wording_not_a_switch():
         [outcome_row(outcomes("Safety and tolerability"), outcomes("Safety and Tolerability"))]
     )
     (change,) = changes
-    assert change.wording_only is True
+    assert change.category == "reformatting"
     assert change.measures_added == [] and change.measures_removed == []
-    assert summary["substantive"] == 0 and summary["wording_only"] == 1
+    assert summary["substantive"] == 0 and summary["reformatting"] == 1
 
 
 def test_a_dropped_endpoint_is_substantive_and_names_what_went():
@@ -566,7 +567,7 @@ def test_a_dropped_endpoint_is_substantive_and_names_what_went():
         [outcome_row(outcomes("Overall survival", "Adverse events"), outcomes("Adverse events"))]
     )
     (change,) = changes
-    assert change.wording_only is False
+    assert change.category == "substantive"
     assert change.measures_removed == ["Overall survival"]
     assert change.measures_added == []
     assert (change.count_before, change.count_after) == (2, 1)
@@ -656,7 +657,7 @@ def test_after_completion_count_ignores_wording_changes():
     rows = [outcome_row(outcomes("Safety and tolerability"), outcomes("Safety and Tolerability"))]
     _, summary = analyse_outcome_changes(rows, {"NCT1": {**AFTER, "has_results": True}})
     assert summary["after_primary_completion"] == 0
-    assert summary["wording_only"] == 1
+    assert summary["reformatting"] == 1
 
 
 def test_the_stored_model_reading_travels_with_the_change():
@@ -719,16 +720,16 @@ class TestAShortenedWindowIsNotReformatting:
     def test_a_moved_window_under_an_unchanged_name_is_substantive(self):
         """NCT05112185, real: the measure differed only by capitalisation
         ('BMI z-score' -> 'BMI Z-score') while the window moved 12 months to
-        10. Before this it was filed wording_only and hidden from the page."""
+        10. Before this it was filed as reformatting and hidden from the page."""
         changes, summary = analyse_outcome_changes([outcome_row(
             windowed(("Change in BMI z-score", "Baseline, 6-months, and 12-months")),
             windowed(("Change in BMI Z-score", "Baseline, 6-months, and 10-months")),
         )])
-        assert summary["wording_only"] == 0, (
+        assert summary["reformatting"] == 0, (
             "a shortened observation window is not a change of wording"
         )
         assert summary["substantive"] == 1
-        assert changes[0].wording_only is False
+        assert changes[0].category == "substantive"
 
     def test_the_window_is_reported_as_written_not_parsed(self):
         """NCT07654972, real. 'Week 39' -> 'Week 33' is plain to a reader;
@@ -750,7 +751,7 @@ class TestAShortenedWindowIsNotReformatting:
             windowed(("Safety and tolerability of FLX475", "2 years")),
             windowed(("Safety and Tolerability of FLX475", "2 years")),
         )])
-        assert summary["wording_only"] == 1
+        assert summary["reformatting"] == 1
         assert changes[0].window_changes == []
 
     def test_a_window_on_an_added_measure_is_not_double_reported(self):
@@ -829,8 +830,8 @@ class TestADescriptionMoveDecidesReformatting:
                        "related adverse events within years from the start of "
                        "radiation therapy.")),
         )])
-        assert summary["wording_only"] == 0
-        assert changes[0].wording_only is False
+        assert summary["reformatting"] == 0
+        assert changes[0].category == "substantive"
         [moved] = changes[0].description_changes
         assert moved.kind == "edited"
 
@@ -841,10 +842,10 @@ class TestADescriptionMoveDecidesReformatting:
             described(("Overall survival", "5 years", "Time from randomisation to death.")),
             described(("Overall survival", "5 years", "")),
         )])
-        assert summary["wording_only"] == 0
+        assert summary["reformatting"] == 0
         assert changes[0].description_changes[0].kind == "removed"
 
-    def test_a_description_filled_in_where_there_was_none_stays_reformatting(self):
+    def test_a_description_filled_in_is_not_substantive(self):
         """NCT03674567, real, and this module's own worked example: results
         posted, past primary completion — the strongest flag combination
         available — and the only real move is 'tolerability' gaining a
@@ -859,11 +860,62 @@ class TestADescriptionMoveDecidesReformatting:
             described(("Safety and Tolerability of FLX475", "2 years",
                        "treatment-emergent adverse events")),
         )])
-        assert summary["wording_only"] == 1, (
+        assert summary["substantive"] == 0, (
             "a description appearing where there was none is a more complete "
             "record, not evidence the endpoint changed"
         )
         assert changes[0].description_changes[0].kind == "added"
+
+    def test_a_description_filled_in_is_not_called_reformatting_either(self):
+        """The correction of 2026-09-07's own first attempt. Filing this as
+        'reformatting only' was a false statement about the record — nothing
+        was reformatted; a fact appeared that was not there before. Two
+        buckets could not hold three cases, so there are three."""
+        changes, summary = analyse_outcome_changes([outcome_row(
+            described(("Safety and tolerability of FLX475", "2 years", "")),
+            described(("Safety and Tolerability of FLX475", "2 years",
+                       "treatment-emergent adverse events")),
+        )])
+        assert changes[0].category == "entry_completed"
+        assert summary["entry_completed"] == 1
+        assert summary["reformatting"] == 0, (
+            "nothing here was reformatted — saying so would misdescribe the "
+            "record, which is the whole reason this category exists"
+        )
+        assert summary["total"] == 1
+
+    def test_the_three_categories_always_sum_to_the_total(self):
+        """Rule 1: every figure carries its real denominator. A change that
+        fell out of all three buckets would be counted nowhere."""
+        changes, summary = analyse_outcome_changes([
+            outcome_row(described(("Overall survival", "5y", "Time to death.")),
+                        described(("Adverse events", "5y", "Any AE."))),
+            outcome_row(described(("Overall survival", "5y", "")),
+                        described(("Overall survival", "5y", "Time to death."))),
+            outcome_row(described(("Overall survival", "5y", "Time to death.")),
+                        described(("Overall Survival", "5y", "Time to death"))),
+        ])
+        assert [c.category for c in changes] == [
+            "substantive", "entry_completed", "reformatting"
+        ]
+        assert (summary["substantive"] + summary["entry_completed"]
+                + summary["reformatting"]) == summary["total"] == 3
+
+    def test_a_filled_in_definition_keeps_its_milestone_flags(self):
+        """Not substantive is not the same as not worth seeing. A definition
+        appearing on a trial past its own primary completion date says so on
+        its own card — the reviewer judges, the filter does not decide for
+        them (sec. 3: facts listed, never summed)."""
+        changes, _ = analyse_outcome_changes(
+            [outcome_row(
+                described(("Overall survival", "5y", "")),
+                described(("Overall survival", "5y", "Time to death.")),
+            )],
+            {"NCT1": {"primary_completion_date": "2025-01-01", "has_results": True}},
+        )
+        assert changes[0].category == "entry_completed"
+        assert "after_primary_completion" in changes[0].flags
+        assert "results_posted" in changes[0].flags
 
     def test_an_added_description_is_still_reported(self):
         """Not escalated is not the same as not shown. The reformatting
@@ -906,5 +958,5 @@ class TestADescriptionMoveDecidesReformatting:
             described(("Overall survival", "5 years", "Time from randomisation to death.")),
             described(("Overall Survival", "5 years", "Time from randomisation to death")),
         )])
-        assert summary["wording_only"] == 1
+        assert summary["reformatting"] == 1
         assert changes[0].description_changes == []
