@@ -158,7 +158,15 @@ jobs:
           # put this back" is how it would quietly stay weekly for a year —
           # this project has a standing rule that a comment describing an
           # invariant is not the invariant, so the date is in the code.
-          BILLING_RESET=2026-09-26
+          #
+          # Corrected 2026-09-13: this was 2026-09-26, assumed from the
+          # project's Aug 26 creation date plus 30 days. Neon's actual
+          # quota_reset_at (checked live via the Neon API) is 2026-10-01.
+          # Left uncorrected, this would have flipped to twice-daily (~112
+          # MB/day) five days before the real reset, right when headroom is
+          # thinnest — real risk of exhausting the transfer quota and Neon
+          # suspending the compute (taking the live demo offline).
+          BILLING_RESET=2026-10-01
           if [ "$TODAY" \< "$BILLING_RESET" ]; then
             WINDOW="weekly"   # Mondays only
             case "$DOW:$HOUR" in 1:00|1:01) DUE=yes ;; *) DUE=no ;; esac
